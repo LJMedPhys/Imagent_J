@@ -33,7 +33,7 @@ imagej_coder = {
 
     "system_prompt": imagej_coder_prompt,
     "middleware":[],
-    "tools": [internet_search, ask_user],
+    "tools": [internet_search],
     "model":llm_gpt5_nano,
     "checkpointer":checkpointer,
 }
@@ -49,7 +49,7 @@ imagej_debugger = {
 
 
     "system_prompt": imagej_debugger_prompt,
-    "tools": [internet_search, ask_user],
+    "tools": [internet_search],
     "model":llm_gpt5_nano,
     "middleware":[],
     "checkpointer":checkpointer,
@@ -62,7 +62,7 @@ def init_agent():
 
     supervisor = create_deep_agent(
     name="ImageJ_Supervisor",
-    tools = [ask_user, internet_search, inspect_active_image, run_script_safe],
+    tools = [internet_search, inspect_active_image, run_script_safe],
     system_prompt=supervisor_prompt,
     subagents=[imagej_coder, imagej_debugger],
     middleware=[],

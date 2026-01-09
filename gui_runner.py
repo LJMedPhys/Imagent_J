@@ -6,6 +6,9 @@ from PySide6.QtWidgets import (
 import os
 from agents import init_agent
 from imagej_context import get_ij
+import tools
+
+
 
 os.environ["JAVA_HOME"] = r"C:\Users\lukas.johanns\Downloads\fiji-latest-win64-jdk(1)\Fiji\java\win64"
 
@@ -83,33 +86,49 @@ class ImageJAgentGUI(QWidget):
             self.handle_event(event)
 
     def handle_event(self, event):
-        # Adapt your existing handle_event logic to append_output
+        """
+        Robust handler for LangGraph streaming events:
+        - model messages (assistant text)
+        - tool calls (intent)
+        - tool results (stdout / stderr)
+        """
+
+        # ---------------------------
+        # 1) Assistant text messages
+        # ---------------------------
         if "model" in event:
-            msgs = event["model"].get("messages", [])
-            if msgs:
-                last = msgs[-1]
-                content = (
-                    last.get("content")
-                    if isinstance(last, dict)
-                    else getattr(last, "content", None)
-                )
+            model = event["model"]
+
+            # Render assistant messages (if any)
+            for msg in model.get("messages", []):
+                content = getattr(msg, "content", None)
                 if content:
-                    self.append_output(content)
+                    self.append_output(f"AI: {content}")
 
-        # Tool calls
-        tool_names = []
-        if "tool" in event:
-            tool_names.append(event["tool"].get("name"))
-        if tool_names:
-            self.append_output(f"[Calling tool: {', '.join(tool_names)}]")
+            # Render tool calls (intent)
+            for tool_call in model.get("tool_calls", []):
+                name = tool_call.get("name")
+                args = tool_call.get("args", {})
+                self.append_output(
+                    f"\n[AI is calling tool: {name}]\n"
+                    f"Arguments:\n{args}\n"
+                )
 
-        # Final output
-        if "output" in event:
-            final_text = event["output"].get("output") or event["output"].get("result") or event["output"]
-            self.append_output("\n=== AI ===\n" + str(final_text) + "\n==========\n")
+        # ---------------------------
+        # 2) Tool execution results
+        # ---------------------------
+        if "tools" in event:
+            for tool_msg in event["tools"].get("messages", []):
+                tool_name = getattr(tool_msg, "name", "unknown_tool")
+
+                self.append_output(
+                    f"\n=== Using tool {tool_name} ===\n"
+                )
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = ImageJAgentGUI()
+    tools.GUI_PARENT = window
     window.show()
     sys.exit(app.exec())
