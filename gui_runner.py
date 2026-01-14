@@ -1,15 +1,13 @@
-# gui_runner.py
 import sys
-from PySide6.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QTextEdit, QLineEdit, QPushButton, QLabel,
-)
-import jpype
-from PySide6.QtCore import QObject, Signal, Slot, QThread
 import os
+import jpype
+from PySide6.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
+    QTextEdit, QLineEdit, QPushButton, QLabel,
+)
+from PySide6.QtCore import QObject, Signal, Slot, QThread
 from agents import init_agent
 from imagej_context import get_ij
-import tools
-
 
 
 os.environ["JAVA_HOME"] = r"C:\Users\lukas.johanns\Downloads\fiji-latest-win64-jdk(1)\Fiji\java\win64"

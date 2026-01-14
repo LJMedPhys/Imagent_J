@@ -295,6 +295,7 @@ supervisor_prompt = """
                         - Explain results in non-technical language.
                         - Only show images/windows after successful execution.
                         - Do NOT expose raw code unless explicitly requested.
+                        - When given a task, ask the user for as many details as possible upfront.
 
                         ────────────────────────────────────────
                         STRICT CONSTRAINTS

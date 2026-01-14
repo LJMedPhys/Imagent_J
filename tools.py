@@ -270,42 +270,39 @@ def run_script_safe(language: str, code: str, max_retries: int = 3) -> str:
     exec_tool = tool_map[language.lower()]
     last_output = ""
     
-    for attempt in range(1, max_retries + 1):
-        # Snapshot open windows
-        windows_before = set(WindowManager.getImageTitles())
-        
-        # Run the script
-        try:
-            output = exec_tool(code, ij)
-        except Exception as e:
-            output = f"Exception during execution: {e}"
-        
-        last_output = output
-        
-        # Snapshot new windows
-        windows_after = set(WindowManager.getImageTitles())
-        new_windows = windows_after - windows_before
-        
-        # Determine failure
-        failed = any(k in output.lower() for k in ["error", "exception", "failed"])
-        
-        if failed:
-            # Close windows created during failed attempt
-            for title in new_windows:
-                imp = WindowManager.getImage(title)
-                if imp:
-                    imp.changes = False
-                    imp.close()
-            if attempt < max_retries:
-                print(f"Execution failed, retrying ({attempt}/{max_retries})...")
-                continue
-            else:
-                print("Max retries reached, returning last output")
-                return output
-        else:
-            # Success: leave windows visible
-            return output
     
+        # Snapshot open windows
+    windows_before = set(WindowManager.getImageTitles())
+    
+    # Run the script
+    try:
+        output = exec_tool(code, ij)
+    except Exception as e:
+        output = f"Exception during execution: {e}"
+    
+    last_output = output
+    
+    # Snapshot new windows
+    windows_after = set(WindowManager.getImageTitles())
+    new_windows = windows_after - windows_before
+    
+    # Determine failure
+    failed = any(k in output.lower() for k in ["error", "exception", "failed"])
+    
+    if failed:
+        # Close windows created during failed attempt
+        for title in new_windows:
+            imp = WindowManager.getImage(title)
+            if imp:
+                imp.changes = False
+                imp.close()
+       
+            print("Exeution failed")
+            return output
+    else:
+        # Success: leave windows visible
+        return output
+
     return last_output
 
 
