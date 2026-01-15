@@ -40,6 +40,10 @@ imagej_coder_prompt ="""
     6. Guard against missing inputs.
     7. Fail fast with clear errors.
     8. Output ONLY executable code.
+    9. CONSULT EXPERIENCE: If the Supervisor provides "PAST EXPERIENCES" or "LESSONS LEARNED" in the task description,
+       you MUST prioritize those rules over your internal training data.
+    10. DEFENSIVE CODING: If you see a method name in your memory that was flagged as a "hallucination," do not use it.
+        Use the inspect_java_class tool to verify the alternative.
 
     ────────────────────────────────────────
     IMAGE HANDLING (ALL LANGUAGES)
@@ -130,6 +134,11 @@ imagej_debugger_prompt ="""You are an ImageJ/Fiji debugging agent.
                     3. Do NOT refactor unless necessary for correctness.
                     4. Do NOT add new features.
                     5. Do NOT remove working functionality.
+                    6. ROOT CAUSE ANALYSIS: When fixing a MissingMethodException, do not just guess a new name. 
+                       Use inspect_java_class with the keyword parameter to find the real Java signature.
+
+                    7. PREPARE THE LESSON: After finding a fix, clearly state: "PROBLEM: [Error], FIX: [Correct Method]". 
+                       This allows the Supervisor to save this experience accurately.
 
                     ────────────────────────────────────────
                     GLOBAL RULES (ALL LANGUAGES)
@@ -246,8 +255,12 @@ supervisor_prompt = """
                            are uncertain or ambiguous.
                         6. If you set thresholds or other parameters, ALWAYS let the user input.
                         7. Break the task into concrete, executable subtasks.
+                        8. CHECK MEMORY FIRST: Before delegating a task to the imagej_coder, always call rag_retrieve_mistakes with a query 
+                           like "previous mistakes with [Class/Task Name]" to see if there are any "Lessons Learned" that apply
                         8. Delegate SCRIPT GENERATION to imagej_coder with clear, precise instructions.
                         9. Execute the returned script using run_script_safe(language, code).
+                        10. CONSOLIDATE EXPERIENCE: Once run_script_safe returns a success after a debugging cycle,
+                            you MUST call save_coding_experience (or a similar logging tool) to document the error and the working fix.
                         10. If execution fails, delegate the failing script to imagej_debugger for repair.
                         11. Execute the corrected script again using run_script_safe.
                         12. Repeat the debug–execute cycle until success or max_retries is reached.
