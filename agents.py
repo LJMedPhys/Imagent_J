@@ -2,7 +2,7 @@ from deepagents import create_deep_agent
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from prompts import imagej_coder_prompt, imagej_debugger_prompt, supervisor_prompt
-from tools import internet_search, inspect_active_image, run_script_safe, rag_retrieve
+from tools import internet_search, inspect_active_image, run_script_safe, rag_retrieve, inspect_java_class
 from keys import gpt_key
 
 
@@ -33,7 +33,7 @@ imagej_coder = {
 
     "system_prompt": imagej_coder_prompt,
     "middleware":[],
-    "tools": [internet_search],
+    "tools": [internet_search, inspect_java_class],
     "model":llm_gpt5_nano,
     "checkpointer":checkpointer,
 }
@@ -49,7 +49,7 @@ imagej_debugger = {
 
 
     "system_prompt": imagej_debugger_prompt,
-    "tools": [internet_search],
+    "tools": [internet_search, inspect_java_class],
     "model":llm_gpt5_nano,
     "middleware":[],
     "checkpointer":checkpointer,
