@@ -33,7 +33,7 @@ imagej_coder = {
 
     "system_prompt": imagej_coder_prompt,
     "middleware":[],
-    "tools": [internet_search, inspect_java_class, rag_retrieve_mistakes],
+    "tools": [internet_search, inspect_java_class],
     "model":llm_gpt5_nano,
     "checkpointer":checkpointer,
 }

@@ -15,12 +15,15 @@ from langchain_openai import OpenAIEmbeddings
 from qdrant_client import QdrantClient
 from keys import gpt_key
 import difflib
-from RAG.RAG import init_vector_store
-def build_retriever(
+import RAG.loaders
+from qdrant_client_singleton import get_qdrant_client
+
+
+def init_vec_store(
     collection_name: str,
     path: str,
 ):
-    client = QdrantClient(path=path)
+    client = get_qdrant_client(path=path)
 
     vectorstore = QdrantVectorStore(
         client=client,
@@ -29,15 +32,9 @@ def build_retriever(
     )
 
     # Hybrid search
-    return vectorstore.as_retriever(
-        search_type="mmr",  # or "similarity"
-        search_kwargs={
-            "k": 8,
-            "fetch_k": 30,
-        },
-    )
+    return vectorstore
 
-retriever_docs = build_retriever(
+vec_store_docs = init_vec_store(
     collection_name="BioimageAnalysisDocs",
     path="./qdrant_data",
 )
@@ -49,7 +46,15 @@ def rag_retrieve_docs(query: str) -> str:
     Retrieve relevant context from the document RAG.
     Input should be a precise information-seeking query.
     """
-    docs = retriever_docs.invoke(query)
+
+    retriever = vec_store_docs.as_retriever(
+        search_type="mmr",  # or "similarity"
+        search_kwargs={
+            "k": 8,
+            "fetch_k": 30,
+        },
+    )
+    docs = retriever.invoke(query)
 
     results = []
     for d in docs:
@@ -64,13 +69,8 @@ def rag_retrieve_docs(query: str) -> str:
     return results
 
 
-retriever_mistakes = build_retriever(
-    collection_name="codingerrors_and_solutions",
+vec_store_mistakes = init_vec_store(
     path="./qdrant_data",
-)
-
-coding_vector_store = init_vector_store(
-    path_to_RAG="./qdrant_data",
     collection_name="codingerrors_and_solutions",
 )
 
@@ -80,7 +80,14 @@ def rag_retrieve_mistakes(query: str) -> str:
     Retrieve relevant context from the coding errors and solutions RAG.
     Input should be a precise information-seeking query.
     """
-    docs = retriever_mistakes.invoke(query)
+    retriever = vec_store_mistakes.as_retriever(
+        search_type="mmr",  # or "similarity"
+        search_kwargs={
+            "k": 8,
+            "fetch_k": 30,
+        },
+    )
+    docs = retriever.invoke(query)
 
     results = []
     for d in docs:
@@ -122,7 +129,7 @@ def save_coding_experience(error_description: str, failed_code: str, working_cod
     
     # Use your existing vector_store logic to add this to a NEW collection
     # Recommended collection name: "AgentMemory"
-    coding_vector_store.add_documents([doc])
+    vec_store_mistakes.add_documents([doc])
     return "Experience saved successfully. I will remember this for future tasks."
 
 def run_groovy_script(script: str, ij) -> str:
