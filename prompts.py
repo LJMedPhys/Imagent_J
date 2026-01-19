@@ -259,7 +259,7 @@ supervisor_prompt = """
                         8. Delegate SCRIPT GENERATION to imagej_coder with clear, precise instructions.
                         9. Execute the returned script using run_script_safe(language, code).
                         10. CONSOLIDATE EXPERIENCE: Once run_script_safe returns a success after a debugging cycle,
-                            you MUST call save_coding_experience (or a similar logging tool) to document the error and the working fix.
+                            you MUST call save_coding_experience to document the error and the working fix.
                         10. If execution fails, delegate the failing script to imagej_debugger for repair.
                         11. Execute the corrected script again using run_script_safe.
                         12. Repeat the debug–execute cycle until success or max_retries is reached.

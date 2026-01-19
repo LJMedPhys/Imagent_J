@@ -22,7 +22,6 @@ I can design a step-by-step protocol and, if useful, generate a runnable Groovy 
 To get started, please share:
 - Goal: what you want measured/segmented/processed.
 - Example data: 1–2 sample images (file type), single image or batch?
-- Image details: dimensions, channels, z-stacks/time series, pixel size (units).
 - Targets: what objects/features to detect; which channel(s) matter.
 - Preprocessing: background/flat-field correction, denoising needs?
 - Outputs: tables/measurements, labeled masks/overlays, ROIs, saved images.
@@ -160,30 +159,55 @@ class ImageJAgentGUI(QWidget):
         self.start_agent_work.emit(user_input)
 
     def handle_event(self, event):
-        """
-        Parses LangGraph events and updates UI.
-        Runs on Main Thread via Signal.
-        """
-        # 1) Assistant text messages
-        if "model" in event:
-            model = event["model"]
-            for msg in model.get("messages", []):
-                content = getattr(msg, "content", None)
-                if content:
-                    # Update text nicely (removes the "AI: ..." placeholder implicitly by appending)
-                    self.append_output(f"{content}")
+            """
+            Parses LangGraph events. Handles Pydantic objects and dictionary formats.
+            """
+            # 1. Detect Node Transitions (Filtering out Middleware)
+            for node_name, node_data in event.items():
+                if "Middleware" in node_name:
+                    continue
+                
+                # If the supervisor is active, it's usually making a routing decision
+                if node_name == "supervisor" or node_name == "model":
+                    # Extract messages which contain the tool_calls
+                    messages = node_data.get("messages", [])
+                    for msg in messages:
+                        # Fix for Pydantic AIMessage: use getattr instead of .get()
+                        tool_calls = getattr(msg, "tool_calls", [])
+                        
+                        for tc in tool_calls:
+                            # tool_calls can be dicts or objects
+                            name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", "")
+                            args = tc.get("args") if isinstance(tc, dict) else getattr(tc, "args", {})
 
-            for tool_call in model.get("tool_calls", []):
-                name = tool_call.get("name")
-                args = tool_call.get("args", {})
-                self.append_output(f"\n<i>[Calling tool: {name}...]</i>")
+                            if name == "task":
+                                agent_type = args.get("subagent_type", "Specialist")
+                                desc = args.get("description", "")
+                                short_desc = (desc[:120] + '...') if len(desc) > 120 else desc
+                                
+                                self.append_output(f"\n<div style='color: #e67e22;'><b>🚀 Routing to {agent_type}:</b></div>")
+                                self.append_output(f"<i style='color: #7f8c8d;'>{short_desc}</i>")
+                            else:
+                                self.append_output(f"\n<i>[System] Calling tool: {name}...</i>")
 
-        # 2) Tool execution results
-        if "tools" in event:
-            for tool_msg in event["tools"].get("messages", []):
-                tool_name = getattr(tool_msg, "name", "Tool")
-                # Using blockquote for tool output distinctness
-                self.append_output(f"\n> <b>{tool_name} finished.</b>")
+                # 2. Text output (Assistant speaking)
+                if node_name == "model":
+                    for msg in node_data.get("messages", []):
+                        content = getattr(msg, "content", "")
+                        # Only append if there's text and it's not just a tool call placeholder
+                        if content and not getattr(msg, "tool_calls", None):
+                            self.append_output(content)
+
+            # 3. Tool / Sub-agent Completion
+            if "tools" in event:
+                for tool_msg in event["tools"].get("messages", []):
+                    name = getattr(tool_msg, "name", "Tool")
+                    if name == "task":
+                        self.append_output(f"\n✅ <b>Sub-agent task completed.</b>")
+                    else:
+                        self.append_output(f"\n> 🛠️ <b>{name}</b> finished.")
+
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

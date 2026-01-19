@@ -509,30 +509,29 @@ def inspect_java_class(class_name: str, keyword: str = "") -> str:
     ij = get_ij()
     clean_name = class_name.strip()
     
+    # 1. Get the correct ClassLoader from the active ImageJ instance
+    # This is the 'Source of Truth' for where ij.plugin lives
+    ij_loader = ij.getClass().getClassLoader()
+    
+    # 2. Force the current thread to use this loader
+    # This fixes the 'works in Notebook but not in tools.py' issue
+    Thread = jpype.JClass("java.lang.Thread")
+    Thread.currentThread().setContextClassLoader(ij_loader)
+
     search_packages = [
         "", "ij.", "ij.process.", "ij.gui.", "ij.measure.", 
         "ij.plugin.", "ij.plugin.frame.", "ij.io.", "ij.macro.",
         "net.imagej.", "net.imglib2."
     ]
     
-    # --- ROBUST LOADER LOGIC ---
-    # Try the thread loader first, then fall back to the IJ context loader
-    try:
-        Thread = jpype.JClass("java.lang.Thread")
-        current_loader = Thread.currentThread().getContextClassLoader()
-    except:
-        # If thread lookup fails, use the loader from the Gateway
-        current_loader = ij.getClass().getClassLoader()
-    # ---------------------------
-
     JClass = None
     resolved_name = None
 
     for pkg in search_packages:
+        full_path = pkg + clean_name
         try:
-            full_path = pkg + clean_name
-            # Explicitly use the resolved loader
-            java_class_obj = jpype.java.lang.Class.forName(full_path, True, current_loader)
+            # Try loading via the ClassLoader we just forced
+            java_class_obj = jpype.java.lang.Class.forName(full_path, True, ij_loader)
             JClass = jpype.JClass(java_class_obj)
             resolved_name = full_path
             break
@@ -540,7 +539,7 @@ def inspect_java_class(class_name: str, keyword: str = "") -> str:
             continue
 
     if JClass is None:
-        return f"ERROR: Could not resolve class '{class_name}'."
+        return f"ERROR: Could not resolve class '{class_name}'. Verify the class is in the Fiji jars folder."
 
     try:
         java_class_obj = JClass.class_
