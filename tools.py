@@ -408,85 +408,75 @@ def load_image_ij(path: str)  -> object:
     return "Loaded image from " + path
 
 
-import numpy as np
-
-
 @tool
-def inspect_active_image():
+def inspect_all_ui_windows():
     """
-    Examines the active image using Java-side operations for metadata and statistics.
-    This avoids heavy memory copying and NumPy conversion errors.
-    
-    Returns:
-        A dictionary string containing dimensions, calibration, and basic intensity stats.
+    Inspected everything visible in the ImageJ UI:
+    1. Image Windows (Metadata & Stats)
+    2. Results Tables (Row/Column counts)
+    3. The Log window and ROI Manager
     """
     ij = get_ij()
+    
+    # Correct way to import Java classes in PyImageJ
+    from scyjava import jimport
+    WindowManager = jimport('ij.WindowManager')
+    ResultsTable = jimport('ij.measure.ResultsTable')
+    RoiManager = jimport('ij.plugin.frame.RoiManager')
+    Frame = jimport('java.awt.Frame')
 
-    dataset = ij.py.active_dataset()
-    if dataset is None:
-        return "No image is currently open in the GUI."
+    all_inspections = {
+        "images": [],
+        "tables_and_text": []
+    }
 
-    try:
-        # --- 1. Metadata (Same as before) ---
-        name = str(dataset.getName())
-        
-        dims_map = {}
-        calibration = {}
-        
-        for i in range(dataset.numDimensions()):
-            axis = dataset.axis(i)
-            label = str(axis.type().getLabel())
-            size = int(dataset.dimension(i))
-            scale = float(axis.averageScale(0, 1))
-            
-            dims_map[label] = size
-            if label in ['X', 'Y', 'Z']:
-                calibration[label] = scale
+    # --- 1. Inspect Image Windows ---
+    image_ids = WindowManager.getIDList()
+    if image_ids:
+        for img_id in image_ids:
+            imp = WindowManager.getImage(img_id)
+            try:
+                # Convert ImagePlus to Dataset for stats
+                dataset = ij.py.to_dataset(imp)
                 
-        units = str(dataset.axis(0).unit()) if dataset.axis(0).unit() else "pixels"
+                min_val = ij.op().stats().min(dataset).getRealDouble()
+                max_val = ij.op().stats().max(dataset).getRealDouble()
+                
+                all_inspections["images"].append({
+                    "title": imp.getTitle(),
+                    "dimensions": f"{imp.getWidth()}x{imp.getHeight()}x{imp.getNSlices()}",
+                    "stats": {"min": min_val, "max": max_val},
+                    "bit_depth": imp.getBitDepth()
+                })
+            except Exception as e:
+                all_inspections["images"].append({"title": imp.getTitle(), "error": str(e)})
 
-        # --- 2. Statistics via ImageJ Ops (The Fix) ---
-        # Instead of moving pixels to Python, we ask Java to do the math.
-        # This is much faster and safer for large images.
-        
-        try:
-            # We use the 'stats' namespace from ImageJ Ops
-            # Note: The result is a Java Object, so we call .getRealDouble() 
-            # to get a clean Python float immediately.
-            min_val = ij.op().stats().min(dataset).getRealDouble()
-            max_val = ij.op().stats().max(dataset).getRealDouble()
-            mean_val = ij.op().stats().mean(dataset).getRealDouble()
+    # --- 2. Inspect Non-Image Windows ---
+    all_frames = Frame.getFrames()
+    for frame in all_frames:
+        if frame.isVisible():
+            title = frame.getTitle()
             
-            # Determine Pixel Type string
-            pixel_type = str(dataset.getType().getClass().getSimpleName())
+            if title == "Results":
+                rt = ResultsTable.getResultsTable()
+                all_inspections["tables_and_text"].append({
+                    "type": "Results Table",
+                    "rows": rt.size(),
+                    "columns": rt.getLastColumn() + 1
+                })
+            elif title == "ROI Manager":
+                rm = RoiManager.getInstance()
+                all_inspections["tables_and_text"].append({
+                    "type": "ROI Manager",
+                    "roi_count": rm.getCount() if rm else 0
+                })
+            elif title == "Log":
+                all_inspections["tables_and_text"].append({
+                    "type": "Log Window",
+                    "status": "Visible"
+                })
 
-            stats = {
-                "min": min_val,
-                "max": max_val,
-                "mean": mean_val,
-                "pixel_type": pixel_type
-            }
-        except Exception as op_error:
-            # Fallback if Ops fails (e.g. very old Fiji version)
-            stats = f"Could not compute stats: {str(op_error)}"
-
-        # --- 3. Construct Payload ---
-        info_payload = {
-            "filename": name,
-            "structure": dims_map,
-            "calibration": {
-                "scales": calibration,
-                "units": units
-            },
-            "statistics": stats,
-            "is_3d": 'Z' in dims_map,
-            "is_time_series": 'Time' in dims_map
-        }
-
-        return str(info_payload)
-
-    except Exception as e:
-        return f"Error inspecting image: {str(e)}"
+    return str(all_inspections)
 
 
 

@@ -236,7 +236,7 @@ supervisor_prompt = """
                             - Only shows windows/images on successful execution
                         NOTE: All code execution must go through this tool. Coder and debugger
                                 agents never execute scripts themselves.
-                        - inspect_active_image
+                        - inspect_all_ui_windows
                         - rag_retrieve (fast document lookup; use only when knowledge is uncertain)
 
                         ────────────────────────────────────────
@@ -244,7 +244,7 @@ supervisor_prompt = """
                         ────────────────────────────────────────
                         1. Analyze the user request and scientific intent.
                         2. ALWAYS inspect the currently active image using the
-                        get_active_image_info tool before proposing or executing any solution.
+                        inspect_all_ui_windows tool before proposing or executing any solution.
                         3. Research appropriate ImageJ/Fiji methods, plugins, or workflows as needed.
                         4. Decide whether the task requires:
                         - Image analysis logic
