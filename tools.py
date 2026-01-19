@@ -504,23 +504,34 @@ def inspect_java_class(class_name: str, keyword: str = "") -> str:
         A list of real, executable Java method signatures and constants. 
         If no exact match is found, it provides fuzzy 'Did you mean?' suggestions."""
     
-    ij = get_ij()
     
+    
+    ij = get_ij()
     clean_name = class_name.strip()
+    
     search_packages = [
         "", "ij.", "ij.process.", "ij.gui.", "ij.measure.", 
         "ij.plugin.", "ij.plugin.frame.", "ij.io.", "ij.macro.",
         "net.imagej.", "net.imglib2."
     ]
     
+    # --- ROBUST LOADER LOGIC ---
+    # Try the thread loader first, then fall back to the IJ context loader
+    try:
+        Thread = jpype.JClass("java.lang.Thread")
+        current_loader = Thread.currentThread().getContextClassLoader()
+    except:
+        # If thread lookup fails, use the loader from the Gateway
+        current_loader = ij.getClass().getClassLoader()
+    # ---------------------------
+
     JClass = None
     resolved_name = None
-    Thread = jpype.JClass("java.lang.Thread")
-    current_loader = Thread.currentThread().getContextClassLoader()
 
     for pkg in search_packages:
         try:
             full_path = pkg + clean_name
+            # Explicitly use the resolved loader
             java_class_obj = jpype.java.lang.Class.forName(full_path, True, current_loader)
             JClass = jpype.JClass(java_class_obj)
             resolved_name = full_path
@@ -593,6 +604,9 @@ def inspect_java_class(class_name: str, keyword: str = "") -> str:
 
     except Exception as e:
         return f"ERROR: Reflection failed for {resolved_name}: {str(e)}"
+
+
+
 
 class SafeToolLoggerMiddleware(AgentMiddleware):
      def wrap_tool_call(self, request: ToolCallRequest, handler): 
