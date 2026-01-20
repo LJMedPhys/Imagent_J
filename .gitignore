@@ -9,6 +9,7 @@ dist/
 *.egg-info/
 .eggs/
 
+.vscode/
 
 *.log
 *.tmp

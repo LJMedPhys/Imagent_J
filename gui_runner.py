@@ -215,7 +215,7 @@ class ImageJAgentGUI(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("ImagentJ - AI Supervisor & Script Library")
-        self.resize(1100, 700) # Made wider for the library
+        self.resize(1200, 700) # Made wider for the library
 
         # --- Main Layout (Splitter) ---
         main_layout = QHBoxLayout()
