@@ -15,7 +15,7 @@ from imagej_context import get_ij
 # Import the specific execution tool directly for the "Run" button
 from tools import run_script_safe
 
-SCRIPTS_DIR = "saved_scripts"
+SCRIPTS_DIR = "./saved_scripts"
 
 
 os.environ["JAVA_HOME"] = r"C:\Users\lukas.johanns\Downloads\fiji-latest-win64-jdk(1)\Fiji\java\win64"

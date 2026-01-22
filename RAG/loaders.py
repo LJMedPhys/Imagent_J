@@ -1,67 +1,88 @@
 from langchain_pymupdf4llm import PyMuPDF4LLMLoader
 from langchain_community.document_loaders import DirectoryLoader, TextLoader, NotebookLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
+import multiprocessing
 
+from langchain_docling.loader import ExportType
+from docling.document_converter import DocumentConverter, PdfFormatOption
+from docling.datamodel.pipeline_options import PdfPipelineOptions, AcceleratorOptions, AcceleratorDevice
+from docling.datamodel.base_models import InputFormat
+from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 
-def load_pdfs_into_RAG(path_to_folder: str):
-
-    print("Loading PDF documents from folder:", path_to_folder)
-
-    loader = DirectoryLoader(path_to_folder, 
-                         glob= "**/*.pdf",
-                         loader_cls=PyMuPDF4LLMLoader,
-                        exclude=[
-                        "**/.ipynb_checkpoints/**",
-                        ],
-                        show_progress=True)
-
-    documents = loader.load()
-
-    return documents
-
-def load_txt_into_RAG(path_to_folder: str):
-
-
-    print("Loading TXT documents from folder:", path_to_folder)
-
-    loader = DirectoryLoader(path_to_folder, 
-                         glob=["**/*.txt",
-                               "**/*.md",
-                               "**/*.rst",
-                               "**/*.py",
-                               "**/*.js",
-                               "**/*.cpp",
-                               "**/*.java",
-                               ],
-                         loader_cls=TextLoader,
-                         loader_kwargs={
-                        "encoding": "utf-8",
-                         },
+def get_docling_converter():
+    """
+    Performs layout-aware 'Smart Chunking' on PDFs without OCR.
+    Designed for maximum CPU speed.
+    """
+    # 1. Setup high-speed CPU options
+    pipeline_options = PdfPipelineOptions()
+    pipeline_options.do_ocr = False  # Critical for CPU speed
+    pipeline_options.do_table_structure = True  # Allows smart table chunking
     
-                        show_progress=True)
+    pipeline_options.accelerator_options = AcceleratorOptions(
+        num_threads=multiprocessing.cpu_count(),
+        device=AcceleratorDevice.CPU
+    )
 
-    documents = loader.load()
+    # 2. Use the fast backend
+    converter = DocumentConverter(
+        format_options={
+            InputFormat.PDF: PdfFormatOption(
+                pipeline_options=pipeline_options,
+                backend=PyPdfiumDocumentBackend
+            )
+        }
+    )
 
-    return documents
+    
+    return converter
 
+def get_smart_splitter(extension: str):
+    # Default settings for CPU speed & memory
+    params = {"chunk_size": 1200, "chunk_overlap": 200}
+    
+    if extension == ".py":
+        return RecursiveCharacterTextSplitter.from_language(
+            language=Language.PYTHON, **params
+        )
+    elif extension in [".md", ".markdown"]:
+        return RecursiveCharacterTextSplitter.from_language(
+            language=Language.MARKDOWN, **params
+        )
+    elif extension in [".js", ".ts"]:
+        return RecursiveCharacterTextSplitter.from_language(
+            language=Language.JS, **params
+        )
+    # For .txt and others, use standard recursive splitting which respects paragraphs (\n\n)
+    return RecursiveCharacterTextSplitter(
+        separators=["\n\n", "\n", " ", ""], **params
+    )
 
-def load_ipynb_into_RAG(path_to_folder: str):
+def load_and_split_ipynb(file_path: str):
 
+    print("Loading Jupyter Notebook documents from folder:", file_path)
 
-    print("Loading Jupyter Notebook documents from folder:", path_to_folder)
-
-    loader = DirectoryLoader(path_to_folder, 
-                         glob= "**/*.ipynb",
-                         loader_cls=NotebookLoader,
-                         loader_kwargs={
-                        "include_outputs": False,
-                        "max_output_length": 0,
-                        "remove_newline": True,
-                         },
-                         exclude=[
-                        "**/.ipynb_checkpoints/**",
-                        ],
-                        show_progress=True)
+    loader = NotebookLoader(
+        file_path, 
+        include_outputs=False, 
+        remove_newline=True
+    )
     
     documents = loader.load()
+    
+    splitter = get_smart_splitter(".md")
 
-    return documents
+    return splitter.split_documents(documents)
+
+def get_file_types(folder_path):
+    file_types = set()
+    for root, dirs, files in os.walk(folder_path):
+        for filename in files:
+            file_type = os.path.splitext(filename)[1]
+            file_types.add(file_type)
+    return file_types
+
+
+
+
+
