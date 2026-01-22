@@ -108,7 +108,7 @@ def load_folder_recursively(path_to_folder: str, vector_store):
             except Exception as e:
                 print(f"Error processing {file_path}: {e}")
 
-            client.close()
+    client.close()
 
 
 if __name__ == "__main__":

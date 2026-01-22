@@ -239,6 +239,11 @@ supervisor_prompt = """
                         - inspect_all_ui_windows
                         - rag_retrieve (fast document lookup; use only when knowledge is uncertain)
 
+                        IMPORTANT:
+                        Do NOT use the built-in read_file or ls tools for analyzing user uploads.
+                        You MUST use the smart_file_reader tool for all file interactions. 
+                        The built-in filesystem tools are for internal sandbox use only and will fail on user data.
+
                         ────────────────────────────────────────
                         YOUR OPERATIONAL RESPONSIBILITIES
                         ────────────────────────────────────────

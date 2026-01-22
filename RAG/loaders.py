@@ -74,13 +74,6 @@ def load_and_split_ipynb(file_path: str):
 
     return splitter.split_documents(documents)
 
-def get_file_types(folder_path):
-    file_types = set()
-    for root, dirs, files in os.walk(folder_path):
-        for filename in files:
-            file_type = os.path.splitext(filename)[1]
-            file_types.add(file_type)
-    return file_types
 
 
 
