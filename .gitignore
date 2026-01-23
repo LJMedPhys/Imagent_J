@@ -23,3 +23,5 @@ qdrant_data/*
 !qdrant_data/.gitkeep
 
 scripts/saved_scripts/
+
+rag_config.py

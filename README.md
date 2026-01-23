@@ -27,22 +27,47 @@ An AI-powered agent for ImageJ/Fiji scripting and bioimage analysis.
    - Copy `src/config/keys_template.py` to `src/config/keys.py`
    - Fill in your API keys (OpenAI, LangSmith, etc.)
 
-5. **Initialize the RAG databases**:
-   - Run the RAG initialization script to set up the vector databases: `python src/imagentj/rag/RAG.py`
-   - Note: This script has hardcoded paths; you may need to adjust `path_to_folder` in the script to point to your knowledge database directory.
+5. **Configure RAG system**:
+   - Edit `src/config/rag_config.py` to configure document ingestion folders
+   - Add paths to folders containing documentation, manuals, or knowledge base files
+   - Supported formats: PDF, DOCX, TXT, MD, HTML, and more
+
+6. **Initialize the RAG databases**:
+   - Run the RAG initialization script: `python src/imagentj/rag/RAG.py`
+   - This will create vector stores and ingest documents from configured folders
+   - The system creates two vector stores: one for general bioimage analysis docs and one for coding errors/solutions
+
+## RAG System Configuration
+
+The RAG (Retrieval-Augmented Generation) system enables the agent to search through your documentation and knowledge base for relevant information when answering questions or generating scripts.
+
+### Configuration
+
+Edit `src/config/rag_config.py` to configure:
+
+- **INGESTION_FOLDERS**: List of folder paths containing documents to index
+- **QDRANT_DATA_PATH**: Path where vector databases are stored
+- **CHUNK_SIZE** and **CHUNK_OVERLAP**: Text chunking parameters for document processing
+
+### Initialization
+
+Run `python src/imagentj/rag/RAG.py` to:
+1. Create vector stores for bioimage analysis documentation and coding solutions
+2. Process and index all documents from configured folders
+3. Enable AI-powered document search capabilities
+
+### Adding New Documents
+
+To add new documents to the knowledge base:
+1. Place documents in folders listed in `INGESTION_FOLDERS`
+2. Re-run `python src/imagentj/rag/RAG.py` to re-index
+3. Or call `ingest_documents()` function programmatically
 
 ## Running
 
 - CLI version: `python run.py`
 - GUI version: `python gui_runner.py`
 
-## Troubleshooting
-
-- If conda activation fails, ensure the environment is created: `conda env create -f environment.yml`
-- Yellow underlines in code: 
-  - Ensure VS Code is using the correct Python interpreter (select the conda environment)
-  - Install dependencies via `pip install -r requirements.txt` (if available) or ensure all packages from environment.yml are installed
-- For import errors, verify the src/ path is correctly added to Python path
 
 ## Project Structure
 
