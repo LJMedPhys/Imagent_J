@@ -1,0 +1,7 @@
+{
+    "name": "Hello World Dialog",
+    "description": "Shows a simple modal dialog box with 'Hello, world!' and prints a confirmation line to the console/log.",
+    "inputs": "No input required. Run from the Script Editor (Language: Groovy) or as a saved script in Fiji.",
+    "language": "groovy",
+    "script_file": "Hello_World_Dialog.groovy"
+}
