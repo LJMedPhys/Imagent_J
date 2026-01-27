@@ -234,7 +234,7 @@ def smart_file_reader(file_path: str):
 
             return {
                 "type": "rag", 
-                "message": f"Document '{Path(file_path).name}' is ready for questions. "
+                "message": f"Document '{Path(file_path).name}' is ready for questions."
                            f"I'm optimizing the search quality in the background."
             }
 

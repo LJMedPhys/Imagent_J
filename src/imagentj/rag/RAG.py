@@ -236,7 +236,7 @@ def load_folder_recursively(folders: list = None, vector_store=None, collection_
 
 def initialize_rag_system():
     print("Initializing Hybrid RAG system...")
-    client = QdrantClient(path=QDRANT_DATA_PATH)
+    client = get_qdrant_client(path=QDRANT_DATA_PATH)
     
     docs_store = init_vector_store(DOCS_COLLECTION_NAME, client=client)
     print(f"✓ Initialized Hybrid docs collection: {DOCS_COLLECTION_NAME}")
