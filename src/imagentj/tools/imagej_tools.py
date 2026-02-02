@@ -1,13 +1,7 @@
-import sys
-import os
 import json
 from langchain.tools import tool
 from imagentj.imagej_context import get_ij
-
-# Make the repo root importable so we can reach improved_tool_script
-_repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
-if _repo_root not in sys.path:
-    sys.path.insert(0, _repo_root)
+from .metadata_tools import extract_file_metadata
 
 
 @tool
@@ -121,7 +115,6 @@ def extract_image_metadata(path: str) -> str:
     Args:
         path: Absolute file path to the image.
     """
-    from improved_tool_script import extract_file_metadata
 
     result = extract_file_metadata(path)
     return json.dumps(result, indent=2, default=str)
