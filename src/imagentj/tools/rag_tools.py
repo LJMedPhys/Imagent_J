@@ -1,11 +1,13 @@
+import os
 from langchain.tools import tool
 from langchain_core.documents import Document
 from .vector_stores import get_vec_store_mistakes, is_rag_available
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from config.keys import gpt_key
 
+
+gpt_key = os.getenv("OPENAI_API_KEY")
 __all__ = ['rag_retrieve_docs', 'rag_retrieve_mistakes', 'save_coding_experience']
 
 
@@ -31,8 +33,8 @@ def rag_retrieve_docs(query: str) -> list:
     """
     Retrieve relevant context from the document RAG using Hybrid Search + Query Expansion.
     """
-    if not is_rag_available():
-        return [{"content": "RAG system is not configured. No documents available for retrieval.", "source": None, "page": None, "score": 0}]
+    #if not is_rag_available():
+     #   return [{"content": "RAG system is not configured. No documents available for retrieval.", "source": None, "page": None, "score": 0}]
 
     from ..rag.RAG import hybrid_search_with_rrf, apply_rrf, DOCS_COLLECTION_NAME
 
