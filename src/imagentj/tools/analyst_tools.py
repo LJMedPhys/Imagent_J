@@ -28,7 +28,7 @@ def inspect_csv_header(file_path: str):
     except Exception as e:
         return f"Error reading file at {file_path}: {str(e)}"
 
-@tool
+
 def run_python_code(code: str, output_directory: str):
     
     """

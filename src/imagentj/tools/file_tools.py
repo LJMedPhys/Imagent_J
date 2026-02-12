@@ -10,6 +10,9 @@ from imagentj.rag.loaders import get_smart_splitter, load_and_split_ipynb
 from .vector_stores import get_vec_store_docs, is_rag_available
 import threading
 from pathlib import Path
+import os
+import shutil
+from typing import Optional
 
 SCRIPTS_DIR = os.path.join(os.path.dirname(__file__), "../../scripts/saved_scripts")
 
@@ -279,3 +282,38 @@ def smart_file_reader(file_path: str):
             return {"type": "rag", "message": "Notebook indexed."}
 
     return {"type": "error", "message": "Unsupported file type."}
+
+
+
+@tool("mkdir_copy")
+def mkdir_copy(action: str, target_path: str, source_path: Optional[str] = None) -> str:
+    """
+    Manages filesystem operations including creating directories and copying files.
+    
+    Args:
+        action: The operation to perform ('mkdir' or 'copy').
+        target_path: The destination path for the folder or file.
+        source_path: The original file path (required only for 'copy' action).
+        
+    Returns:
+        A success message or an error description.
+    """
+    try:
+        if action == "mkdir":
+            os.makedirs(target_path, exist_ok=True)
+            return f"Successfully created directory: {target_path}"
+        
+        elif action == "copy":
+            if not source_path:
+                return "Error: source_path is required for copy action."
+            # Ensure the destination directory exists
+            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+            shutil.copy2(source_path, target_path)
+            return f"Successfully copied {source_path} to {target_path}"
+        
+        else:
+            return f"Error: Unknown action '{action}'."
+    except Exception as e:
+        return f"FileSystem Error: {str(e)}"
+    
+

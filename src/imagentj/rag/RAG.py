@@ -31,7 +31,9 @@ from config.rag_config import (
     PLUGINS_COLLECTION_NAME, INGESTION_FOLDERS, EMBEDDING_MODEL, BATCH_SIZE,
     SKIP_PATTERNS, SUPPORTED_EXTENSIONS
 )
-from config.keys import gpt_key
+
+gpt_key = os.getenv("OPENAI_API_KEY")
+
 import hashlib
 
 import json
