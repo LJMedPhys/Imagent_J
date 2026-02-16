@@ -1,10 +1,11 @@
 import os
 from deepagents import create_deep_agent
+from deepagents.backends import FilesystemBackend
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from .prompts import imagej_coder_prompt, imagej_debugger_prompt, supervisor_prompt, python_analyst_prompt
 from .tools import internet_search, inspect_all_ui_windows, run_script_safe, rag_retrieve_docs, inspect_java_class, save_coding_experience, rag_retrieve_mistakes, save_reusable_script, inspect_folder_tree, smart_file_reader, run_python_code, inspect_csv_header, extract_image_metadata, search_fiji_plugins, install_fiji_plugin, check_plugin_installed, mkdir_copy, save_script, execute_script, get_script_info
-from .tools import load_script, get_script_history
+from .tools import load_script, get_script_history, setup_analysis_workspace
 
 gpt_key = os.getenv("OPENAI_API_KEY")
 
@@ -80,16 +81,25 @@ python_data_analyst = {
 
 
 
+
+
+
 def init_agent():
+
+    fs_backend = FilesystemBackend(
+    root_dir="/app/data/", 
+    virtual_mode= False  # False = access real files, True = virtual sandbox
+   )
 
     supervisor = create_deep_agent(
     name="ImageJ_Supervisor",
-    tools = [internet_search, inspect_all_ui_windows, rag_retrieve_docs, save_coding_experience, rag_retrieve_mistakes, save_reusable_script, inspect_folder_tree, smart_file_reader, extract_image_metadata, search_fiji_plugins, install_fiji_plugin, check_plugin_installed, mkdir_copy, inspect_csv_header, execute_script, get_script_info],
+    tools = [internet_search, inspect_all_ui_windows, rag_retrieve_docs, save_coding_experience, rag_retrieve_mistakes, save_reusable_script, inspect_folder_tree, smart_file_reader, extract_image_metadata, search_fiji_plugins, install_fiji_plugin, check_plugin_installed, mkdir_copy, inspect_csv_header, execute_script, get_script_info, setup_analysis_workspace],
     system_prompt=supervisor_prompt,
     subagents=[imagej_coder, imagej_debugger, python_data_analyst],
     middleware=[],
     model=llm_gpt5,
     debug=False,
+    backend=fs_backend,
     checkpointer=checkpointer_supervisor,
 )
     return supervisor, checkpointer_supervisor
