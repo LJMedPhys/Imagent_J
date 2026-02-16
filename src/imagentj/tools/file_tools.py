@@ -288,32 +288,97 @@ def smart_file_reader(file_path: str):
 @tool("mkdir_copy")
 def mkdir_copy(action: str, target_path: str, source_path: Optional[str] = None) -> str:
     """
-    Manages filesystem operations including creating directories and copying files.
+    Manages filesystem operations including creating directories and copying 
+    files or entire folders with their contents.
     
     Args:
         action: The operation to perform ('mkdir' or 'copy').
         target_path: The destination path for the folder or file.
-        source_path: The original file path (required only for 'copy' action).
+        source_path: The original file or folder path (required only for 'copy' action).
         
     Returns:
         A success message or an error description.
     """
     try:
+        # Action: Create Directory
         if action == "mkdir":
             os.makedirs(target_path, exist_ok=True)
             return f"Successfully created directory: {target_path}"
         
+        # Action: Copy (File or Folder)
         elif action == "copy":
             if not source_path:
                 return "Error: source_path is required for copy action."
-            # Ensure the destination directory exists
-            os.makedirs(os.path.dirname(target_path), exist_ok=True)
-            shutil.copy2(source_path, target_path)
-            return f"Successfully copied {source_path} to {target_path}"
+            
+            if not os.path.exists(source_path):
+                return f"Error: Source path '{source_path}' does not exist."
+
+            # Check if the source is a directory
+            if os.path.isdir(source_path):
+                # Copy entire folder and contents
+                shutil.copytree(source_path, target_path, dirs_exist_ok=True)
+                return f"Successfully copied directory tree from {source_path} to {target_path}"
+            
+            else:
+                # Copy a single file
+                # Ensure the destination parent directory exists
+                os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                shutil.copy2(source_path, target_path)
+                return f"Successfully copied file {source_path} to {target_path}"
         
         else:
             return f"Error: Unknown action '{action}'."
+
     except Exception as e:
         return f"FileSystem Error: {str(e)}"
+    
+
+
+
+
+@tool("setup_analysis_workspace")
+def setup_analysis_workspace(project_name: str) -> str:
+    """
+    Creates a standardized folder tree to manage a new analysis project.
+    Run this at the start of a project to initialize the directory architecture 
+    for raw images, scripts, data, and figures under /app/data/.
+    """
+    # 1. Define the base path
+    root = Path(f"/app/data/{project_name}")
+    
+    # 2. Define the subdirectories
+    subdirs = [
+        "raw_images",
+        "processed_images/channels",
+        "processed_images/montages",
+        "scripts/imagej",
+        "scripts/python",
+        "data",
+        "figures",
+        "logs"
+    ]
+    
+    # 3. Create the directories on the filesystem
+    for subdir in subdirs:
+        (root / subdir).mkdir(parents=True, exist_ok=True)
+    
+    # 4. Return the tree structure as a string for the Agent's context
+    tree_output = f"""
+                Successfully created project structure for: {project_name}
+                Location: {root}
+
+                {project_name}/
+                ├── raw_images/           # User uploaded files go here
+                ├── processed_images/     # ImageJ outputs
+                │   ├── channels/         # Individual channels (if multi-channel)
+                │   └── montages/         # Comparison views
+                ├── scripts/              # All analysis scripts
+                │   ├── imagej/
+                │   └── python/
+                ├── data/                 # CSV results
+                ├── figures/              # Publication plots
+                └── logs/                 # Processing logs
+                """
+    return tree_output
     
 
