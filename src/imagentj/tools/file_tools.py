@@ -380,5 +380,58 @@ def setup_analysis_workspace(project_name: str) -> str:
                 └── logs/                 # Processing logs
                 """
     return tree_output
+
+
+@tool("save_markdown")
+def save_markdown(file_path: str, content: str) -> dict:
+    """
+    Writes a markdown string to a .md file at the specified absolute path.
+    Creates any missing parent directories automatically.
+
+    Args:
+        file_path (str): Absolute path for the output file, e.g.
+                         '/app/data/project_name/QA_Checklist_Report.md'
+                         Must end with '.md'.
+        content   (str): Full markdown content to write.
+
+    Returns:
+        dict with keys:
+            - success (bool)
+            - path    (str)  absolute path of the written file
+            - size    (int)  file size in bytes
+            - error   (str)  error message if success is False, else None
+    """
+    try:
+        if not file_path.endswith(".md"):
+            return {
+                "success": False,
+                "path": file_path,
+                "size": 0,
+                "error": "file_path must end with '.md'",
+            }
+
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        size = os.path.getsize(file_path)
+        print(f"[save_markdown] ✅ Saved {size} bytes → {file_path}")
+
+        return {
+            "success": True,
+            "path": file_path,
+            "size": size,
+            "error": None,
+        }
+
+    except Exception as e:
+        print(f"[save_markdown] ❌ Failed to write {file_path}: {e}")
+        return {
+            "success": False,
+            "path": file_path,
+            "size": 0,
+            "error": str(e),
+        }
     
 

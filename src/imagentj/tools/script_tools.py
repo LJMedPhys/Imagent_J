@@ -151,7 +151,10 @@ def save_script(directory: str, filename: str, content: str, description: str, e
     Saves a script, archives previous versions, and maintains a versioned history in script_dictionary.json.
     
     Args:
-        directory: Project root folder.
+        directory: Path to the directory where the script should be saved must look like this:
+        Correct:   /app/data/[project_name]/scripts/imagej/
+        WRONG:     /app/data/[project_name]/scripts/
+        WRONG:     /app/data/[project_name]/
         filename: Name of the script (must be .py or .groovy).
         content: The new source code.
         description: A short and precise summary of what the script does for the supervisor. Maximize information and minimze tokens.
