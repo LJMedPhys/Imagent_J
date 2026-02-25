@@ -38,10 +38,15 @@ services:
       - ./gui_runner.py:/app/gui_runner.py:ro
       # Folder to save data
       - ./data:/app/data
+      # Folder for skills
+      - ./skills:/app/skills:ro
     env_file:
       - path: .env
         required: false
     shm_size: '2gb'
+
+    networks:
+      - imagent_net
 
     # ── Resource limits ────────────────────────────────────────────────────
     deploy:
@@ -68,3 +73,11 @@ volumes:
   fiji_update:
   saved_scripts:
   qdrant_data:
+
+networks:
+  imagent_net:
+    ipam:
+      driver: default
+      config:
+        # Using 10.10.10.0/24 is usually safe from 172.x conflicts
+        - subnet: 10.10.10.0/24
