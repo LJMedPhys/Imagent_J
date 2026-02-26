@@ -472,9 +472,11 @@ class ImageJAgentGUI(QWidget):
 
     def eventFilter(self, obj, event):
         if obj == self.input_line and event.type() == QEvent.KeyPress:
-            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
-                self.on_send()
-                return True
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                # Send only if NO modifiers (plain Enter)
+                if event.modifiers() == Qt.KeyboardModifier.NoModifier:
+                    self.on_send()
+                    return True  # block newline
         return super().eventFilter(obj, event)
 
     def _agent_is_busy(self) -> bool:
