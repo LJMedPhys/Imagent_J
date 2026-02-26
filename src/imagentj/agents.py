@@ -6,6 +6,11 @@ from langgraph.checkpoint.memory import MemorySaver
 from .prompts import imagej_coder_prompt, imagej_debugger_prompt, supervisor_prompt, python_analyst_prompt, qa_reporter_prompt
 from .tools import internet_search, inspect_all_ui_windows, run_script_safe, rag_retrieve_docs, inspect_java_class, save_coding_experience, rag_retrieve_mistakes, save_reusable_script, inspect_folder_tree, smart_file_reader, run_python_code, inspect_csv_header, extract_image_metadata, search_fiji_plugins, install_fiji_plugin, check_plugin_installed, mkdir_copy, save_script, execute_script, get_script_info
 from .tools import load_script, get_script_history, setup_analysis_workspace, save_markdown
+from imagentj.tracker import UsageMetrics, MetricsSignalBridge, UsageTrackerCallback
+
+shared_metrics = UsageMetrics()
+shared_bridge = MetricsSignalBridge()
+shared_tracker = UsageTrackerCallback(shared_metrics, shared_bridge)
 
 gpt_key = os.getenv("OPENAI_API_KEY")
 
@@ -17,8 +22,43 @@ checkpointer_qa_reporter = MemorySaver()
 
 
 
-
 llm_gpt5 = ChatOpenAI(
+    model = "qwen3-235b-a22b",
+    verbose=True,
+    api_key=gpt_key,
+    base_url= "https://chat-ai.academiccloud.de/v1",
+    temperature=0.,
+    callbacks=[shared_tracker],
+)
+
+llm_gpt5_nano = ChatOpenAI(
+    model = "qwen3-235b-a22b",
+    verbose=True,
+    api_key=gpt_key,
+    base_url= "https://chat-ai.academiccloud.de/v1",
+    temperature=0.,
+    callbacks=[shared_tracker],
+)
+
+
+'''llm_gpt5 = ChatOpenAI(
+    model = "meta-llama/llama-3.3-70b-instruct:free",
+    verbose=True,
+    api_key="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",
+    base_url= "https://openrouter.ai/api/v1",
+    temperature=0.,
+)
+
+llm_gpt5_nano = ChatOpenAI(
+    model = "deepseek/deepseek-r1:free",
+    verbose=True,
+    api_key="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",
+    base_url= "https://openrouter.ai/api/v1",
+    temperature=0.,
+)'''
+
+
+'''llm_gpt5 = ChatOpenAI(
     model = "gpt-5.2",
     verbose=True,
     api_key=gpt_key,
@@ -33,7 +73,7 @@ llm_gpt5_nano = ChatOpenAI(
     temperature=0.,
     reasoning_effort="low",
 )
-
+'''
 imagej_coder = {
     "name": "imagej_coder",
 
