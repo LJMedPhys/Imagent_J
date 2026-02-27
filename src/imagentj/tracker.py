@@ -45,7 +45,13 @@ PRICE_TABLE: dict[str, tuple[float, float]] = {
     "claude-sonnet-4":           (3.00,  15.00),
     "claude-haiku-4":            (0.80,   4.00),
     "default":                   (1.00,   3.00),   # fallback
-    "gemini-3-flash-preview":    (0.50,   3.00),   # openrouter – free tier
+    "gemini-3-flash-preview":    (0.50,   3.00),   
+    "kimi-k2.5":                 (0.45,   2.25),
+    "claude-opus-4.6":           (10.00,  37.50),
+    "deepseek-v3.2":             (0.25,   0.40),
+    "openai/gpt-5.2":            (1.75,   14.00),
+    "anthropic/claude-haiku-4.5": (1.00,   5.00),
+
 }
 
 def _price_for_model(model_name: str) -> tuple[float, float]:
