@@ -208,4 +208,4 @@ def init_agent():
     checkpointer=checkpointer_supervisor,
     skills = ["/app/skills/"]
 )
-    return supervisor, checkpointer_supervisor
+    return supervisor, checkpointer_supervisor, shared_metrics, shared_bridge, shared_tracker
