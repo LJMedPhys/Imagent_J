@@ -778,7 +778,7 @@ PHASE 1 — INFORMATION GATHERING
 1. Understand the scientific goal.
 2. Call inspect_all_ui_windows to understand open images (type, channels, slices, frames).
 3. Call rag_retrieve_docs for relevant ImageJ methods.
-4. Call search_fiji_plugins if a specialized plugin may apply.
+4. Call search_fiji_plugins if a specialized plugin may apply. ALWAYS prefer a plugin over custom code if it meets the requirements.
 5. Ask the user for clarification if the task is ambiguous (use biologist-friendly language).
 
 PHASE 2 — TASK PLANNING
