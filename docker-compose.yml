@@ -8,6 +8,7 @@ services:
       - "0.0.0.0:6080:6080"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPEN_ROUTER_API_KEY=${OPEN_ROUTER_API_KEY:-}
       - LANGSMITH_API_KEY=${LANGSMITH_API_KEY:-}
       - LANGSMITH_TRACING=${LANGSMITH_TRACING:-true}
       - LANGSMITH_ENDPOINT=${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
@@ -28,9 +29,8 @@ services:
       # Saved scripts persistence
       - saved_scripts:/app/scripts/saved_scripts
       # Qdrant vector database for plugin search and RAG
-      # Named volume avoids host-ownership mismatch (bind mount is created as root,
-      # but the container runs as the non-root imagentj user)
-      - qdrant_data:/app/qdrant_data
+      # Use bind mount (./qdrant_data on host) instead of named volume to preserve host permissions
+      - ./qdrant_data:/app/qdrant_data
       # Image data directory (place images in ./data on host, access as /mnt/data in container)
       - ${IMAGE_DATA_DIR:-./data}:/data
       # Entrypoint script (contains security features like VNC password support)
@@ -74,7 +74,6 @@ volumes:
   fiji_jars:
   fiji_update:
   saved_scripts:
-  qdrant_data:
 
 networks:
   imagent_net:
