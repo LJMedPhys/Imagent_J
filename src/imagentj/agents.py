@@ -7,7 +7,7 @@ from .prompts import imagej_coder_prompt, imagej_debugger_prompt, supervisor_pro
 from .tools import internet_search, inspect_all_ui_windows, run_script_safe, rag_retrieve_docs, inspect_java_class, save_coding_experience, rag_retrieve_mistakes, save_reusable_script, inspect_folder_tree, smart_file_reader, run_python_code, inspect_csv_header, extract_image_metadata, search_fiji_plugins, install_fiji_plugin, check_plugin_installed, mkdir_copy, save_script, execute_script, get_script_info
 from .tools import load_script, get_script_history, setup_analysis_workspace, save_markdown
 from imagentj.tracker import UsageMetrics, MetricsSignalBridge, UsageTrackerCallback
-from langchain.agents.middleware import SummarizationMiddleware, ContextEditingMiddleware, ClearToolUsesEdit
+from langchain.agents.middleware import SummarizationMiddleware, ContextEditingMiddleware, ClearToolUsesEdit, FilesystemFileSearchMiddleware
 
 shared_metrics = UsageMetrics()
 shared_bridge = MetricsSignalBridge()
@@ -232,7 +232,11 @@ def init_agent():
                     clear_tool_inputs=False,
                     exclude_tools=[],
                     placeholder="[cleared]",
-                ),],)
+                ),],),
+                FilesystemFileSearchMiddleware(
+            root_path="/app/data/",
+            use_ripgrep=True,
+                ),
                 ],
     model=llm_supervisor,
     debug=False,
