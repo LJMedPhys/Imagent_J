@@ -41,9 +41,6 @@ PRICE_TABLE: dict[str, tuple[float, float]] = {
     "gpt-4o":                    (2.50,  10.00),
     "gpt-4o-mini":               (0.15,   0.60),
     "gpt-4.1":                   (2.00,   8.00),
-    "claude-opus-4":             (15.00,  75.00),
-    "claude-sonnet-4":           (3.00,  15.00),
-    "claude-haiku-4":            (0.80,   4.00),
     "default":                   (1.00,   3.00),   # fallback
     "gemini-3-flash-preview":    (0.50,   3.00),   
     "kimi-k2.5":                 (0.45,   2.25),
@@ -56,6 +53,13 @@ PRICE_TABLE: dict[str, tuple[float, float]] = {
     "moonshotai/kimi-k2.5":      (0.45,   2.25),
     "z-ai/glm-5":                (0.95,   2.55),
     "mistralai/mistral-small-3.2-24b-instruct": (0.075, 0.2),
+    "google/gemini-2.5-pro" :    (1.25,   10.00),
+    "google/gemini-3.1-flash-lite-preview": (0.25,   1.50),
+    "openai/gpt-5-nano":          (0.05,   0.40),
+    "anthropic/claude-opus-4.6":  (5.00,  25.00),
+    "anthropic/claude-sonnet-4.6":(3.00,   15.00),
+    "anthropic/claude-haiku-4.5": (1.00,   5.00),
+    "google/gemini-3-pro-preview": (2.00,   12.00),
 }
 
 def _price_for_model(model_name: str) -> tuple[float, float]:

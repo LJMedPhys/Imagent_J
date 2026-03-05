@@ -42,6 +42,13 @@ deepseek/deepseek-v3.2
 openai/gpt-5.2
 openai/gpt-5.3-codex
 anthropic/claude-haiku-4.5
+google/gemini-2.5-pro
+google/gemini-3.1-flash-lite-preview
+openai/gpt-5-nano
+anthropic/claude-opus-4.6
+anthropic/claude-sonnet-4.6
+anthropic/claude-haiku-4.5
+google/gemini-3-pro-preview
 """
 
 open_models = """
@@ -52,58 +59,52 @@ deepseek/deepseek-v3.2
 mistralai/mistral-small-3.2-24b-instruct
 """
 
-llm_gpt5 = ChatOpenAI(
-    model = "google/gemini-3-flash-preview",
+# Supervisor: strongest model — orchestrates the full pipeline
+llm_supervisor = ChatOpenAI(
+    model = "google/gemini-3-pro-preview",
     verbose=True,
     api_key=open_router_key,
     base_url= "https://openrouter.ai/api/v1",
     temperature=0.,
+    reasoning_effort="low",
     callbacks=[shared_tracker],
 )
 
-llm_gpt5_nano = ChatOpenAI(
-    model = "google/gemini-3-flash-preview",
+# Coders/Debugger: mid-tier — code generation needs reliable reasoning
+llm_worker = ChatOpenAI(
+    model = "google/gemini-3-pro-preview",
     verbose=True,
     api_key=open_router_key,
     base_url= "https://openrouter.ai/api/v1",
     temperature=0.,
+    reasoning_effort="low",
     callbacks=[shared_tracker],
 )
 
-'''llm_gpt5 = ChatOpenAI(
-    model = "openai-gpt-oss-120b",
+# Analyst: mid-tier for stats; fast for simple CSV inspection
+llm_analyst = ChatOpenAI(
+    model = "google/gemini-3.1-flash-lite-preview",
     verbose=True,
-    api_key=gpt_key,
-    base_url= "https://chat-ai.academiccloud.de/v1",
-    temperature=0.,
-    callbacks=[shared_tracker],
-)
-
-llm_gpt5_nano = ChatOpenAI(
-    model = "openai-gpt-oss-120b",
-    verbose=True,
-    api_key=gpt_key,
-    base_url= "https://chat-ai.academiccloud.de/v1",
-    temperature=0.,
-    callbacks=[shared_tracker],
-)'''
-
-'''llm_gpt5 = ChatOpenAI(
-    model = "gpt-5.2",
-    verbose=True,
-    api_key=gpt_key,
+    api_key=open_router_key,
+    base_url= "https://openrouter.ai/api/v1",
     temperature=0.,
     reasoning_effort="low",
+    callbacks=[shared_tracker],
 )
 
-llm_gpt5_nano = ChatOpenAI(
-    model = "gpt-5.2",
+# Nano: genuinely small for trivial routing/validation tasks
+llm_nano = ChatOpenAI(
+    model = "anthropic/claude-haiku-4.5",
     verbose=True,
-    api_key=gpt_key,
+    api_key=open_router_key,
+    base_url= "https://openrouter.ai/api/v1",
     temperature=0.,
     reasoning_effort="low",
+    callbacks=[shared_tracker],
 )
-'''
+
+
+
 imagej_coder = {
     "name": "imagej_coder",
 
@@ -115,7 +116,7 @@ imagej_coder = {
     "system_prompt": imagej_coder_prompt,
     "middleware":[],
     "tools": [internet_search, inspect_java_class, save_script, load_script, get_script_history],
-    "model":llm_gpt5_nano,
+    "model":llm_worker,
     "checkpointer":checkpointer_imagej_coder,
 }
 
@@ -132,7 +133,7 @@ imagej_debugger = {
 
     "system_prompt": imagej_debugger_prompt,
     "tools": [internet_search, inspect_java_class, rag_retrieve_mistakes, save_script, load_script, get_script_history, get_script_info],
-    "model":llm_gpt5_nano,
+    "model":llm_worker,
     "middleware":[],
     "checkpointer":checkpointer_imagej_debugger,
 }   
@@ -148,43 +149,43 @@ python_data_analyst = {
                     while documenting statistical assumptions in the project dictionary.""",
     "system_prompt": python_analyst_prompt,
     "tools": [inspect_csv_header, save_script, load_script, get_script_history, load_script, get_script_info],
-    "model": llm_gpt5_nano, 
+    "model": llm_worker, 
     "middleware": [],
     "checkpointer": checkpointer_python_analyst,
 }
 
 
-# qa_reporter = {
-#     "name": "qa_reporter",
+qa_reporter = {
+    "name": "qa_reporter",
 
-#     "description": """Automatically audits a completed project folder and generates two files:
-#                     (1) QA_Checklist_Report.md — pass/fail audit against image-analysis publication 
-#                     standards (Minimal / Recommended / Ideal levels).
-#                     (2) Workflow_Documentation.md — a pre-filled documentation template inferred 
-#                     from the project's scripts, CSVs, and figures.
+    "description": """Automatically audits a completed project folder and generates two files:
+                    (1) QA_Checklist_Report.md — pass/fail audit against image-analysis publication 
+                    standards (Minimal / Recommended / Ideal levels).
+                    (2) Workflow_Documentation.md — a pre-filled documentation template inferred 
+                    from the project's scripts, CSVs, and figures.
                     
-#                     WHEN TO CALL: At the end of every project, after all scripts have run 
-#                     successfully and results are saved.
+                    WHEN TO CALL: At the end of every project, after all scripts have run 
+                    successfully and results are saved.
                     
-#                     INPUT REQUIRED: The absolute path to the project root folder 
-#                     (e.g., /app/data/project_name/).
+                    INPUT REQUIRED: The absolute path to the project root folder 
+                    (e.g., /app/data/project_name/).
                     
-#                     OUTPUT: Absolute paths to QA_Checklist_Report.md and 
-#                     Workflow_Documentation.md saved inside the project folder.""",
+                    OUTPUT: Absolute paths to QA_Checklist_Report.md and 
+                    Workflow_Documentation.md saved inside the project folder.""",
 
-#     "system_prompt": qa_reporter_prompt,
-#     "middleware": [],
-#     "tools": [
-#         inspect_folder_tree,   # discovers project structure
-#         smart_file_reader,     # reads scripts, CSVs, logs
-#         get_script_info,       # reads script documentation from dictionary
-#         save_markdown,           # writes the two output markdown files
-#         inspect_csv_header,
-#         load_script,
-#     ],
-#     "model": llm_gpt5,
-#     "checkpointer": checkpointer_qa_reporter,
-# }
+    "system_prompt": qa_reporter_prompt,
+    "middleware": [],
+    "tools": [
+        inspect_folder_tree,   # discovers project structure
+        smart_file_reader,     # reads scripts, CSVs, logs
+        get_script_info,       # reads script documentation from dictionary
+        save_markdown,           # writes the two output markdown files
+        inspect_csv_header,
+        load_script,
+    ],
+    "model": llm_nano,
+    "checkpointer": checkpointer_qa_reporter,
+}
 
 
 
@@ -202,10 +203,10 @@ def init_agent():
     system_prompt=supervisor_prompt,
     subagents=[imagej_coder, imagej_debugger, python_data_analyst], #, qa_reporter],
     middleware=[],
-    model=llm_gpt5,
+    model=llm_supervisor,
     debug=False,
     backend=fs_backend,
     checkpointer=checkpointer_supervisor,
-    skills = ["/app/skills/"]
+    skills = ["/app/skills/"],
 )
     return supervisor, checkpointer_supervisor, shared_metrics, shared_bridge, shared_tracker
