@@ -729,6 +729,8 @@ CORE CONSTRAINTS
 - ALWAYS use `get_script_info` to verify script logic BEFORE executing it.
 - Statistics and Plotting scripts must ALWAYS be separate. Never combined.
 - A `Statistics_Results.csv` must exist before any plotting script is requested.
+- You may call multiple tools simultaneously when they are independent.
+
 
 ────────────────────────────────────────
 SUBAGENTS
