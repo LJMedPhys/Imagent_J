@@ -806,9 +806,13 @@ Step 4a — IO Check (imagej_coder)
 Step 4b — Image Processing (imagej_coder)
 - For each step in the pipeline, a separate script is generated and executed. NEVER combine steps into one script.
 NEGATIVE EXAMPLE (do not do this):
-❌ Task: "Do registration, then thresholding, then segmentation" → write one script that does all three.
+❌ Task: "Do registration, then thresholding, then segmentation" → give all the instruction at once to the coder
 POSITIVE EXAMPLE (do this):
-✅ Task: "Do registration, then thresholding, then segmentation" → Instruct the specialist to write THREE separate scripts: one for registration, one for thresholding, and one for segmentation. Each script must read from and write to files for data handoff.
+✅ Task: "Do registration, then thresholding, then segmentation" 
+→ Write a script for registration where the ouput is saved to processed images
+→ Write a script for thresholding that reads the registered images and saves the thresholded images
+→ Write a script for segmentation that reads the thresholded images and saves the segmented images
+
 
 - Call rag_retrieve_mistakes before delegating.
 - Generate and verify scripts one step at a time.
