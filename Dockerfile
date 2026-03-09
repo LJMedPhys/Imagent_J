@@ -58,8 +58,9 @@ COPY . /app
 # Use keys_template.py as keys.py (keys.py is .dockerignored since it has real secrets)
 RUN cp /app/src/config/keys_template.py /app/src/config/keys.py
 
-# Ensure the app user owns everything it needs to write to
-RUN chown -R imagentj:imagentj /app /home/imagentj \
+# Ensure the app user owns everything it needs to write to (including qdrant_data directory)
+RUN mkdir -p /app/qdrant_data \
+    && chown -R imagentj:imagentj /app /home/imagentj /app/qdrant_data \
     && chown -R imagentj:imagentj /opt/Fiji.app
 
 # ── Environment defaults ─────────────────────────────────────────────────────
