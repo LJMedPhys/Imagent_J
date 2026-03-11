@@ -155,7 +155,7 @@ def smart_file_reader(file_path: str):
     """
     Analyzes and ingests a file through the provided path to expand the agent's knowledge base at runtime.
 
-    Use this tool when a user provides a new file (PDF, TXT, PY, IPYNB) and asks
+    Use this tool when a user provides a new file (PDF, TXT, PY, IPYNB, groovy) and asks
     questions that require information contained within that specific file.
 
     Logic:
@@ -196,7 +196,7 @@ def smart_file_reader(file_path: str):
     rag_available = vec_store_docs is not None
 
     # --- CATEGORY 1: Plain Text & Code ---
-    if ext in [".txt", ".py", ".md", ".js"]:
+    if ext in [".txt", ".py", ".md", ".js", ".groovy"]:
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
 
