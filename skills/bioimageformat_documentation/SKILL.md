@@ -200,3 +200,4 @@ Full list: https://bio-formats.readthedocs.io/en/v8.4.0/supported-formats.html
 | `GROOVY_SCRIPT_API.md`               | Full Groovy/Java API (`BF`, `ImporterOptions`) + IJ Macro reference   |
 | `WORKFLOW_BATCH_CONVERT.groovy`      | Ready-to-use Groovy batch conversion script (runs in Fiji Script Editor) |
 | `SKILL.md`                           | This quick-reference card                                             |
+| `UI_WORKFLOW.md`                     | Step-by-step GUI walkthrough: import, multi-series, export, config    |
