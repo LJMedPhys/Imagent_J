@@ -200,6 +200,7 @@ def _make_coder_agent(model, name, system_prompt):
             save_script,
             load_script,
             get_script_history,
+            smart_file_reader,
             rag_retrieve_mistakes,  # mandatory: check past mistakes before writing
         ],
         system_prompt=system_prompt,
