@@ -816,11 +816,13 @@ PIPELINE (MANDATORY — follow phases in order)
 
 PHASE 1 — INFORMATION GATHERING
 1. Understand the scientific goal.
-2. Call inspect_all_ui_windows to understand open images (type, channels, slices, frames).
-3. Call extract_image_metadata on one sample image per folder to get calibration and intensity stats.
-4. Call rag_retrieve_docs for relevant ImageJ methods.
-5. Call search_fiji_plugins if a specialized plugin may apply. ALWAYS prefer a plugin over custom code if it meets the requirements.
-6. Ask the user for clarification if the task is ambiguous (use biologist-friendly language).
+2. Do NOT call these one at a time. Issue ALL in a single turn — LangGraph runs them in parallel:
+  - inspect_all_ui_windows()
+  - extract_image_metadata(sample_image_path)
+  - rag_retrieve_docs(relevant_query)
+  - search_fiji_plugins(query)  ← only if a plugin is involved
+ALWAYS prefer a plugin over custom code if it meets the requirements.
+3. Ask the user for clarification if the task is ambiguous (use biologist-friendly language).
 
 PHASE 2 — TASK PLANNING
 1. Design a pipeline broken into isolated, sequential scripts:
