@@ -209,7 +209,7 @@ def _make_coder_agent(model, name, system_prompt):
             ContextEditingMiddleware(
                 edits=[
                     ClearToolUsesEdit(
-                        trigger=50000,
+                        trigger=25000,
                         keep=10,
                         clear_tool_inputs=False,
                         exclude_tools=[],
@@ -497,13 +497,13 @@ def init_agent():
         middleware=[
             SummarizationMiddleware(
                 model=llm_nano,
-                trigger=("tokens", 50000),
+                trigger=("tokens", 25000),
                 keep=("messages", 20),
             ),
             ContextEditingMiddleware(
                 edits=[
                     ClearToolUsesEdit(
-                        trigger=50000,
+                        trigger=25000,
                         keep=10,
                         clear_tool_inputs=False,
                         exclude_tools=[],
