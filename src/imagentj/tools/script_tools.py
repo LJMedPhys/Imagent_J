@@ -1,60 +1,238 @@
 import jpype
+from jpype import JClass, JImplements, JOverride
 from langchain.tools import tool
 from imagentj.imagej_context import get_ij
-from jpype import JClass
 import os
 import json
 from .analyst_tools import run_python_code
 import datetime
 import shutil
-from typing import Optional
+from typing import Optional, Any
 from filelock import FileLock
+import threading
+import time
+from scyjava import jimport
+
+
+def _get_open_frames() -> dict:
+    """
+    Snapshot all visible AWT Frames by title.
+    Returns {title: frame} — uses title as key since TextWindows
+    are identified by title in the Window menu.
+    """
+    Frame = jimport("java.awt.Frame")
+    result = {}
+    try:
+        for frame in Frame.getFrames():
+            if frame.isVisible():
+                title = str(frame.getTitle())
+                result[title] = frame
+    except Exception:
+        pass
+    return result
+
+def _extract_component_text(component) -> list[str]:
+    """
+    Recursively extract text from all AWT and Swing components.
+    Covers: Label, TextArea, TextField, JLabel, JTextArea, JTextField.
+    """
+    Label     = JClass("java.awt.Label")
+    TextArea  = JClass("java.awt.TextArea")
+    TextField = JClass("java.awt.TextField")
+    Container = JClass("java.awt.Container")
+
+    try:
+        JLabel     = JClass("javax.swing.JLabel")
+        JTextArea  = JClass("javax.swing.JTextArea")
+        JTextField = JClass("javax.swing.JTextField")
+        has_swing  = True
+    except Exception:
+        has_swing = False
+
+    texts = []
+    try:
+        if jpype.isinstance(component, Label):
+            t = str(component.getText()).strip()
+            if t:
+                texts.append(t)
+        elif jpype.isinstance(component, (TextArea, TextField)):
+            t = str(component.getText()).strip()
+            if t:
+                texts.append(t)
+        elif has_swing and jpype.isinstance(component, (JLabel, JTextArea, JTextField)):
+            t = str(component.getText()).strip()
+            if t:
+                texts.append(t)
+
+        if jpype.isinstance(component, Container):
+            for child in component.getComponents():
+                texts.extend(_extract_component_text(child))
+    except Exception:
+        pass
+    return texts
+
+
+def _read_frame_text(frame) -> str:
+    """
+    Attempt to read text content from a frame.
+    Works for TextWindow (Log, Exception, etc.) which expose getTextPanel().
+    """
+    try:
+        text_panel = frame.getTextPanel()
+        return str(text_panel.getText()).strip()
+    except Exception:
+        pass
+
+    # Fallback: recurse into AWT components (same as before)
+    return "\n".join(_extract_component_text(frame))
+
+def _flush_edt() -> None:
+    """Block until all currently queued AWT events have been processed."""
+    SwingUtilities = JClass("javax.swing.SwingUtilities")
+    if SwingUtilities.isEventDispatchThread():
+        return
+
+    @JImplements("java.lang.Runnable")
+    class Flusher:
+        @JOverride
+        def run(self):
+            pass
+
+    try:
+        SwingUtilities.invokeAndWait(Flusher())
+    except Exception:
+        pass
+
+
+def _collect_new_frames(frames_before: dict, timeout: float = 0.5) -> list[str]:
+    """
+    Poll for up to `timeout` seconds for new AWT Frames to appear,
+    read their text content, close them, and return messages.
+    This catches ImageJ TextWindow exceptions which show up in the Window menu.
+    """
+    messages = []
+    deadline = time.monotonic() + timeout
+
+    # Titles to skip — these are permanent ImageJ UI frames
+    IGNORE_TITLES = {"ImageJ", "Fiji", "Log", "ROI Manager", "Results", ""}
+
+    while time.monotonic() < deadline:
+        _flush_edt()
+
+        current = _get_open_frames()
+        new_frames = {
+            title: frame
+            for title, frame in current.items()
+            if title not in frames_before and title not in IGNORE_TITLES
+        }
+
+        if new_frames:
+            for title, frame in new_frames.items():
+                text = _read_frame_text(frame)
+                entry = f"[{title}]"
+                if text:
+                    entry += f"\n{text}"
+                messages.append(entry)
+                # Close the window
+                try:
+                    frame.dispose()
+                except Exception:
+                    pass
+            break
+
+        time.sleep(0.05)
+
+    return messages
+
+# ── IJ Log capture ────────────────────────────────────────────────────────
+
+def get_ij_log_content() -> str:
+    """Read current text from ImageJ's Log window (IJ.log() output)."""
+    WindowManager = JClass("ij.WindowManager")
+    log_frame = WindowManager.getFrame("Log")
+    if log_frame is None:
+        return ""
+    try:
+        text_panel = log_frame.getTextPanel()
+        return str(text_panel.getText())
+    except Exception:
+        return ""
+
+
+
+def get_new_ij_log_entries(log_before: str) -> str:
+    """Return only log lines that appeared after `log_before` was captured."""
+    log_after = get_ij_log_content()
+    if not log_before:
+        return log_after
+    if log_after.startswith(log_before):
+        return log_after[len(log_before):]
+    # Log was cleared or rotated between calls — return full current log
+    return log_after
 
 
 def run_groovy_script(script: str, ij) -> str:
-    """Execute Groovy scripts in ImageJ/Fiji."""
-
-    System = jpype.JClass("java.lang.System")
+    """
+    Execute a Groovy script in ImageJ/Fiji capturing all output channels:
+      - System.out / System.err  via ByteArrayOutputStream redirect
+      - IJ.log()                 via Log window text delta
+      - Exception windows        via AWT Frame polling (Window menu)
+    """
+    System                = jpype.JClass("java.lang.System")
     ByteArrayOutputStream = jpype.JClass("java.io.ByteArrayOutputStream")
-    PrintStream = jpype.JClass("java.io.PrintStream")
+    PrintStream           = jpype.JClass("java.io.PrintStream")
 
-    out_stream = ByteArrayOutputStream()
-    err_stream = ByteArrayOutputStream()
-
+    out_stream   = ByteArrayOutputStream()
+    err_stream   = ByteArrayOutputStream()
     original_out = System.out
     original_err = System.err
-
     System.setOut(PrintStream(out_stream))
     System.setErr(PrintStream(err_stream))
 
+    # Snapshots before execution
+    ij_log_before = get_ij_log_content()
+    frames_before = _get_open_frames()          # ← frame-based, not dialog-based
+
     try:
         result = ij.py.run_script("Groovy", script)
+        stdout = str(out_stream.toString())
+        stderr = str(err_stream.toString())
 
-        stdout = out_stream.toString()
-        stderr = err_stream.toString()
+        ij_log_new      = get_new_ij_log_entries(ij_log_before)
+        window_messages = _collect_new_frames(frames_before)   # ← renamed
 
-        status = "SUCCESS"
-        if stderr.strip():
+        ij_log_has_error  = any(k in ij_log_new.lower()
+                                for k in ("error", "exception", "failed", "warning"))
+        window_has_error  = len(window_messages) > 0
+
+        if stderr.strip() or window_has_error:
+            status = "ERROR"
+        elif ij_log_has_error:
             status = "WARNING"
+        else:
+            status = "SUCCESS"
 
         return (
             f"STATUS: {status}\n"
             "LANGUAGE: Groovy\n"
-            "STDOUT:\n"
-            f"{stdout}\n"
-            "STDERR:\n"
-            f"{stderr}\n"
-            "RESULT:\n"
-            f"{result}"
+            f"STDOUT:\n{stdout}\n"
+            f"STDERR:\n{stderr}\n"
+            f"IJ_LOG:\n{ij_log_new}\n"
+            f"EXCEPTION_WINDOWS:\n{chr(10).join(window_messages)}\n"
+            f"RESULT:\n{result}"
         )
 
     except Exception as e:
+        ij_log_new      = get_new_ij_log_entries(ij_log_before)
+        window_messages = _collect_new_frames(frames_before)
+
         return (
             "STATUS: ERROR\n"
             "LANGUAGE: Groovy\n"
             "STDOUT:\n\n"
-            "STDERR:\n"
-            f"{str(e)}\n{err_stream.toString()}\n"
+            f"STDERR:\n{str(e)}\n{str(err_stream.toString())}\n"
+            f"IJ_LOG:\n{ij_log_new}\n"
+            f"EXCEPTION_WINDOWS:\n{chr(10).join(window_messages)}\n"
             "RESULT:\nnull"
         )
 
