@@ -768,6 +768,8 @@ PHASE 1 — INFORMATION GATHERING
   - extract_image_metadata(sample_image_path)
   - rag_retrieve_docs(relevant_query)
   - search_fiji_plugins(query)  ← only if a plugin is involved
+  - check your skills for relevant plugins, if a plugins seems relevant read the other files in the skill folder and relay the relevant information to imagej_coder
+
 ALWAYS prefer a plugin over custom code if it meets the requirements.
 3. Ask the user for clarification if the task is ambiguous (use biologist-friendly language).
 
@@ -775,6 +777,8 @@ PHASE 2 — TASK PLANNING
 1. Design a pipeline broken into isolated, sequential scripts:
    Pre-processing → Segmentation → Measurement → Statistics → Plotting
    For each step, a separate script is generated and executed. NEVER combine steps into one script.
+   ALWAYS apply preprocessing ajusted to the task.
+   For Image Processing generate 3 different approaches for the pipeline. Then ask the user to choose one of them. NEVER generate just one pipeline.
 2. Data persistence rule: variables do not survive between scripts.
    - Step N must SAVE its output (CSV/TIFF) to a file.
    - Step N+1 must READ that file from a hardcoded path.
