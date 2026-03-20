@@ -104,7 +104,7 @@ def _md_to_html(text: str) -> str:
             continue
         # Horizontal rules → dropped
         if re.fullmatch(r'[-*_]{3,}', line.strip()):
-            continue_
+            continue
 
         # Inline code
         line = re.sub(
@@ -204,7 +204,7 @@ class ChatScrollArea(QWidget):
         self._msg_layout = QVBoxLayout(self._container)
         self._msg_layout.setContentsMargins(8, 8, 8, 8)
         self._msg_layout.setSpacing(6)
-        self._msg_layout.addStretch()
+        self._msg_layout.setAlignment(Qt.AlignTop)
 
         self._scroll.setWidget(self._container)
         outer.addWidget(self._scroll)
@@ -217,22 +217,14 @@ class ChatScrollArea(QWidget):
 
     def add_message(self, role: str, text: str) -> MessageBubble:
         bubble = MessageBubble(text, role)
-        self._msg_layout.insertWidget(self._msg_layout.count() - 1, bubble)
-        self._scroll_to_bottom()
+        self._msg_layout.addWidget(bubble)
         return bubble
 
     def clear_messages(self):
-        while self._msg_layout.count() > 1:
+        while self._msg_layout.count() > 0:
             item = self._msg_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-
-    def _scroll_to_bottom(self):
-        QTimer.singleShot(60, lambda: (
-            self._scroll.verticalScrollBar().setValue(
-                self._scroll.verticalScrollBar().maximum()
-            )
-        ))
 
 
 # ---------------------------------------------------------------------------
