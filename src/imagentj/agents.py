@@ -22,25 +22,18 @@ from .prompts import (
     supervisor_prompt,
     python_analyst_prompt,
     qa_reporter_prompt,
-    plugin_skill_builder_prompt
+    vlm_judge_prompt,
 )
 from .tools import (
-    internet_search, inspect_all_ui_windows, run_script_safe,
+    internet_search, inspect_all_ui_windows,
     rag_retrieve_docs, inspect_java_class, save_coding_experience,
     rag_retrieve_mistakes, save_reusable_script, inspect_folder_tree,
-    smart_file_reader, run_python_code, inspect_csv_header,
+    smart_file_reader, inspect_csv_header,
     extract_image_metadata, search_fiji_plugins, install_fiji_plugin,
     check_plugin_installed, mkdir_copy, save_script, execute_script,
     get_script_info, load_script, get_script_history,
     setup_analysis_workspace, save_markdown,
-    fetch_plugin_docs_url,
-    search_imagej_wiki,
-    fetch_github_plugin_info,
-    fetch_github_file,
-    save_plugin_skill_file,
-    read_plugin_skill_file,
-    list_plugin_skill_folder,
-    create_plugin_test_script,
+    capture_ij_window, build_compilation, analyze_image,
 )
 from imagentj.tracker import UsageMetrics, MetricsSignalBridge, UsageTrackerCallback
 
@@ -82,9 +75,9 @@ class ScriptHandoff(BaseModel):
     """Returned by imagej_coder and imagej_debugger."""
     script_path: str
     description: str
-    inputs: list[str]
-    outputs: list[str]
-    stage: str                          # io_check | preprocessing | segmentation | measurement | debugger_fix
+    inputs: list[str] = []
+    outputs: list[str] = []
+    stage: str = "unknown"                          # io_check | preprocessing | segmentation | measurement | debugger_fix
     success: bool
     error_message: Optional[str] = None
     requires_user_approval: bool = False  # True for single-image verification runs
@@ -139,6 +132,29 @@ class PluginSkillHandoff(BaseModel):
     error_message: Optional[str] = None
 
 
+class VLMCheckResult(BaseModel):
+    """Result of a single visual check performed by the VLM judge."""
+    check_name:    str   # e.g. "segmentation_quality", "scale_bar"
+    verdict:       str   # "PASS" | "WARN" | "FAIL"
+    observation:   str   # exactly what the vision model reported
+    image_path:    Optional[str] = None  # path to the image (or compilation) used for this check
+ 
+ 
+class VLMHandoff(BaseModel):
+    """Returned by vlm_judge."""
+    overall_verdict:       str                  # "PASS" | "WARN" | "FAIL"
+    summary:               str                  # 2–4 sentence plain-English summary
+    checks:                list[VLMCheckResult] # one entry per visual check
+    issues_found:          list[str]            # empty on PASS
+    recommended_action:    str                  # exact next step for the supervisor
+                                                # e.g. "FAIL: send segmenter.groovy to
+                                                #  imagej_debugger — nuclei merging detected"
+    image_paths_inspected: list[str]            # all images / compilations analysed
+    pipeline_step:         str                  # echoed from the task for logging
+    success:               bool                 # False only if the agent itself crashed
+    error_message:         Optional[str] = None
+
+
 # ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------
@@ -182,6 +198,15 @@ llm_nano = ChatOpenAI(
     callbacks=[shared_tracker],
 )
 
+llm_vlm = ChatOpenAI(
+    model="openai/gpt-5-mini",
+    api_key=open_router_key,
+    base_url="https://openrouter.ai/api/v1",
+    temperature=0.,
+    verbose=True,
+    callbacks=[shared_tracker],
+)
+
 
 # ---------------------------------------------------------------------------
 # Subagent instances — created once at module level, stateless invocation
@@ -201,16 +226,21 @@ def _make_coder_agent(model, name, system_prompt):
             load_script,
             get_script_history,
             smart_file_reader,
-            rag_retrieve_mistakes,  # mandatory: check past mistakes before writing
+            rag_retrieve_mistakes,
+            inspect_folder_tree,   # ← lets agent survey /app/skills/ before reading
         ],
         system_prompt=system_prompt,
         response_format=ScriptHandoff,
         name=name,
         middleware=[
+            FilesystemFileSearchMiddleware(
+                root_path="/app/skills/",  # ← scoped to skills only
+                use_ripgrep=True,
+            ),
             ContextEditingMiddleware(
                 edits=[
                     ClearToolUsesEdit(
-                        trigger=25000,
+                        trigger=50000,
                         keep=10,
                         clear_tool_inputs=False,
                         exclude_tools=[],
@@ -252,56 +282,28 @@ _qa_agent = create_agent(
     name="qa_reporter",
 )
 
-# _plugin_skill_builder_agent = create_agent(
-#     # Use the full reasoning model — this task requires careful multi-step research
-#     llm_worker,
-#     tools=[
-#         # ── Research tools ──────────────────────────────────────────────────
-#         search_imagej_wiki,
-#         fetch_plugin_docs_url,
-#         fetch_github_plugin_info,
-#         fetch_github_file,
-#         internet_search,
-#         smart_file_reader,
+_vlm_agent = create_agent(
+    llm_vlm,
+    tools=[
+        capture_ij_window,   # save named open IJ window as PNG via PyImageJ
+        build_compilation,   # fuse multiple images into a labelled side-by-side panel
+        analyze_image,       # send image/compilation to vision LLM, return analysis
+    ],
+    system_prompt=vlm_judge_prompt,
+    response_format=VLMHandoff,
+    name="vlm_judge",
+)
 
-#         # ── ImageJ introspection ────────────────────────────────────────────
-#         inspect_java_class,
-#         rag_retrieve_docs,
-#         rag_retrieve_mistakes,
-#         save_coding_experience,
-#         check_plugin_installed,
 
-#         # ── Script testing ──────────────────────────────────────────────────
-#         create_plugin_test_script,
-#         get_script_info,
-#         execute_script,
-#         inspect_all_ui_windows,
-#         setup_analysis_workspace,
-
-#         # ── Skill file management ───────────────────────────────────────────
-#         save_plugin_skill_file,
-#         read_plugin_skill_file,
-#         list_plugin_skill_folder,
-#         save_markdown,
-#     ],
-#     system_prompt=plugin_skill_builder_prompt,
-#     response_format=PluginSkillHandoff,
-#     name="plugin_skill_builder",
-#     # No middleware: research tasks are typically single focused calls;
-#     # the agent should not truncate its own research context.
-# )
-
-# ---------------------------------------------------------------------------
-# Subagents as @tool — supervisor calls these like any other tool.
-# Returning a Pydantic model makes LangChain serialize it to clean JSON
-# in the ToolMessage automatically. No parsing needed on the supervisor side.
-# ---------------------------------------------------------------------------
 
 @tool
 def imagej_coder(task: str, project_root: str, complexity: str) -> ScriptHandoff:
     """
     complexity: 'simple' for IO checks, file copies, metadata reads.
                 'complex' for segmentation, registration, multi-channel processing.
+    task: full description of the script to generate, including inputs, outputs, and processing steps.
+    project_root: absolute path to the project root, for context on file structure and for saving
+
     Generate and save a production-ready ImageJ/Fiji Groovy script.
 
     Use for: IO checks, preprocessing, segmentation, measurement scripts.
@@ -388,71 +390,69 @@ def qa_reporter(project_root: str) -> QAHandoff:
     })
     return result["structured_response"]
 
-# @tool
-# def plugin_skill_builder(
-#     plugin_name: str,
-#     github_url: Optional[str] = None,
-#     docs_url: Optional[str] = None,
-#     test_image_path: Optional[str] = None,
-# ) -> PluginSkillHandoff:
-#     """
-#     Research a Fiji/ImageJ plugin in depth and build a permanent skill folder.
-
-#     The skill folder is saved to /app/skills/plugins/{plugin_name}/ and
-#     contains 5 files:
-#       SKILL.md            ← LLM-facing quick-reference summary
-#       OVERVIEW.md         ← use case, input/output types, automation support
-#       UI_GUIDE.md         ← step-by-step GUI workflow for users
-#       GROOVY_API.md       ← all IJ.run() commands with parameters
-#       GROOVY_WORKFLOW.groovy ← complete tested automation script
-
-#     The agent will:
-#     1. Crawl ImageJ Wiki, GitHub, and any provided URLs.
-#     2. Test the Groovy workflow by executing it (up to 3 retries).
-#     3. Ask the user to validate the UI workflow and the Groovy output.
-#     4. Return a PluginSkillHandoff with paths and validation results.
-
-#     Args:
-#         plugin_name:       Exact plugin name as it appears in Fiji menus,
-#                            e.g. "TrackMate", "MorphoLibJ", "StarDist"
-#         github_url:        (Optional) GitHub repo URL if known,
-#                            e.g. "https://github.com/fiji/TrackMate"
-#         docs_url:          (Optional) Official documentation or tutorial URL
-#         test_image_path:   (Optional) Absolute path to a sample image to use
-#                            when testing the Groovy workflow. If omitted, the
-#                            agent will use any image already open in Fiji or
-#                            attempt to download a public sample.
-
-#     Returns a PluginSkillHandoff. Check groovy_test_success and
-#     ui_workflow_verified before relying on the skill files.
-
-#     WHEN TO CALL:
-#     - User asks to analyse data with an unfamiliar plugin.
-#     - imagej_coder returns code that errors with unknown commands.
-#     - You need to verify what IJ.run() strings a plugin actually accepts.
-#     - User wants a reusable documented template for a plugin.
-
-#     After this tool succeeds, future imagej_coder calls for this plugin
-#     should include the SKILL.md path in the task context.
-#     """
-#     # Build context string for the agent
-#     context_parts = [f"PLUGIN: {plugin_name}"]
-#     if github_url:
-#         context_parts.append(f"GITHUB: {github_url}")
-#     if docs_url:
-#         context_parts.append(f"DOCS URL: {docs_url}")
-#     if test_image_path:
-#         context_parts.append(f"TEST IMAGE: {test_image_path}")
-
-#     context = "\n".join(context_parts)
-
-#     result = _plugin_skill_builder_agent.invoke({
-#         "messages": [{
-#             "role": "user",
-#             "content": context,
-#         }]
-#     })
-#     return result["structured_response"]
+@tool
+def vlm_judge(
+    task:            str,
+    pipeline_step:   str,
+    expected_output: str,
+    image_source:    str | list[str],
+    labels:          Optional[list[str]] = None,
+) -> VLMHandoff:
+    """
+    Visually inspect one or more images using a vision LLM and return a structured verdict.
+ 
+    ⚠️  COST NOTICE — vision API calls are significantly more expensive than text:
+        Call vlm_judge selectively — see WHEN TO CALL below.
+ 
+    IMAGE SOURCE — two modes:
+        Single string:  open IJ window title  → captured via IJ API then analysed.
+                        absolute file path    → analysed directly, no capture.
+        List of strings: multiple window titles and/or file paths
+                        → automatically fused into a side-by-side compilation panel
+                          before analysis. Much more effective for comparisons than
+                          sending images separately (VLM gets direct spatial reference).
+ 
+    Args:
+        task:            What to inspect and what criteria to judge against.
+        pipeline_step:   Short stage identifier for traceability, e.g. "segmentation".
+        expected_output: What a correct result looks like — used as pass/fail benchmark.
+        image_source:    Window title, file path, or list of either.
+                         Window titles: e.g. "MAX_DAPI.tif", "mask_nuclei.tif"
+                         File paths:    e.g. "/app/data/projects/study/processed/mask.tif"
+        labels:          Optional panel captions for compilations, e.g. ["Original", "Mask"].
+                         Ignored for single images.
+ 
+    Returns VLMHandoff with overall_verdict ("PASS"/"WARN"/"FAIL"), per-check breakdown,
+    issues_found, and recommended_action.
+ 
+    WHEN TO CALL (be selective — each call costs money):
+        ✅ Sample verification (Phase 4b) — once per pipeline, on the verification image.
+        ✅ Segmentation / threshold output — use compilation with original + result.
+        ✅ When a script exits cleanly but output is suspected to be wrong.
+        ✅ Final QA before qa_reporter — scale bar and output image check.
+        ✅ When the user reports a visual problem.
+        ❌ Do NOT call after every batch script execution.
+        ❌ Do NOT call to list open windows — use inspect_all_ui_windows.
+        ❌ Do NOT call to read CSV or log output — use inspect_csv_header / smart_file_reader.
+ 
+    ACTING ON THE VERDICT:
+        PASS → proceed. Show summary to user at sample verification.
+        WARN → continue pipeline; report issues in Phase 5 summary.
+        FAIL → stop. Send script path + issues_found to imagej_debugger. AFTER asking the user for visual verfification. 
+               Re-run and call vlm_judge again after the fix.
+    """
+    sources = image_source if isinstance(image_source, list) else [image_source]
+ 
+    content = (
+        f"PIPELINE STEP: {pipeline_step}\n"
+        f"IMAGE SOURCE(S): {sources}\n"
+        f"LABELS: {labels or []}\n"
+        f"EXPECTED OUTPUT: {expected_output}\n\n"
+        f"TASK: {task}"
+    )
+ 
+    result = _vlm_agent.invoke({"messages": [{"role": "user", "content": content}]})
+    return result["structured_response"]
 
 # ---------------------------------------------------------------------------
 # Factory
@@ -471,8 +471,8 @@ def init_agent():
             imagej_coder,
             imagej_debugger,
             python_data_analyst,
+            vlm_judge,
             qa_reporter,
-            #plugin_skill_builder,
             # ── supervisor's own tools ───────────────────────────────────────
             internet_search,
             inspect_all_ui_windows,

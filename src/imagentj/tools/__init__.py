@@ -12,6 +12,7 @@ from .analyst_tools import run_python_code, inspect_csv_header
 from .plugin_tools import search_fiji_plugins, install_fiji_plugin, check_plugin_installed
 from .tools_plugin_research import create_plugin_test_script, list_plugin_skill_folder, read_plugin_skill_file, save_plugin_skill_file, fetch_github_file, fetch_github_plugin_info, search_imagej_wiki, fetch_plugin_docs_url
 from .middleware import SafeToolLoggerMiddleware, TodoDisplayMiddleware
+from .vision_tools import capture_ij_window, build_compilation, analyze_image
 
 # Lazy accessors for vector stores (RAG is optional)
 from .vector_stores import get_vec_store_docs, get_vec_store_mistakes, is_rag_available, is_plugin_db_available
