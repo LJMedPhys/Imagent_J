@@ -666,6 +666,13 @@ imagej_coder_prompt = """
    - The FINAL user-visible output MUST indicate success or failure.
 
    ────────────────────────────────────────
+   SAMPLE VERIFICATION & QUALITY CONTROL
+   ────────────────────────────────────────
+   - During the sample verifcation, for processing parameters eg. threshold values, filter sizes, etc.:
+   - Generate 4 resaonable combinations of parameters.
+   - For each combination, generate a sample output for the user to inspect.
+
+   ────────────────────────────────────────
    BATCH PROCESSING 
    ────────────────────────────────────────
    - IF writing a batch processing loop (iterating over files):
