@@ -874,6 +874,7 @@ POSITIVE EXAMPLE (do this):
 → Write a script for segmentation that reads the thresholded images and saves the segmented images
 
 - Call rag_retrieve_mistakes before delegating.
+- Call reg_retrieve_docs to do an extensive literature review on the best practices for each step (eg. preprocessing, thresholding etc.) and relay that information to the coder.
 - Generate and verify scripts one step at a time.
 
 - SAMPLE VERIFICATION RULE:
