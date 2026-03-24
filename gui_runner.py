@@ -246,6 +246,87 @@ class ChatScrollArea(QWidget):
                 item.widget().deleteLater()
 
 
+class SubagentHeartbeatTimer:
+    """Cycles through plausible sub-step messages while a subagent tool is running.
+ 
+    Because subagents are called synchronously (no streaming), we can't receive
+    their internal tool calls.  This timer fires every INTERVAL ms and updates
+    the status bubble with the next message in the sequence, giving the user
+    visual evidence that work is happening.
+    """
+ 
+    INTERVAL = 5000   # ms between message rotations
+ 
+    # Messages shown while each long-running subagent is in flight.
+    # Each list is cycled in order and then repeated.
+    STEPS: dict[str, list[str]] = {
+        "imagej_coder": [
+            "Bio-Imaging Specialist is checking past lessons learned…",
+            "Bio-Imaging Specialist is searching ImageJ documentation…",
+            "Bio-Imaging Specialist is verifying the Java API…",
+            "Bio-Imaging Specialist is writing the Groovy script…",
+            "Bio-Imaging Specialist is adding error handling…",
+            "Bio-Imaging Specialist is saving the script…",
+        ],
+        "imagej_debugger": [
+            "Debugger is reading the faulty script…",
+            "Debugger is checking previous failure history…",
+            "Debugger is inspecting the Java API for the correct signature…",
+            "Debugger is applying the minimal fix…",
+            "Debugger is saving the repaired script…",
+        ],
+        "python_data_analyst": [
+            "Data Scientist is inspecting the CSV structure…",
+            "Data Scientist is checking previous script versions…",
+            "Data Scientist is selecting appropriate statistical tests…",
+            "Data Scientist is writing the analysis script…",
+            "Data Scientist is adding publication-quality plot settings…",
+            "Data Scientist is saving the script…",
+        ],
+        "vlm_judge": [
+            "Vision AI is capturing the ImageJ window…",
+            "Vision AI is building the comparison panel…",
+            "Vision AI is sending the image for analysis…",
+            "Vision AI is evaluating against expected output…",
+            "Vision AI is compiling the verdict…",
+        ],
+        "qa_reporter": [
+            "QA Agent is scanning the project folder…",
+            "QA Agent is reading script documentation…",
+            "QA Agent is reading CSV output headers…",
+            "QA Agent is evaluating workflow checklist items…",
+            "QA Agent is evaluating image publishing checklist items…",
+            "QA Agent is writing the QA report…",
+        ],
+    }
+ 
+    def __init__(self, tool_name: str, set_status_fn):
+        """
+        Args:
+            tool_name:     one of the keys in STEPS
+            set_status_fn: callable(str) — updates the status bubble
+        """
+        self._steps    = self.STEPS.get(tool_name, [f"Running {tool_name}…"])
+        self._set      = set_status_fn
+        self._idx      = 0
+        self._timer    = QTimer()
+        self._timer.setInterval(self.INTERVAL)
+        self._timer.timeout.connect(self._tick)
+ 
+    def start(self):
+        """Show the first message immediately, then start rotating."""
+        self._idx = 0
+        self._set(self._steps[0])
+        if len(self._steps) > 1:
+            self._timer.start()
+ 
+    def stop(self):
+        self._timer.stop()
+ 
+    def _tick(self):
+        self._idx = (self._idx + 1) % len(self._steps)
+        self._set(self._steps[self._idx])
+
 # ---------------------------------------------------------------------------
 # Metrics panel
 # ---------------------------------------------------------------------------
@@ -831,24 +912,26 @@ class ImageJAgentGUI(QWidget):
     # ------------------------------------------------------------------
     
 
-    def handle_event(self, event: dict):  # method of ImageJAgentGUI
- 
-        # ── Helper: upsert the single status line ────────────────────────────────
-        def set_status(text: str):
-            if self._status_bubble is None:
-                self._status_bubble = self.chat_scroll.add_message('system', text)
-            else:
-                self._status_bubble.update_text(text)
-                self.chat_scroll.scroll_to_bottom()   # ← in-place update needs manual scroll
     
-        # ── Helper: richer tool-start messages ───────────────────────────────────
+        
+        
+    def _stop_heartbeat(self):
+        """Stop and discard any running heartbeat timer."""
+        if getattr(self, "_heartbeat", None) is not None:
+            self._heartbeat.stop()
+            self._heartbeat = None
+            
+    
+    
+    def handle_event(self, event: dict):  # method of ImageJAgentGUI
+
+        # These are the subagent tool names that run for a long time with no streaming.
+        _SUBAGENT_TOOLS = {"imagej_coder", "imagej_debugger",
+                        "python_data_analyst", "vlm_judge", "qa_reporter"}
+
+        # Non-subagent tool start messages (short, fire-and-forget tools)
         _TOOL_START = {
-            "imagej_coder":              "Bio-Imaging Specialist is writing your ImageJ script…",
-            "imagej_debugger":           "Debugger is repairing the script…",
-            "python_data_analyst":       "Data Scientist is running statistics & building plots…",
             "execute_script":            "Executing script on your images (may take a minute)…",
-            "qa_reporter":               "QA Agent is auditing the project and generating the report…",
-            "vlm_judge":                 "Vision AI is inspecting the image windows…",
             "rag_retrieve_docs":         "Searching ImageJ documentation…",
             "rag_retrieve_mistakes":     "Checking past lessons learned…",
             "inspect_all_ui_windows":    "Listing open ImageJ windows…",
@@ -863,18 +946,28 @@ class ImageJAgentGUI(QWidget):
             "save_coding_experience":    "Saving lesson to experience database…",
             "save_markdown":             "Writing markdown document…",
             "save_reusable_script":      "Saving reusable script to library…",
+            "mkdir_copy":                "Copying files…",
+            "get_script_info":           "Reading script documentation…",
         }
-    
+
         _TOOL_DONE = {
             "imagej_coder":              "Bio-Imaging Specialist finished writing the script.",
             "imagej_debugger":           "Debugger finished — script repaired.",
-            "python_data_analyst":       "Data Scientist finished analysis.",
+            "python_data_analyst":       "Data Scientist finished.",
             "execute_script":            "Script execution complete.",
             "qa_reporter":               "QA report generated.",
             "vlm_judge":                 "Vision AI inspection complete.",
             "setup_analysis_workspace":  "Project workspace ready.",
             "install_fiji_plugin":       "Plugin installed — please restart Fiji.",
         }
+    
+        # ── Helper: upsert the single status line ────────────────────────────────
+        def set_status(text: str):
+            if self._status_bubble is None:
+                self._status_bubble = self.chat_scroll.add_message('system', text)
+            else:
+                self._status_bubble.update_text(text)
+                self.chat_scroll.scroll_to_bottom()
     
         for node_name, node_data in event.items():
             if "Middleware" in node_name:
@@ -897,8 +990,8 @@ class ImageJAgentGUI(QWidget):
                 for msg in node_data.get("messages", []):
                     content = getattr(msg, "content", "")
                     if content:
-                        # AI is speaking → clear the status line so it doesn't
-                        # get overwritten by the next tool's set_status call
+                        # AI is speaking → reset status so the next tool gets a fresh line
+                        self._stop_heartbeat()
                         self._status_bubble = None
     
                         if self._current_ai_bubble is None:
@@ -911,11 +1004,18 @@ class ImageJAgentGUI(QWidget):
     
                     # ── Tool start announcement ───────────────────────────────────
                     if getattr(msg, "tool_calls", None):
-                        self._current_ai_bubble = None  # next AI text starts a new bubble
+                        self._current_ai_bubble = None
                         for tc in msg.tool_calls:
-                            name   = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
-                            status = _TOOL_START.get(name) or f"Running {name.replace('_', ' ').title()}…"
-                            set_status(status)
+                            name = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
+    
+                            if name in _SUBAGENT_TOOLS:
+                                # Stop any previous heartbeat before starting a new one
+                                self._stop_heartbeat()
+                                self._heartbeat = SubagentHeartbeatTimer(name, set_status)
+                                self._heartbeat.start()
+                            else:
+                                status = _TOOL_START.get(name) or f"Running {name.replace('_', ' ').title()}…"
+                                set_status(status)
     
         # ── Tool completion ───────────────────────────────────────────────────────
         if "tools" in event:
@@ -926,12 +1026,15 @@ class ImageJAgentGUI(QWidget):
                 if name == "setup_analysis_workspace":
                     self._tracker_cb.notify_workspace_created(str(content))
     
+                # Always stop the heartbeat when any tool (subagent or not) finishes
+                if name in _SUBAGENT_TOOLS:
+                    self._stop_heartbeat()
+    
                 done_text = _TOOL_DONE.get(name)
                 if done_text:
                     set_status(done_text)
                 elif name and name != "task":
                     set_status(f"{name.replace('_', ' ').title()} — done.")
-
 
 # ---------------------------------------------------------------------------
 # Entry point
