@@ -21,6 +21,8 @@ from imagentj.agents import init_agent
 from imagentj.imagej_context import get_ij
 from imagentj.chat_history import ChatHistoryManager
 
+from imagentj.benchmark_gui_hooks import is_interactive_benchmark, setup_benchmark_gui
+
 logging.basicConfig(
     filename="/app/data/imagentj_debug.log",
     level=logging.DEBUG,
@@ -671,6 +673,9 @@ class ImageJAgentGUI(QWidget):
 
         self._init_session()
 
+        if is_interactive_benchmark():
+            setup_benchmark_gui(self)
+
     # ------------------------------------------------------------------
     # Session management
     # ------------------------------------------------------------------
@@ -697,6 +702,9 @@ class ImageJAgentGUI(QWidget):
 
         self.history_panel.populate(self.history_manager.list_threads())
         self.history_panel.set_active(thread_id)
+
+        if not is_interactive_benchmark():
+            self.chat_scroll.add_message('ai', intro_message)
 
     def _load_thread(self, thread_id: str):
         self.current_thread_id = thread_id
