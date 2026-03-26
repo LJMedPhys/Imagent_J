@@ -297,10 +297,8 @@ _vlm_agent = create_agent(
 
 
 @tool
-def imagej_coder(task: str, project_root: str, complexity: str) -> ScriptHandoff:
+def imagej_coder(task: str, project_root: str) -> ScriptHandoff:
     """
-    complexity: 'simple' for IO checks, file copies, metadata reads.
-                'complex' for segmentation, registration, multi-channel processing.
     task: full description of the script to generate, including inputs, outputs, and processing steps.
     project_root: absolute path to the project root, for context on file structure and for saving
 
@@ -313,10 +311,7 @@ def imagej_coder(task: str, project_root: str, complexity: str) -> ScriptHandoff
     If success=False, pass script_path + error_message to imagej_debugger.
     """
 
-    if complexity == "simple":
-        model = llm_nano
-    elif complexity == "complex":
-        model = llm_worker
+    model = llm_worker  # ← codex is best for code generation, even for Python analyst tasks
 
     agent = _make_coder_agent(model, "imagej_coder", imagej_coder_prompt)
 
