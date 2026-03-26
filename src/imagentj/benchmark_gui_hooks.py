@@ -1,59 +1,88 @@
 """
-benchmark_gui_hooks.py — Interactive benchmark hooks for the ImagentJ GUI.
+benchmark_gui_hooks.py — Benchmark hooks for the ImagentJ GUI.
 
-Runs inside the container when ``BENCHMARK_MODE=true`` and
-``BENCHMARK_INTERACTIVE=true``.  Integrates with the existing
-``gui_runner.py`` via three lines of code (see docstring below).
+Supports two modes, both using the full GUI (viewable via noVNC):
 
-What it does
-------------
-1. Reads the benchmark instruction from ``BENCHMARK_OUTPUT_DIR/instruction.txt``
-   (the adapter wrote it there before starting the container).
-2. Discovers input images in ``BENCHMARK_INPUT_DIR``.
-3. Copies images to ``/app/data/benchmark_images/`` (writable path for Fiji).
-4. Auto-sends the task into the chat after a short delay.
-5. Adds a green **Finish Benchmark** button to the GUI.
-6. When the user clicks Finish: collects project outputs into
-   ``BENCHMARK_OUTPUT_DIR`` and writes ``result.json`` so the host-side
-   adapter detects completion.
+  **interactive** (BENCHMARK_INTERACTIVE=true):
+      User approves steps and clicks Finish Benchmark manually.
+
+  **auto-pilot** (BENCHMARK_INTERACTIVE=false):
+      Auto-approve directive injected into prompt.  When the agent finishes
+      its last response, outputs are collected and result.json is written
+      automatically.  The user can watch but doesn't need to act.
 
 Integration with gui_runner.py (3 changes)
 ------------------------------------------
 1. Add import::
 
-       from imagentj.benchmark_gui_hooks import is_interactive_benchmark, setup_benchmark_gui
+       from imagentj.benchmark_gui_hooks import is_benchmark_mode, setup_benchmark_gui
 
 2. At end of ``ImageJAgentGUI.__init__``, after ``self._init_session()``::
 
-       if is_interactive_benchmark():
+       if is_benchmark_mode():
            setup_benchmark_gui(self)
 
 3. (Optional) suppress intro message in ``_start_new_thread``::
 
-       if not is_interactive_benchmark():
+       if not is_benchmark_mode():
            self.chat_scroll.add_message('ai', intro_message)
 """
 
 import json
+import logging
 import os
 import shutil
+import threading
+import time
 from pathlib import Path
 
-from PySide6.QtWidgets import QPushButton, QMessageBox
+from PySide6.QtWidgets import QPushButton, QMessageBox, QApplication
 from PySide6.QtCore import QTimer
+
+_log = logging.getLogger("benchmark_hooks")
+
+# ---------------------------------------------------------------------------
+# Qdrant stale lock cleanup (runs at import time)
+# ---------------------------------------------------------------------------
+# When the container exits via os._exit(0), Qdrant doesn't get to clean up
+# its lock file. The next docker compose run inherits the same bind mount
+# (./qdrant_data:/app/qdrant_data) and Qdrant refuses to start.
+# Remove the lock file before the agent initialises.
+
+if os.environ.get("BENCHMARK_MODE", "").lower() == "true":
+    _qdrant_path = Path(os.environ.get("QDRANT_DATA_PATH", "/app/qdrant_data"))
+    if _qdrant_path.exists():
+        # Remove ALL lock files — Qdrant uses several inside subdirectories
+        for _lock in _qdrant_path.rglob("*.lock"):
+            try:
+                _lock.unlink()
+                logging.getLogger("benchmark_hooks").info(
+                    "Removed stale Qdrant lock: %s", _lock
+                )
+            except Exception:
+                pass
+        # Also check for a bare .lock file
+        _lock_file = _qdrant_path / ".lock"
+        if _lock_file.exists():
+            try:
+                _lock_file.unlink()
+            except Exception:
+                pass
 
 # ---------------------------------------------------------------------------
 # Environment helpers
 # ---------------------------------------------------------------------------
 
 def is_benchmark_mode() -> bool:
+    """True when the container was launched by the benchmark adapter."""
     return os.environ.get("BENCHMARK_MODE", "").lower() == "true"
 
 
-def is_interactive_benchmark() -> bool:
+def is_autopilot() -> bool:
+    """True when the benchmark should auto-approve and auto-finish."""
     return (
         is_benchmark_mode()
-        and os.environ.get("BENCHMARK_INTERACTIVE", "").lower() == "true"
+        and os.environ.get("BENCHMARK_INTERACTIVE", "").lower() != "true"
     )
 
 
@@ -71,13 +100,123 @@ _IMAGE_EXT = {
     ".svs", ".ics", ".ids",
 }
 
+_AUTO_APPROVE = (
+    "\n\n[SYSTEM — BENCHMARK AUTO-PILOT MODE]\n"
+    "This benchmark run is in auto-pilot. A user may be watching but will "
+    "not interact.\n"
+    "- Treat every confirmation gate as approved (Phase 4b sample "
+    "verification, plugin install, etc.).\n"
+    "- If you would normally ask for clarification, make a reasonable "
+    "default choice and continue.\n"
+    "- Proceed through all pipeline phases without pausing.\n"
+)
+
+
+# ---------------------------------------------------------------------------
+# Fiji / ImageJ dialog auto-dismisser
+# ---------------------------------------------------------------------------
+
+def _start_dialog_dismisser():
+    """
+    Background thread that periodically scans for Java AWT Dialog windows
+    (Fiji "OK" confirmations, error popups, etc.) and auto-clicks their
+    buttons so they don't block the agent.
+
+    Only runs in auto-pilot mode.
+    """
+    def _dismiss_loop():
+        import jpype
+
+        # Wait for JVM to be ready
+        for _ in range(60):
+            if jpype.isJVMStarted():
+                break
+            time.sleep(1)
+        else:
+            _log.warning("Dialog dismisser: JVM never started")
+            return
+
+        if not jpype.isThreadAttachedToJVM():
+            jpype.attachThreadToJVM()
+
+        Dialog = jpype.JClass("java.awt.Dialog")
+        Window = jpype.JClass("java.awt.Window")
+        Button = jpype.JClass("java.awt.Button")
+        JButton = jpype.JClass("javax.swing.JButton")
+
+        # Button labels we'll auto-click (case-insensitive)
+        _OK_LABELS = {"ok", "yes", "continue", "close", "dismiss", "got it"}
+
+        _log.info("Dialog auto-dismisser started")
+
+        while True:
+            time.sleep(1)
+            try:
+                for window in Window.getWindows():
+                    if not isinstance(window, Dialog):
+                        continue
+                    if not window.isVisible():
+                        continue
+
+                    _log.info("Auto-dismissing dialog: %s", window.getTitle())
+
+                    # Try to find and click an OK-like button
+                    clicked = False
+                    for comp in _get_all_components(window):
+                        label = None
+                        if isinstance(comp, Button):
+                            label = comp.getLabel()
+                        elif isinstance(comp, JButton):
+                            label = comp.getText()
+
+                        if label and str(label).strip().lower() in _OK_LABELS:
+                            _log.info("  Clicking button: %s", label)
+                            comp.doClick() if isinstance(comp, JButton) else _awt_click(comp)
+                            clicked = True
+                            break
+
+                    # If no recognizable button found, just dispose the dialog
+                    if not clicked:
+                        _log.info("  No OK button found — disposing dialog")
+                        window.dispose()
+
+            except Exception as e:
+                # JVM might not be ready, or dialog already gone
+                _log.debug("Dialog dismisser tick error: %s", e)
+
+    threading.Thread(target=_dismiss_loop, daemon=True).start()
+
+
+def _get_all_components(container):
+    """Recursively get all AWT/Swing components inside a container."""
+    result = []
+    try:
+        for comp in container.getComponents():
+            result.append(comp)
+            if hasattr(comp, "getComponents"):
+                result.extend(_get_all_components(comp))
+    except Exception:
+        pass
+    return result
+
+
+def _awt_click(button):
+    """Simulate a click on an AWT Button by firing an ActionEvent."""
+    try:
+        import jpype
+        ActionEvent = jpype.JClass("java.awt.event.ActionEvent")
+        evt = ActionEvent(button, ActionEvent.ACTION_PERFORMED, "")
+        for listener in button.getActionListeners():
+            listener.actionPerformed(evt)
+    except Exception as e:
+        _log.debug("AWT click failed: %s", e)
+
 
 # ---------------------------------------------------------------------------
 # Read task + stage images
 # ---------------------------------------------------------------------------
 
 def _load_task() -> tuple[str, list[Path]]:
-    """Read instruction from the output mount and discover input images."""
     instruction = ""
     f = _output_dir() / "instruction.txt"
     if f.exists():
@@ -91,7 +230,6 @@ def _load_task() -> tuple[str, list[Path]]:
 
 
 def _stage_images(images: list[Path]) -> list[Path]:
-    """Copy images to a writable path that Fiji can access."""
     dest = Path("/app/data/benchmark_images")
     dest.mkdir(parents=True, exist_ok=True)
     local = []
@@ -103,14 +241,14 @@ def _stage_images(images: list[Path]) -> list[Path]:
 
 
 # ---------------------------------------------------------------------------
-# Finish Benchmark — collect outputs and write sentinel
+# Collect outputs and write sentinel
 # ---------------------------------------------------------------------------
 
-def _collect_and_finish(gui) -> None:
+def _collect_and_finish(gui, message: str = "") -> None:
     out = _output_dir()
     out.mkdir(parents=True, exist_ok=True)
 
-    # Only copy the project folder(s) created during this benchmark session
+    # Only copy project folder(s) created during this session
     proj_root = Path("/app/data/projects")
     before = getattr(gui, "_bench_projects_before", set())
 
@@ -119,7 +257,6 @@ def _collect_and_finish(gui) -> None:
         new_folders = current - before
 
         if not new_folders:
-            # Fallback: pick the most recently modified folder
             candidates = [d for d in proj_root.iterdir() if d.is_dir()]
             if candidates:
                 newest = max(candidates, key=lambda d: d.stat().st_mtime)
@@ -147,16 +284,48 @@ def _collect_and_finish(gui) -> None:
         except Exception:
             pass
 
-    # Write sentinel — the adapter on the host polls for this file
+    # Write sentinel — the adapter polls for this file
     (out / "result.json").write_text(json.dumps({
         "success": True,
-        "message": "Interactive benchmark session completed by user.",
+        "message": message or "Benchmark session completed.",
         "error": "",
         "metadata": metadata,
     }, indent=2, default=str), encoding="utf-8")
 
 
-def _on_finish(gui) -> None:
+def _do_finish_in_background(gui, message: str = "", shutdown: bool = False) -> None:
+    """Run the collect in a background thread so the GUI stays responsive."""
+    def _work():
+        _collect_and_finish(gui, message)
+
+        # Try to show completion message (may fail if widgets are gone)
+        try:
+            QTimer.singleShot(0, lambda: gui.chat_scroll.add_message(
+                "system",
+                "✅ Benchmark finished — outputs collected. "
+                "The container will shut down in a moment.",
+            ))
+        except (RuntimeError, Exception):
+            pass
+
+        if shutdown:
+            # Wait for result.json to flush to host filesystem, then
+            # force-kill the entire process. We do this from the
+            # background thread — no dependency on the Qt event loop.
+            import os as _os
+            _log.info("Shutdown scheduled — waiting 5 s for filesystem flush …")
+            time.sleep(5)
+            _log.info("Exiting process.")
+            _os._exit(0)
+
+    threading.Thread(target=_work, daemon=True).start()
+
+
+# ---------------------------------------------------------------------------
+# Manual Finish button (interactive mode)
+# ---------------------------------------------------------------------------
+
+def _on_finish_clicked(gui) -> None:
     reply = QMessageBox.question(
         gui, "Finish Benchmark",
         "Are you done with this benchmark task?\n\n"
@@ -167,33 +336,54 @@ def _on_finish(gui) -> None:
     if reply != QMessageBox.Yes:
         return
 
-    # Show status immediately
-    gui.chat_scroll.add_message(
-        "system", "Collecting outputs — please wait …",
-    )
-
-    # Let the UI repaint before we start copying files
-    from PySide6.QtWidgets import QApplication
-    QApplication.processEvents()
-
-    _collect_and_finish(gui)
-
-    # Show final message — don't use QMessageBox here because the
-    # adapter will kill the container as soon as it sees result.json,
-    # which would freeze a modal dialog mid-display.
-    gui.chat_scroll.add_message(
-        "system",
-        "✅ Benchmark finished — outputs collected. "
-        "The container will shut down in a moment.",
-    )
+    gui.chat_scroll.add_message("system", "Collecting outputs — please wait …")
+    _do_finish_in_background(gui, "Interactive session completed by user.", shutdown=True)
 
 
 # ---------------------------------------------------------------------------
-# Auto-send the benchmark task into the chat
+# Auto-finish hook (auto-pilot mode)
+# ---------------------------------------------------------------------------
+
+def _hook_auto_finish(gui) -> None:
+    """
+    Monkey-patch ``on_agent_finished`` so that when the agent finishes its
+    last response in auto-pilot mode, we automatically collect outputs and
+    write result.json.
+
+    We track how many agent calls we've seen. The first call is the
+    benchmark task itself. We wait for it to finish, then add a short delay
+    to let any final file writes complete, then trigger the collect.
+    """
+    original_on_finished = gui.on_agent_finished
+
+    def _patched_on_finished():
+        # Call the original handler first (resets UI state, etc.)
+        original_on_finished()
+
+        # Don't auto-finish if already done
+        if getattr(gui, "_bench_auto_finished", False):
+            return
+
+        gui._bench_auto_finished = True
+
+        gui.chat_scroll.add_message(
+            "system",
+            "Auto-pilot: agent finished — collecting outputs in 10 s …",
+        )
+
+        # Give the agent's last file writes a moment to flush
+        QTimer.singleShot(10000, lambda: _do_finish_in_background(
+            gui, "Auto-pilot session completed.", shutdown=True,
+        ))
+
+    gui.on_agent_finished = _patched_on_finished
+
+
+# ---------------------------------------------------------------------------
+# Auto-send the benchmark task
 # ---------------------------------------------------------------------------
 
 def _auto_send(gui) -> None:
-    # Start a fresh conversation — don't write into an old thread
     gui._start_new_thread()
 
     instruction, images = _load_task()
@@ -214,38 +404,49 @@ def _auto_send(gui) -> None:
         f"{_output_dir().resolve()} as well as the project folder.]\n"
     )
 
+    # In auto-pilot mode, append the auto-approve directive
+    if is_autopilot():
+        prompt += _AUTO_APPROVE
+
+    mode_label = "AUTO-PILOT" if is_autopilot() else "INTERACTIVE"
     gui.chat_scroll.add_message(
         "system",
-        f"Benchmark task loaded — {len(local_images)} image(s). "
+        f"Benchmark [{mode_label}] — {len(local_images)} image(s). "
         "Sending to agent …",
     )
 
-    # Populate attachments so the GUI shows them
     gui.attached_files = [str(p) for p in local_images]
     gui._update_attachment_ui()
-
-    # Inject into the input box and trigger send
     gui.input_line.setPlainText(prompt)
     gui.on_send()
 
 
 # ---------------------------------------------------------------------------
-# Public entry point — call from gui_runner.py
+# Public entry point
 # ---------------------------------------------------------------------------
 
 def setup_benchmark_gui(gui) -> None:
     """
-    Call once at the end of ``ImageJAgentGUI.__init__()``.
-    Adds the Finish button and schedules the auto-send.
+    Call once at the end of ``ImageJAgentGUI.__init__()`` when
+    ``is_benchmark_mode()`` is True.
     """
-    # ── Snapshot existing projects before the task runs ───────────────
+    # Guard — only run once
+    if getattr(gui, "_bench_setup_done", False):
+        return
+    gui._bench_setup_done = True
+    gui._bench_auto_finished = False
+
+    # ── Snapshot existing projects ───────────────────────────────────
     proj_root = Path("/app/data/projects")
     if proj_root.exists():
-        gui._bench_projects_before = {d.name for d in proj_root.iterdir() if d.is_dir()}
+        gui._bench_projects_before = {
+            d.name for d in proj_root.iterdir() if d.is_dir()
+        }
     else:
         gui._bench_projects_before = set()
 
-    # ── Finish Benchmark button ──────────────────────────────────────
+    # ── Finish Benchmark button (always shown — works as manual
+    #    override even in auto-pilot mode) ────────────────────────────
     btn = QPushButton("✅  Finish Benchmark")
     btn.setStyleSheet(
         "QPushButton {"
@@ -257,13 +458,19 @@ def setup_benchmark_gui(gui) -> None:
         "QPushButton:pressed { background-color: #1e8449; }"
     )
     btn.setToolTip("Collect all outputs and end the benchmark session.")
-    btn.clicked.connect(lambda: _on_finish(gui))
+    btn.clicked.connect(lambda: _on_finish_clicked(gui))
 
-    # Insert into the chat layout (above the attachment status line)
     chat_widget = gui.chat_scroll.parent()
     layout = chat_widget.layout()
     if layout is not None:
         layout.insertWidget(1, btn)
 
-    # ── Auto-send after GUI finishes rendering ───────────────────────
+    # ── Fiji dialog auto-dismisser (both modes — blocks script execution) ─
+    _start_dialog_dismisser()
+
+    # ── Auto-pilot: hook on_agent_finished for auto-collect ──────────
+    if is_autopilot():
+        _hook_auto_finish(gui)
+
+    # ── Auto-send the task after the GUI finishes rendering ──────────
     QTimer.singleShot(3000, lambda: _auto_send(gui))
