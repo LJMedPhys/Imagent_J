@@ -47,6 +47,7 @@ shared_bridge  = MetricsSignalBridge()
 shared_tracker = UsageTrackerCallback(shared_metrics, shared_bridge)
 
 open_router_key = os.getenv("OPEN_ROUTER_API_KEY")
+openai_key = os.getenv("OPENAI_API_KEY")
 
 
 # ---------------------------------------------------------------------------
@@ -159,10 +160,30 @@ class VLMHandoff(BaseModel):
 # Models
 # ---------------------------------------------------------------------------
 
+if open_router_key:
+    api_key = open_router_key
+    base_url = "https://openrouter.ai/api/v1"
+    use_openrouter = True
+elif openai_key:
+    api_key = openai_key
+    base_url = None  # default OpenAI endpoint
+    use_openrouter = False
+else:
+    raise RuntimeError("No API key found. Set OPEN_ROUTER_API_KEY or OPENAI_API_KEY.")
+
+def m(name: str) -> str:
+    if use_openrouter:
+        return name
+    # only keep openai/* models when hitting OpenAI directly
+    if name.startswith("openai/"):
+        return name.split("/", 1)[1]
+    raise ValueError(f"Model {name} not available on OpenAI direct; needs OpenRouter.")
+
+
 llm_supervisor = ChatOpenAI(
-    model="openai/gpt-5.2",
-    api_key=open_router_key,
-    base_url="https://openrouter.ai/api/v1",
+    model=m("openai/gpt-5.2"),
+    api_key=api_key,
+    base_url=base_url,
     temperature=0.,
     reasoning_effort="low",
     verbose=True,
@@ -170,9 +191,9 @@ llm_supervisor = ChatOpenAI(
 )
 
 llm_worker = ChatOpenAI(
-    model="openai/gpt-5.3-codex",
-    api_key=open_router_key,
-    base_url="https://openrouter.ai/api/v1",
+    model=m("openai/gpt-5.3-codex"),
+    api_key=api_key,
+    base_url=base_url,
     temperature=0.,
     reasoning_effort="low",
     verbose=True,
@@ -180,9 +201,9 @@ llm_worker = ChatOpenAI(
 )
 
 llm_analyst = ChatOpenAI(
-    model="anthropic/claude-haiku-4.5",
-    api_key=open_router_key,
-    base_url="https://openrouter.ai/api/v1",
+    model=m("openai/gpt-5.2-codex"),
+    api_key=api_key,
+    base_url=base_url,
     temperature=0.,
     reasoning_effort="low",
     verbose=True,
@@ -190,18 +211,18 @@ llm_analyst = ChatOpenAI(
 )
 
 llm_nano = ChatOpenAI(
-    model="openai/gpt-4o-mini",
-    api_key=open_router_key,
-    base_url="https://openrouter.ai/api/v1",
+    model=m("openai/gpt-4o-mini"),
+    api_key=api_key,
+    base_url=base_url,
     temperature=0.,
     verbose=True,
     callbacks=[shared_tracker],
 )
 
 llm_vlm = ChatOpenAI(
-    model="openai/gpt-5-mini",
-    api_key=open_router_key,
-    base_url="https://openrouter.ai/api/v1",
+    model=m("openai/gpt-5-mini"),
+    api_key=api_key,
+    base_url=base_url,
     temperature=0.,
     verbose=True,
     callbacks=[shared_tracker],
