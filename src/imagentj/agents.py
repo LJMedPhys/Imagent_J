@@ -108,30 +108,6 @@ class QAHandoff(BaseModel):
     success: bool
 
 
-class PluginSkillHandoff(BaseModel):
-    """Returned by plugin_skill_builder."""
-
-    plugin_name: str
-    skill_folder_path: str                # absolute path to /app/skills/plugins/{name}/
-
-    # Individual file paths
-    overview_path: str
-    ui_guide_path: str
-    groovy_api_path: str
-    groovy_workflow_path: str             # "N/A" if plugin has no scripting interface
-    skill_md_path: str
-
-    # Validation results
-    groovy_test_success: bool             # True only if execute_script ran without errors
-    ui_workflow_verified: bool            # True only after explicit user confirmation
-
-    # Summary for the supervisor to relay to the user
-    summary: str                          # 2–3 sentence plain-English summary of what was built
-    known_limitations: list[str]          # e.g., ["UI-only mode", "requires restart"]
-
-    success: bool
-    error_message: Optional[str] = None
-
 
 class VLMCheckResult(BaseModel):
     """Result of a single visual check performed by the VLM judge."""
