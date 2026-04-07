@@ -46,11 +46,7 @@ To get started, please share:
 
 If you're unsure, tell me the biological question and show one representative image."""
 
-os.environ["LANGSMITH_TRACING"] = "true"
-os.environ["LANGSMITH_API_KEY"] = "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"
-os.environ["LANGSMITH_ENDPOINT"] = "https://api.smith.langchain.com"
-os.environ["LANGSMITH_PROJECT"] = "pr-majestic-ecumenist-75"
-os.environ["LANGCHAIN_CALLBACKS_BACKGROUND"] = "true"
+
 
 # ---------------------------------------------------------------------------
 # Text helpers
