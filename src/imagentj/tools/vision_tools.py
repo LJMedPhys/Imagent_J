@@ -23,12 +23,10 @@ from typing import Optional
 import requests
 from PIL import Image, ImageDraw, ImageFont
 from langchain_core.tools import tool
+from langchain_core.messages import HumanMessage
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-_OPEN_ROUTER_KEY = os.getenv("OPEN_ROUTER_API_KEY", "")
-_OPEN_ROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-_VISION_MODEL    = "openai/gpt-5.4-nano"
 _MAX_PX          = 1024   # longest side cap applied to the final compilation
 
 _CAPTURE_DIR = Path(os.environ.get("CHAT_DATA_PATH", "/app/data/chats")) / "vlm_captures"
@@ -43,8 +41,16 @@ _LABEL_HEIGHT = 24   # px reserved above each panel for the text label
 _LABEL_COLOR  = (255, 255, 255)
 _BG_COLOR     = (30, 30, 30)
 
+_llm = None  # injected by agents.py
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+
+def set_vision_llm(llm):
+    global _llm
+    _llm = llm
 
 def _get_ij_classes():
     try:
@@ -80,31 +86,16 @@ def _dim_note(orig: tuple[int, int], sent: tuple[int, int]) -> str:
 
 
 def _call_vision_api(image_b64: str, question: str) -> str:
-    if not _OPEN_ROUTER_KEY:
-        return "ERROR: OPEN_ROUTER_API_KEY not set."
-    payload = {
-        "model": _VISION_MODEL,
-        "max_tokens": 1024,
-        "messages": [{"role": "user", "content": [
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
-            {"type": "text", "text": question},
-        ]}],
-    }
-    headers = {
-        "Authorization": f"Bearer {_OPEN_ROUTER_KEY}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://imagentj.app",
-        "X-Title": "ImagentJ",
-    }
+    if _llm is None:
+        return "ERROR: vision LLM not initialised. Call set_vision_llm() first."
+    msg = HumanMessage(content=[
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
+        {"type": "text", "text": question},
+    ])
     try:
-        resp = requests.post(_OPEN_ROUTER_URL, json=payload, headers=headers, timeout=60)
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
-    except requests.HTTPError as e:
-        return f"ERROR: OpenRouter HTTP {e.response.status_code} — {e.response.text}"
+        return _llm.invoke([msg]).content
     except Exception as e:
         return f"ERROR: {type(e).__name__}: {e}"
-
 
 def _load_image(path: Path) -> Image.Image:
     """Load and normalise to RGB regardless of bit depth."""

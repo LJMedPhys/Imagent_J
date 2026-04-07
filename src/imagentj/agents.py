@@ -220,7 +220,7 @@ llm_nano = ChatOpenAI(
 )
 
 llm_vlm = ChatOpenAI(
-    model=m("openai/gpt-5-mini"),
+    model=m("openai/gpt-5.4-nano"),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
@@ -228,6 +228,8 @@ llm_vlm = ChatOpenAI(
     callbacks=[shared_tracker],
 )
 
+from .tools.vision_tools import set_vision_llm 
+set_vision_llm(llm_vlm)
 
 # ---------------------------------------------------------------------------
 # Subagent instances — created once at module level, stateless invocation
