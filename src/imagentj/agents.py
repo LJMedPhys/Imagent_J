@@ -515,7 +515,7 @@ def init_agent():
         subagents=[],           # empty — all subagents are now tools above
         middleware=[
             SummarizationMiddleware(
-                model=llm_nano,
+                model=llm_supervisor,
                 trigger=("tokens", 50000),
                 keep=("messages", 20),
             ),
