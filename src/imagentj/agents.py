@@ -201,7 +201,7 @@ llm_worker = ChatOpenAI(
 )
 
 llm_analyst = ChatOpenAI(
-    model=m("openai/gpt-5.2-codex"),
+    model=m("openai/gpt-5.2"),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
