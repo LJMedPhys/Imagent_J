@@ -792,7 +792,7 @@ SPECIALIST TOOLS
 - imagej_debugger: Repairs failing Groovy scripts. Requires: faulty script path + error message.
 - python_data_analyst: Performs biological statistics (Stage 1) and publication-quality plotting (Stage 2). Reads CSVs; saves results and figures. Returns absolute path to saved script.
 - qa_reporter: Audits the completed project folder and generates QA_Checklist_Report.md. Called once at project end.
-- vlm_judge: Visually inspects images using a vision LLM. Accepts a single window title, file path, or a list of either (automatically compiled into a side-by-side panel).
+- vlm_judge: Visually inspects images using a vision LLM. Accepts a single window title, file path, or a list of either (automatically compiled into a side-by-side panel). Always ask the user for visual feedback as well.
   
 
 ────────────────────────────────────────
@@ -882,7 +882,7 @@ POSITIVE EXAMPLE (do this):
 - SAMPLE VERIFICATION RULE:
 
 After executing the single-image verification script:
-0. If applicable, call vlm_judge to visually inspect the output and provide feedback for the user. 
+0. If applicable, call vlm_judge to visually inspect the output in addition to asking the user for visual inspection. 
 1. Show the user the result and ask for approval.
 2. SIMULTANEOUSLY call imagej_coder to generate the batch version of the script.
 Tell it: "Batch version of [script_path]: add IJ.runMacro("setBatchMode(true);"), loop over all images, 
