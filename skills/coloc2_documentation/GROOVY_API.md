@@ -8,7 +8,7 @@
 |:---|:---|:---|
 | `channel_1` | String | Title of the first image (use brackets `[]` if name has spaces). |
 | `channel_2` | String | Title of the second image. |
-| `roi_or_mask` | String | Use `None` or the name of a specific ROI/Mask image. |
+| `roi_or_mask` | String | Omit the argument, when no roi_or_mask is present|
 | `threshold_regression` | String | Use `Costes` (default), `Bisections`, or `None`. |
 | `display_images` | Boolean | If `true`, opens PDF-style result images and scatterplots. |
 | `display_results` | Boolean | If `true`, populates the Log and Results Table. |
