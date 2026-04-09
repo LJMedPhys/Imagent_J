@@ -49,6 +49,30 @@ def _file_size_bytes(file_path: str) -> int:
         return 0
 
 
+# FIX 1 ─────────────────────────────────────────────────────────────────────
+def _estimate_tiff_uncompressed_bytes(file_path: str) -> int:
+    """
+    Estimate the fully-decompressed in-memory size of a TIFF stack by reading
+    only IFD headers — zero pixel data is touched.
+
+    This is the correct guard for compressed TIFFs: a 300 MB LZW-compressed
+    stack can expand to 8 GB on tifffile.imread, sailing right past an
+    os.stat-based threshold check.
+
+    Returns 0 on any error so the caller treats it as "unknown / unsafe".
+    """
+    try:
+        with tifffile.TiffFile(file_path) as tif:
+            page     = tif.pages[0]
+            dtype_sz = np.dtype(page.dtype).itemsize
+            page_px  = int(np.prod(page.shape))   # (H, W) or (H, W, C)
+            n_pages  = len(tif.pages)
+            return page_px * dtype_sz * n_pages
+    except Exception:
+        return 0
+# ────────────────────────────────────────────────────────────────────────────
+
+
 def _estimate_dataset_bytes(dataset) -> int:
     """Estimate in-memory size of an ImageJ2 Dataset without touching pixels."""
     try:
@@ -97,6 +121,14 @@ class ImageMetadataAnalyzer:
     a ``DatasetTooLargeError`` is raised immediately so that ImageJ is never
     pushed out of memory.  The caller / supervisor should catch this and
     inform the user.
+
+    FIX 2 — pre-load file guard
+    ---------------------------
+    If ``source_path`` is supplied (or discoverable from the dataset source
+    attribute), the constructor validates the uncompressed size **before**
+    the caller passes the dataset to ImageJ for loading.  Call the class
+    method ``check_path_before_load()`` as an even earlier gate if you
+    control the load call.
     """
 
     def __init__(self, ij, dataset=None,
@@ -114,6 +146,57 @@ class ImageMetadataAnalyzer:
         self.structure: Dict[str, int] = {}
         self.dicom_metadata: Dict[str, Any] = {}
         self._lif_dims = None
+
+    # FIX 2 ──────────────────────────────────────────────────────────────────
+    @classmethod
+    def check_path_before_load(
+        cls,
+        file_path: str,
+        threshold_bytes: int = LARGE_FILE_THRESHOLD_BYTES,
+    ) -> None:
+        """
+        **Call this BEFORE handing a file to ImageJ for loading.**
+
+        Inspects only the file header / IFD metadata — never reads pixel data.
+        Raises ``DatasetTooLargeError`` with a descriptive message if the
+        estimated uncompressed size exceeds *threshold_bytes*.
+
+        Usage::
+
+            ImageMetadataAnalyzer.check_path_before_load(path)
+            dataset = ij.io().open(path)          # safe to call now
+            analyzer = ImageMetadataAnalyzer(ij, dataset)
+
+        Raises
+        ------
+        FileNotFoundError
+        DatasetTooLargeError
+        """
+        p = Path(file_path)
+        if not p.exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
+
+        suffix     = p.suffix.lower()
+        name_lower = p.name.lower()
+        is_ome     = '.ome.' in name_lower
+
+        if suffix in ['.tif', '.tiff'] and not is_ome:
+            estimated = _estimate_tiff_uncompressed_bytes(file_path)
+        else:
+            # For other formats fall back to on-disk size as a lower bound.
+            estimated = _file_size_bytes(file_path)
+
+        if estimated == 0 or estimated > threshold_bytes:
+            gb_str = f"{estimated / 1024**3:.2f} GB" if estimated else "unknown size"
+            raise DatasetTooLargeError(
+                f"File '{p.name}' is too large to load safely "
+                f"(estimated uncompressed {gb_str}; "
+                f"limit is {threshold_bytes / 1024**3:.1f} GB). "
+                f"To open it without crashing, use "
+                f"File › Import › TIFF Virtual Stack (TIFFs) or Bio-Formats "
+                f"with the 'Use virtual stack' option."
+            )
+    # ─────────────────────────────────────────────────────────────────────────
 
     # ------------------------------------------------------------------
     # Public API
@@ -559,7 +642,7 @@ def quick_analyze(ij, dataset=None, show_plot: bool = True,
 
 def _suggest_threshold_from_stats(stats: Dict[str, Any],
                                    calibration: Dict[str, Any]) -> Dict[str, Any]:
-    if not stats:
+    if not stats or 'error' in stats:
         return {}
     suggestions: Dict[str, Any] = {
         'otsu_like_estimate':         stats['mean'] + stats['std'],
@@ -583,7 +666,7 @@ def _suggest_threshold_from_stats(stats: Dict[str, Any],
 
 
 def _suggest_filter_from_stats(stats: Dict[str, Any]) -> Dict[str, Any]:
-    if not stats:
+    if not stats or 'error' in stats:
         return {}
     mean = stats['mean']
     std  = stats['std']
@@ -600,20 +683,33 @@ def _suggest_filter_from_stats(stats: Dict[str, Any]) -> Dict[str, Any]:
 def _compute_standalone_stats(file_path: str, suffix: str) -> Dict[str, Any]:
     """
     Compute pixel statistics for small files only.
-    Raises DatasetTooLargeError without touching pixels if the file is too large.
+
+    For TIFFs the guard uses the *uncompressed* size estimated from IFD
+    headers — a heavily-compressed TIFF can expand 10–20× on load and would
+    otherwise sail past an os.stat-based size check.
+    For other formats the on-disk size is used as a conservative lower bound.
+    Returns an error dict without touching pixel data if the file is too large.
     """
+    # --- format-aware size gate (no pixel data read) ---
     if suffix in ['.tif', '.tiff']:
-        size = _file_size_bytes(file_path)
-        if size == 0 or size > LARGE_FILE_THRESHOLD_BYTES:
-            gb_str = f"{size / 1024**3:.2f} GB" if size else "unknown size"
-            return {
-                'error':   'file_too_large',
-                'message': (
-                    f"File '{Path(file_path).name}' is too large for pixel statistics "
-                    f"({gb_str}; limit is {LARGE_FILE_THRESHOLD_BYTES / 1024**3:.1f} GB). "
-                    f"Metadata and calibration were extracted successfully."
-                ),
-            }
+        estimated = _estimate_tiff_uncompressed_bytes(file_path)
+        guard_size = estimated if estimated > 0 else _file_size_bytes(file_path)
+    else:
+        guard_size = _file_size_bytes(file_path)
+
+    if guard_size == 0 or guard_size > LARGE_FILE_THRESHOLD_BYTES:
+        gb_str = f"{guard_size / 1024**3:.2f} GB" if guard_size else "unknown size"
+        return {
+            'error':   'file_too_large',
+            'message': (
+                f"File '{Path(file_path).name}' is too large for pixel statistics "
+                f"(estimated uncompressed {gb_str}; "
+                f"limit is {LARGE_FILE_THRESHOLD_BYTES / 1024**3:.1f} GB). "
+                f"Metadata and calibration were extracted successfully."
+            ),
+        }
+
+    if suffix in ['.tif', '.tiff']:
         data = tifffile.imread(file_path)
         flat = data.astype(np.float64).ravel()
         del data
@@ -812,9 +908,12 @@ def extract_file_metadata(file_path: str) -> Dict[str, Any]:
     except Exception as e:
         warnings.warn(f"Could not extract metadata from {file_path}: {e}")
 
-    # ---- Pixel statistics — raises DatasetTooLargeError for large TIFFs ----
+    # ---- Pixel statistics (format-aware size gate inside) ----
     stats = _compute_standalone_stats(file_path, suffix)
-    if stats:
+    if stats and 'error' in stats:
+        # Too-large or unreadable — attach the warning but don't crash
+        result['intensity_statistics_error'] = stats['message']
+    elif stats:
         result['intensity_statistics']  = stats
         result['threshold_suggestions'] = _suggest_threshold_from_stats(stats, scales)
         result['filter_suggestions']    = _suggest_filter_from_stats(stats)
