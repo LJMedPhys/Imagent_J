@@ -1,89 +1,149 @@
 #!/bin/bash
 set -e
 
+# ── Seed Fiji named volumes on first run ─────────────────────────────────────
+# Named volumes mount as empty directories, shadowing the image's baked-in
+# plugins/jars. Seed from .seed dirs on first start (marker file = already done).
+FIJI_HOME=/opt/Fiji.app
+
+# Seed helper: copies seed → dest, skipping files that already exist.
+# Uses Python so permission errors on individual files are caught and reported
+# rather than aborting the whole entrypoint (which 'cp -a' + set -e would do).
+#
+# NOTE: The marker file is intentionally NOT used to skip the copy. The Python
+# copy is idempotent (skips files that already exist in the destination), so it
+# is safe to run on every container start. This is critical: without this, new
+# plugin JARs added to the image (e.g. StarDist, CSBDeep) are never propagated
+# to the named volumes when those volumes were created by an older image build.
+_seed_volume() {
+    local label="$1" src="$2" dst="$3" marker="$4"
+    echo "[entrypoint] Seeding $label from image (skips existing files)..."
+    python3 - "$src" "$dst" <<'PYEOF'
+import sys, shutil
+from pathlib import Path
+src, dst = Path(sys.argv[1]), Path(sys.argv[2])
+ok = skip = fail = 0
+for f in src.rglob('*'):
+    if not f.is_file():
+        continue
+    target = dst / f.relative_to(src)
+    if target.exists():
+        skip += 1
+        continue
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(f), str(target))
+        ok += 1
+    except PermissionError as e:
+        fail += 1
+        print(f'[entrypoint] WARNING: cannot seed {target.name}: {e}', flush=True)
+print(f'[entrypoint] seeded: {ok} copied, {skip} already present, {fail} permission-denied', flush=True)
+PYEOF
+    touch "$marker" 2>/dev/null || true
+    echo "[entrypoint] $label seeding complete"
+}
+
+_seed_volume "fiji_jars"    "$FIJI_HOME/jars.seed"    "$FIJI_HOME/jars"    "$FIJI_HOME/jars/.seeded"
+_seed_volume "fiji_plugins" "$FIJI_HOME/plugins.seed" "$FIJI_HOME/plugins" "$FIJI_HOME/plugins/.seeded"
+
 # ── Clean up stale X11 lock files from previous runs ─────────────────────────
 # This prevents "Server is already active for display 1" errors on restart
 rm -f /tmp/.X1-lock
 rm -f /tmp/.X11-unix/X1
+
+# ── Ensure Nashorn JavaScript engine JAR is present ──────────────────────────
+# Java 15+ removed the built-in Nashorn engine. Rhino (also installed) covers
+# generic JSR-223 JS, but Fiji macros that request the engine by the name
+# "nashorn" specifically will not find it without the standalone nashorn-core JAR.
+# This check ensures the JAR is in the fiji_jars volume even on pre-existing
+# volumes that predate its addition to the image.
+NASHORN_JAR="$FIJI_HOME/jars/nashorn-core-15.4.jar"
+if [ ! -f "$NASHORN_JAR" ]; then
+    echo "[entrypoint] Downloading nashorn-core-15.4.jar (JavaScript engine)..."
+    wget -q -O "$NASHORN_JAR" \
+        "https://repo1.maven.org/maven2/org/openjdk/nashorn/nashorn-core/15.4/nashorn-core-15.4.jar" \
+    && echo "[entrypoint] nashorn-core-15.4.jar installed" \
+    || { echo "[entrypoint] WARNING: failed to download nashorn-core JAR — .js macros may not work"; rm -f "$NASHORN_JAR"; }
+fi
 
 # ── Fix CSBDeep/StarDist protobuf JAR conflict ───────────────────────────────
 # CSBDeep's TensorFlow 1.x bindings require protobuf-java-3.6.x.
 # The makeExtensionsImmutable() NoSuchMethodError is caused by a newer protobuf
 # JAR shadowing the version TF was compiled against. Replace it at startup since
 # fiji_jars is a named volume that survives image rebuilds.
-# FIJI_JARS=/opt/Fiji.app/jars
-# REQUIRED_PROTOBUF="protobuf-java-3.6.1.jar"
-# if [ ! -f "$FIJI_JARS/$REQUIRED_PROTOBUF" ]; then
-#     echo "[entrypoint] Fixing protobuf JAR for CSBDeep/StarDist compatibility..."
-#     # Remove any protobuf JAR that would conflict (including the util sibling,
-#     # which targets 4.x and would cause Updater "locally modified" warnings)
-#     rm -f "$FIJI_JARS"/protobuf-java-*.jar
-#     rm -f "$FIJI_JARS"/protobuf-java-util-*.jar
-#     wget -q "https://repo1.maven.org/maven2/com/google/protobuf/protobuf-java/3.6.1/protobuf-java-3.6.1.jar" \
-#          -O "$FIJI_JARS/$REQUIRED_PROTOBUF" \
-#     && echo "[entrypoint] protobuf-java-3.6.1.jar installed" \
-#     || echo "[entrypoint] WARNING: failed to download protobuf JAR — StarDist may not work"
-# fi
+FIJI_JARS=/opt/Fiji.app/jars
+REQUIRED_PROTOBUF="protobuf-java-3.6.1.jar"
+if [ ! -f "$FIJI_JARS/$REQUIRED_PROTOBUF" ]; then
+    echo "[entrypoint] Fixing protobuf JAR for CSBDeep/StarDist compatibility..."
+    # Remove any protobuf JAR that would conflict (including the util sibling,
+    # which targets 4.x and would cause Updater "locally modified" warnings)
+    rm -f "$FIJI_JARS"/protobuf-java-*.jar
+    rm -f "$FIJI_JARS"/protobuf-java-util-*.jar
+    wget -q "https://repo1.maven.org/maven2/com/google/protobuf/protobuf-java/3.6.1/protobuf-java-3.6.1.jar" \
+         -O "$FIJI_JARS/$REQUIRED_PROTOBUF" \
+    && echo "[entrypoint] protobuf-java-3.6.1.jar installed" \
+    || echo "[entrypoint] WARNING: failed to download protobuf JAR — StarDist may not work"
+fi
 
 # ── Fix protobuf-java version mismatch (GDSC-SMLM needs 3.25+) ───────────────
 # The fiji_jars volume may contain an old protobuf-java-3.6.1.jar left over from
 # a previous StarDist workaround. GDSC-SMLM 2.1 requires RuntimeVersion$RuntimeDomain
 # which was introduced in protobuf 3.25. This block upgrades protobuf-java to match
 # the protobuf-java-util version already present in the jars directory.
-python3 -c "
-import re, subprocess
-from pathlib import Path
+# python3 -c "
+# import re, subprocess
+# from pathlib import Path
 
-jars_dir = Path('/opt/Fiji.app/jars')
+# jars_dir = Path('/opt/Fiji.app/jars')
 
-# Find what version of protobuf-java-util is installed (e.g. 4.28.2)
-util_jars = sorted(jars_dir.glob('protobuf-java-util-*.jar'))
-core_jars = sorted(jars_dir.glob('protobuf-java-[0-9]*.jar'))  # excludes -util
+# # Find what version of protobuf-java-util is installed (e.g. 4.28.2)
+# util_jars = sorted(jars_dir.glob('protobuf-java-util-*.jar'))
+# core_jars = sorted(jars_dir.glob('protobuf-java-[0-9]*.jar'))  # excludes -util
 
-if not util_jars:
-    print('[entrypoint] No protobuf-java-util jar found, skipping protobuf fix')
-    exit(0)
+# if not util_jars:
+#     print('[entrypoint] No protobuf-java-util jar found, skipping protobuf fix')
+#     exit(0)
 
-util_version = re.search(r'protobuf-java-util-(.+)\.jar', util_jars[-1].name).group(1)
-target_jar = jars_dir / f'protobuf-java-{util_version}.jar'
+# util_version = re.search(r'protobuf-java-util-(.+)\.jar', util_jars[-1].name).group(1)
+# target_jar = jars_dir / f'protobuf-java-{util_version}.jar'
 
-if target_jar.exists():
-    print(f'[entrypoint] protobuf-java-{util_version}.jar already present, no fix needed')
-    exit(0)
+# if target_jar.exists():
+#     print(f'[entrypoint] protobuf-java-{util_version}.jar already present, no fix needed')
+#     exit(0)
 
-print(f'[entrypoint] Upgrading protobuf-java to {util_version} (to match protobuf-java-util)...')
-url = f'https://repo1.maven.org/maven2/com/google/protobuf/protobuf-java/{util_version}/protobuf-java-{util_version}.jar'
-result = subprocess.run(['wget', '-q', url, '-O', str(target_jar)], capture_output=True)
-if result.returncode != 0:
-    print(f'[entrypoint] WARNING: failed to download protobuf-java-{util_version}.jar')
-    target_jar.unlink(missing_ok=True)
-    exit(0)
+# print(f'[entrypoint] Upgrading protobuf-java to {util_version} (to match protobuf-java-util)...')
+# url = f'https://repo1.maven.org/maven2/com/google/protobuf/protobuf-java/{util_version}/protobuf-java-{util_version}.jar'
+# result = subprocess.run(['wget', '-q', url, '-O', str(target_jar)], capture_output=True)
+# if result.returncode != 0:
+#     print(f'[entrypoint] WARNING: failed to download protobuf-java-{util_version}.jar')
+#     target_jar.unlink(missing_ok=True)
+#     exit(0)
 
-# Remove old incompatible versions
-for old in core_jars:
-    if old != target_jar:
-        print(f'[entrypoint] Removing old protobuf JAR: {old.name}')
-        old.unlink()
+# # Remove old incompatible versions
+# for old in core_jars:
+#     if old != target_jar:
+#         print(f'[entrypoint] Removing old protobuf JAR: {old.name}')
+#         old.unlink()
 
-print(f'[entrypoint] protobuf-java-{util_version}.jar installed')
-" 2>&1 || echo "[entrypoint] WARNING: protobuf fix skipped"
+# print(f'[entrypoint] protobuf-java-{util_version}.jar installed')
+# " 2>&1 || echo "[entrypoint] WARNING: protobuf fix skipped"
 
-# ── Remove duplicate JAR versions from fiji_jars ─────────────────────────────
-# Fiji's updater throws "multiple existing versions" critical errors when both
-# old and new versions of the same JAR coexist (e.g. imglib2-7.0.0.jar AND
-# imglib2-7.1.4.jar). This happens because the fiji_jars named volume persists
-# across rebuilds while agent-installed plugins pull in newer dependency versions.
-echo "[entrypoint] Deduplicating JAR versions in fiji_jars..."
-python3 -c "
-import re
+# ── JAR deduplication helper (called before and after applying updates) ───────
+# Removes older versions of any JAR when multiple versions of the same lib exist.
+# Searches jars/ and all subdirectories (e.g. jars/bio-formats/).
+deduplicate_jars() {
+    local label="${1:-jars}"
+    echo "[entrypoint] Deduplicating JAR versions ($label)..."
+    python3 -c "
+import re, sys
 from pathlib import Path
 from collections import defaultdict
 
 jars_dir = Path('/opt/Fiji.app/jars')
 groups = defaultdict(list)
 
-for jar in jars_dir.glob('*.jar'):
-    m = re.match(r'^(.+?)-(\d.*)\.jar$', jar.name)
+for jar in jars_dir.rglob('*.jar'):
+    m = re.match(r'^(.+?)-(\d.*)\.jar\$', jar.name)
     if m:
         groups[m.group(1)].append(jar)
 
@@ -98,6 +158,48 @@ for base, jars in groups.items():
 
 print(f'[entrypoint] Removed {removed} duplicate JAR(s)') if removed else print('[entrypoint] No duplicate JARs found')
 " 2>&1 || echo "[entrypoint] WARNING: JAR deduplication skipped"
+}
+
+# ── Remove duplicate JAR versions from fiji_jars (pre-update pass) ───────────
+# Clean up any stale duplicates already in the named volume before applying updates.
+deduplicate_jars "pre-update"
+
+# ── Protect pyimagej-critical JARs from incompatible updates ─────────────────
+# pyimagej 1.7.0 requires net.imagej.updater.UploaderService. Newer builds from
+# the Fiji update sites removed this class. Drop the staged updates for these
+# JARs so the base Fiji versions (which still have the class) are preserved.
+FIJI_HOME=/opt/Fiji.app
+# Log everything staged so we can see exactly what the update sites downloaded
+echo "[entrypoint] Staged update jars/:"
+ls "$FIJI_HOME/update/jars/" 2>/dev/null | sed 's/^/  /' || echo "  (empty or missing)"
+echo "[entrypoint] Staged update plugins/:"
+ls "$FIJI_HOME/update/plugins/" 2>/dev/null | sed 's/^/  /' || echo "  (empty or missing)"
+
+# Drop updates for JARs that are incompatible with pyimagej 1.7.0.
+# Bio-Formats 8.x and newer SCIFIO/OME JARs break pyimagej 1.7.0.
+# JARs may live in subdirectories (e.g. update/jars/bio-formats/), so use find.
+
+# Remove the entire bio-formats subdirectory if present
+if [ -d "$FIJI_HOME/update/jars/bio-formats" ]; then
+    echo "[entrypoint] Removing update/jars/bio-formats/ (incompatible with pyimagej 1.7.0)"
+    rm -rf "$FIJI_HOME/update/jars/bio-formats"
+fi
+
+# Remove individual protected JARs anywhere under update/ by name pattern
+find "$FIJI_HOME/update" -type f -name "*.jar" | while read -r f; do
+    base=$(basename "$f")
+    case "$base" in
+        imagej-updater-*|imagej-legacy-*|imagej-common-* \
+        |formats-api-*|formats-bsd-*|formats-common-*|formats-gpl-* \
+        |bioformats_package-*|bioformats-* \
+        |scifio-*|scifio-ome-xml-* \
+        |ome-common-*|ome-xml-*|ome-codecs-*|specification-* \
+        |jai_imageio_core-*|turbojpeg-*|metakit-*)
+            echo "[entrypoint] Skipping $base (pyimagej 1.7.0 compatibility)"
+            rm "$f"
+            ;;
+    esac
+done
 
 # ── Apply pending Fiji updates ───────────────────────────────────────────────
 # Fiji stages updates in /opt/Fiji.app/update/ - move them to their destinations
@@ -121,13 +223,29 @@ if [ -d "$FIJI_HOME/update" ] && [ "$(ls -A $FIJI_HOME/update 2>/dev/null)" ]; t
         cp -rv "$FIJI_HOME/update/scripts/"* "$FIJI_HOME/scripts/" 2>/dev/null || true
     fi
     # Copy native libraries (e.g. TensorFlow .so files for CSBDeep/StarDist)
-    # if [ -d "$FIJI_HOME/update/lib" ]; then
-    #     cp -rv "$FIJI_HOME/update/lib/"* "$FIJI_HOME/lib/" 2>/dev/null || true
-    # fi
+    if [ -d "$FIJI_HOME/update/lib" ]; then
+        cp -rv "$FIJI_HOME/update/lib/"* "$FIJI_HOME/lib/" 2>/dev/null || true
+    fi
     # Clean up update directory after applying
     rm -rf "$FIJI_HOME/update/"*
     echo "[entrypoint] Updates applied successfully"
 fi
+
+# ── Remove duplicate JAR versions (post-update pass) ─────────────────────────
+# Updates may have added newer versions alongside the seeded older ones.
+# e.g. commons-compress-1.8.jar (seed) + commons-compress-1.27.jar (update).
+deduplicate_jars "post-update"
+
+# ── Remove empty/stub JARs left by Fiji updater ──────────────────────────────
+# Fiji's updater creates zero-byte stub files as deletion markers.
+# These cause ZipException noise at startup — remove them.
+empty_count=0
+while IFS= read -r f; do
+    echo "[entrypoint] Removing empty stub JAR: $(basename "$f")"
+    rm "$f"
+    empty_count=$((empty_count + 1))
+done < <(find "$FIJI_HOME/plugins" "$FIJI_HOME/jars" -type f -name "*.jar" -empty 2>/dev/null)
+[ "$empty_count" -gt 0 ] && echo "[entrypoint] Removed $empty_count empty stub JAR(s)" || echo "[entrypoint] No empty stub JARs found"
 
 # ── Prepare runtime directories (tmpfs mounts start empty) ───────────────────
 mkdir -p /tmp/.X11-unix
@@ -143,10 +261,10 @@ EOF
 echo "[entrypoint] Starting Xvfb on display :1..."
 Xvfb :1 -screen 0 2480x1200x24 -ac +extension GLX +render -noreset &
 
-export DISPLAY=:1
-# echo "[entrypoint] Enabling keyboard repeat..."
-# xset r on
-# xset r rate 300 50
+#export DISPLAY=:1
+#echo "[entrypoint] Enabling keyboard repeat..."
+#xset r on
+#xset r rate 300 50
 
 # Wait for X11 socket to be ready
 echo "[entrypoint] Waiting for Xvfb to be ready..."
