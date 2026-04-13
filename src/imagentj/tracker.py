@@ -400,6 +400,21 @@ class ConversationLogger:
         conv_data = _read_json(self._conv_path())
         _write_json(self._project_log, conv_data)
 
+    def update_query_cost(self, timestamp: str, actual_cost: float):
+        """Patch cost_usd for the query matching *timestamp* and recompute totals."""
+        if not self._thread_id:
+            return
+        data = _read_json(self._conv_path())
+        queries = data.get("queries", [])
+        for q in reversed(queries):
+            if q.get("timestamp") == timestamp:
+                q["cost_usd"] = round(actual_cost, 6)
+                break
+        else:
+            return
+        data["totals"]["cost_usd"] = round(sum(q["cost_usd"] for q in queries), 6)
+        self._write_conv(data)
+
     # ── export ────────────────────────────────────────────────────────────
 
     def build_report(self, thread_id: str | None = None) -> dict:
@@ -545,42 +560,65 @@ class UsageTrackerCallback(BaseCallbackHandler):
         fetcher = self._or_fetcher
 
         def _finalize(
-            initial_delay:  float = 2.0,   # first check after this many seconds
-            retry_interval: float = 3.0,   # re-check every N seconds if not settled
-            max_wait:       float = 60.0,  # give up after this many seconds total
+            initial_delay:  float = 2.0,    # wait before first poll
+            poll_interval:  float = 3.0,    # seconds between polls
+            idle_timeout:   float = 30.0,   # stop after this many seconds with no new charge
+            abs_timeout:    float = 120.0,  # hard stop regardless
         ):
             time.sleep(initial_delay)
-            deadline = time.monotonic() + max_wait
+            abs_deadline     = time.monotonic() + abs_timeout
+            last_increase_t  = time.monotonic()
+            total_query_cost = 0.0
+            record_written   = False
 
-            session_cost: float | None = None
             while True:
-                session_cost = fetcher.get_session_delta()
-                with self._or_lock:
-                    prev = self._or_conv_cost
-                # Success once the session total has actually moved
-                if session_cost is not None and session_cost > prev:
+                now = time.monotonic()
+                if now >= abs_deadline:
                     break
-                if time.monotonic() >= deadline:
-                    log.warning("OpenRouter: billing counter did not update within "
-                                f"{max_wait:.0f}s — query cost not recorded")
-                    return
-                time.sleep(retry_interval)
+                # Once we have at least one reading, stop when cost has been
+                # stable long enough — all delayed charges should have arrived.
+                if record_written and (now - last_increase_t) >= idle_timeout:
+                    break
 
-            with self._or_lock:
-                query_cost         = session_cost - self._or_conv_cost
-                self._or_conv_cost = session_cost
+                session_cost = fetcher.get_session_delta()
 
-            with self._m._lock:
-                self._m.cost_usd += query_cost
+                if session_cost is not None:
+                    with self._or_lock:
+                        if session_cost > self._or_conv_cost:
+                            increment          = session_cost - self._or_conv_cost
+                            self._or_conv_cost = session_cost
+                        else:
+                            increment = 0.0
 
-            record     = QueryRecord(**base, cost_usd=round(query_cost, 6))
-            final_snap = self._m.snapshot()
-            self._logger.append_query(record, final_snap)
-            log.debug(
-                f"OpenRouter: query=${query_cost:.6f}  "
-                f"conversation total=${session_cost:.6f}"
-            )
-            self._emit()
+                    if increment > 0:
+                        with self._m._lock:
+                            self._m.cost_usd += increment
+                        total_query_cost += increment
+                        last_increase_t   = time.monotonic()
+
+                        if not record_written:
+                            record = QueryRecord(
+                                **base, cost_usd=round(total_query_cost, 6)
+                            )
+                            self._logger.append_query(record, self._m.snapshot())
+                            record_written = True
+                        else:
+                            self._logger.update_query_cost(
+                                timestamp, total_query_cost
+                            )
+
+                        log.debug(
+                            f"OpenRouter: +${increment:.6f}  "
+                            f"query total=${total_query_cost:.6f}  "
+                            f"session=${session_cost:.6f}"
+                        )
+                        self._emit()
+
+                time.sleep(poll_interval)
+
+            if not record_written:
+                log.warning("OpenRouter: no cost registered within "
+                            f"{abs_timeout:.0f}s — query cost not recorded")
 
         threading.Thread(target=_finalize, daemon=True).start()
 
