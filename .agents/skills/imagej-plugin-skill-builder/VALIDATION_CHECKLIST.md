@@ -30,6 +30,13 @@ Run validation from least invasive to most definitive:
    - validate a direct class or `CommandService` path
 5. Use the validated path in the checked-in workflow and document the discrepancy.
 
+## Cover the Core Capabilities
+
+- Check the plugin's main workflow families before calling the skill complete.
+- Try to validate each core user-facing capability that can be supported with the available docs, sample assets, and container setup.
+- If one core capability blocks on missing assets or runtime incompatibility, keep investigating the others instead of stopping the whole pass early.
+- Any core capability not implemented should be listed explicitly as excluded, blocked, or deferred.
+
 ## Output Sanity Checks
 
 For segmentation or transformation plugins, confirm the output is not silently identical to the input.

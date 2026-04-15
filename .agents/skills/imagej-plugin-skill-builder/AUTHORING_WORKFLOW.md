@@ -38,6 +38,16 @@ Optional deliverables:
 - `OVERVIEW.md` only when the task explicitly wants it or the plugin needs extra background beyond `SKILL.md`
 - `../docs/plugin_skills/<plugin>_documentation_report.md` when the task asks for an external report
 
+## 3. Cover the Core Capability Set
+
+Before drafting files, list the plugin's core user-facing capabilities from the
+official docs and menus.
+
+- Prefer a skill that covers the main workflow families users reach for in that plugin.
+- Do not stop at the first validated command if other core workflows can be implemented with the same level of evidence.
+- If some core capabilities remain out of scope, make that a deliberate exclusion and explain why in the report.
+- If the plugin is broad, it is acceptable to phase the work, but the skill should still aim to cover as much of the core surface as practical in the current pass.
+
 ## 4. Write Each File for LLM Use
 
 ### `SKILL.md`

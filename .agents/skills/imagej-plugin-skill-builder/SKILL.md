@@ -16,6 +16,7 @@ container-validated.
   - official-doc claim
   - container-validated claim
   - explicitly unverified / excluded
+- Aim to implement the plugin's core user-facing capabilities as completely as practical. Do not stop after one well-documented command if additional core workflows can be source-grounded and validated in the container.
 - Never invent commands, parameter keys, pretrained models, or file outputs.
 - If the official macro string and the repo's Groovy execution behavior diverge, document both and prefer the container-validated execution path in workflow scripts.
 

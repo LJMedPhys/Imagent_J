@@ -73,3 +73,4 @@ files themselves.
 - If the task explicitly says "SKILL is the overview", skip `OVERVIEW.md`.
 - If the plugin has no reliable Fiji scripting path, document the real automation path instead of forcing Groovy.
 - If official docs and runtime behavior differ, keep the docs note in the API file and put the validated path in the runnable workflow.
+- Prefer a file set that covers the plugin's main workflow families, not just a single narrow happy-path example.
