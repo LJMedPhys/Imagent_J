@@ -23,6 +23,7 @@ SNT combines interactive tracing, reconstruction import and export, morphometric
 | `GROOVY_WORKFLOW_SUBTREE_METRICS.groovy` | Compartment extraction (axon/dendrite) + volume + bounding box + morphometry |
 | `GROOVY_WORKFLOW_GRAPH_ANALYSIS.groovy` | Graph theory metrics: vertices, edges, tips, graph diameter (longest shortest path) |
 | `GROOVY_WORKFLOW_SHOLL_FULL_PROFILE.groovy` | Full Sholl profile via TreeParser + polynomial fitting + extensive statistics (LinearProfileStats + NormalizedProfileStats) |
+| `GROOVY_WORKFLOW_IMAGE_SHOLL_ANALYSIS.groovy` | Load segmented 2D/3D image → image-derived Sholl profile CSV + summary metrics CSV |
 | **Online Database Workflows** | |
 | `GROOVY_WORKFLOW_NEUROMORPHO_LOAD.groovy` | Download reconstruction from NeuroMorpho.org and save as SWC |
 | `GROOVY_WORKFLOW_MOUSELIGHT_BRAIN_AREA.groovy` | Download MouseLight neuron + morphometry + brain area projection analysis (Allen CCF) |
@@ -50,7 +51,7 @@ SNT combines interactive tracing, reconstruction import and export, morphometric
 | Bifurcation angle extraction | — | ✓ |
 | Root angle analysis (von Mises) | — | ✓ |
 | PCA / directional analysis | — | ✓ |
-| Image-based Sholl (ImageParser) | — | ✓ |
+| Image-based Sholl (ImageParser) | ✓ | ✓ |
 | Strahler analysis (StrahlerCmd) | — | ✓ |
 | Group comparison (t-test, ANOVA) | — | ✓ |
 | 3D visualization (Viewer3D) | — | ✓ |

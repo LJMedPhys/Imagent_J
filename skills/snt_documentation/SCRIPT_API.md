@@ -292,6 +292,8 @@ parser3d.setCenter(x, y, z)
 parser3d.parse()
 ```
 
+These calls are used in `GROOVY_WORKFLOW_IMAGE_SHOLL_ANALYSIS.groovy`.
+
 ### 3.6 Tabular data Sholl
 
 ```groovy
@@ -650,6 +652,7 @@ These calls are used in `GROOVY_WORKFLOW_BATCH_SWC_ANALYSIS.groovy`.
 | `GROOVY_WORKFLOW_SHOLL_METRICS_FROM_SWC.groovy` | Sholl summary metrics CSV export |
 | `GROOVY_WORKFLOW_SWC_ANALYSIS.groovy` | Combined morphometry + Sholl export |
 | `GROOVY_WORKFLOW_BATCH_SWC_ANALYSIS.groovy` | Directory-scale morphometry + Sholl summary export |
+| `GROOVY_WORKFLOW_IMAGE_SHOLL_ANALYSIS.groovy` | Image-derived Sholl profile + summary metrics export |
 | `GROOVY_WORKFLOW_SUBTREE_METRICS.groovy` | Compartment extraction + volume + bounding box |
 | `GROOVY_WORKFLOW_GRAPH_ANALYSIS.groovy` | Graph theory metrics (vertices, edges, diameter) |
 | `GROOVY_WORKFLOW_SHOLL_FULL_PROFILE.groovy` | Full Sholl profile with polynomial fitting |
@@ -662,6 +665,7 @@ These calls are used in `GROOVY_WORKFLOW_BATCH_SWC_ANALYSIS.groovy`.
 - All checked-in Groovy workflows above
 - Batch directory analysis of SWC reconstructions
 - Tree I/O, TreeStatistics, ShollAnalyzer, TreeParser, LinearProfileStats
+- ImageParser2D / ImageParser3D profile extraction from segmented images
 - DirectedWeightedGraph construction and queries
 - Online database loaders (MouseLightLoader, NeuroMorphoLoader)
 - Brain area annotation traversal (AllenUtils, node.getAnnotation())
