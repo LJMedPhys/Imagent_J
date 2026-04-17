@@ -324,19 +324,6 @@ ENV QT_QPA_PLATFORM=xcb
 ENV JAVA_HOME=/opt/conda/envs/local_imagent_J
 ENV HOME=/home/imagentj
 
-# ── Entrypoint ────────────────────────────────────────────────────────────────
-# ── noVNC default settings: remote resize ────────────────────────────────────
-# noVNC has three resize modes:
-#   off    — fixed canvas, scrollbars if content is larger than viewport
-#   scale  — browser-side CSS scaling (blurry, no real resolution change)
-#   remote — sends VNC DesktopSize request to x11vnc, which calls xrandr
-#            so the X display physically matches the browser viewport size
-#
-# We set remote resize as the default by redirecting the index to vnc.html
-# with the resize and autoconnect parameters baked in.  Users can still
-# override the setting via noVNC's settings panel (gear icon) at runtime.
-RUN printf '<!DOCTYPE html>\n<html>\n<head>\n  <title>AgentJ</title>\n  <meta charset="utf-8"/>\n  <meta http-equiv="refresh" content="0; url=vnc.html?resize=remote&autoconnect=true"/>\n</head>\n<body></body>\n</html>\n' \
-    > /usr/share/novnc/index.html
 
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh

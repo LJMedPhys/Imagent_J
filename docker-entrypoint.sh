@@ -85,48 +85,6 @@ if [ ! -f "$FIJI_JARS/$REQUIRED_PROTOBUF" ]; then
     || echo "[entrypoint] WARNING: failed to download protobuf JAR — StarDist may not work"
 fi
 
-# ── Fix protobuf-java version mismatch (GDSC-SMLM needs 3.25+) ───────────────
-# The fiji_jars volume may contain an old protobuf-java-3.6.1.jar left over from
-# a previous StarDist workaround. GDSC-SMLM 2.1 requires RuntimeVersion$RuntimeDomain
-# which was introduced in protobuf 3.25. This block upgrades protobuf-java to match
-# the protobuf-java-util version already present in the jars directory.
-# python3 -c "
-# import re, subprocess
-# from pathlib import Path
-
-# jars_dir = Path('/opt/Fiji.app/jars')
-
-# # Find what version of protobuf-java-util is installed (e.g. 4.28.2)
-# util_jars = sorted(jars_dir.glob('protobuf-java-util-*.jar'))
-# core_jars = sorted(jars_dir.glob('protobuf-java-[0-9]*.jar'))  # excludes -util
-
-# if not util_jars:
-#     print('[entrypoint] No protobuf-java-util jar found, skipping protobuf fix')
-#     exit(0)
-
-# util_version = re.search(r'protobuf-java-util-(.+)\.jar', util_jars[-1].name).group(1)
-# target_jar = jars_dir / f'protobuf-java-{util_version}.jar'
-
-# if target_jar.exists():
-#     print(f'[entrypoint] protobuf-java-{util_version}.jar already present, no fix needed')
-#     exit(0)
-
-# print(f'[entrypoint] Upgrading protobuf-java to {util_version} (to match protobuf-java-util)...')
-# url = f'https://repo1.maven.org/maven2/com/google/protobuf/protobuf-java/{util_version}/protobuf-java-{util_version}.jar'
-# result = subprocess.run(['wget', '-q', url, '-O', str(target_jar)], capture_output=True)
-# if result.returncode != 0:
-#     print(f'[entrypoint] WARNING: failed to download protobuf-java-{util_version}.jar')
-#     target_jar.unlink(missing_ok=True)
-#     exit(0)
-
-# # Remove old incompatible versions
-# for old in core_jars:
-#     if old != target_jar:
-#         print(f'[entrypoint] Removing old protobuf JAR: {old.name}')
-#         old.unlink()
-
-# print(f'[entrypoint] protobuf-java-{util_version}.jar installed')
-# " 2>&1 || echo "[entrypoint] WARNING: protobuf fix skipped"
 
 # ── JAR deduplication helper (called before and after applying updates) ───────
 # Removes older versions of any JAR when multiple versions of the same lib exist.
@@ -270,21 +228,8 @@ session.screen0.workspaces: 1
 session.screen0.workspaceNames: Fiji
 EOF
 
-# ── Start virtual display ────────────────────────────────────────────────────
-# Dynamic resize strategy:
-#   1. Xvfb starts with a large framebuffer (3840x2160 = 4K maximum).
-#      This is the upper bound; actual working area is set by xrandr below.
-#   2. xrandr sets the initial working resolution (SCREEN_RESOLUTION env var).
-#      Java/AWT sees this size and adds scroll arrows when menus overflow it.
-#   3. x11vnc runs with -randr so it can relay DesktopSize resize requests
-#      from the noVNC client directly to xrandr — the display adapts to the
-#      browser viewport whenever the user resizes or moves to another monitor.
-#
-# Override initial resolution via: environment: - SCREEN_RESOLUTION=1920x1080
-SCREEN_RESOLUTION="${SCREEN_RESOLUTION:-1920x768}"
-echo "[entrypoint] Starting Xvfb on display :1 (framebuffer: 3840x2160, initial: ${SCREEN_RESOLUTION})..."
-Xvfb :1 -screen 0 3840x2160x24 -ac +extension GLX +render -noreset &
-
+echo "[entrypoint] Starting Xvfb on display :1..."
+Xvfb :1 -screen 0 2480x1200x24 -ac +extension GLX +render -noreset &
 #export DISPLAY=:1
 #echo "[entrypoint] Enabling keyboard repeat..."
 #xset r on
@@ -305,30 +250,21 @@ for i in $(seq 1 60); do
     sleep 0.5
 done
 
-# ── Set initial working resolution via xrandr ────────────────────────────────
-# xrandr --fb resizes the active framebuffer area within the 3840x2160 max.
-# Java/AWT queries this size at startup to determine screen bounds for menus.
-echo "[entrypoint] Setting initial display resolution to ${SCREEN_RESOLUTION}..."
-xrandr --display :1 --fb "${SCREEN_RESOLUTION}" 2>/dev/null \
-    && echo "[entrypoint] xrandr: active area set to ${SCREEN_RESOLUTION}" \
-    || echo "[entrypoint] WARNING: xrandr resize failed — using full framebuffer"
-
 # ── Start window manager ─────────────────────────────────────────────────────
 echo "[entrypoint] Starting fluxbox window manager..."
 fluxbox &
 sleep 1
 
 # ── Start VNC server ─────────────────────────────────────────────────────────
-# -randr: relay VNC DesktopSize pseudo-encoding requests from the noVNC client
-#         to xrandr so the display resizes dynamically with the browser window.
+
 echo "[entrypoint] Starting x11vnc on display :1..."
 if [ -n "$VNC_PASSWORD" ]; then
     mkdir -p /home/imagentj/.vnc
     x11vnc -storepasswd "$VNC_PASSWORD" /home/imagentj/.vnc/passwd 2>/dev/null
-    x11vnc -display :1 -forever -rfbauth /home/imagentj/.vnc/passwd -shared -rfbport 5900 -quiet -randr &
+    x11vnc -display :1 -forever -rfbauth /home/imagentj/.vnc/passwd -shared -rfbport 5900 -quiet &
     echo "[entrypoint] VNC started with password authentication"
 else
-    x11vnc -display :1 -forever -nopw -shared -rfbport 5900 -quiet -randr &
+    x11vnc -display :1 -forever -nopw -shared -rfbport 5900 -quiet &
     echo "[entrypoint] WARNING: VNC started WITHOUT password (set VNC_PASSWORD env var for security)"
 fi
 sleep 1
