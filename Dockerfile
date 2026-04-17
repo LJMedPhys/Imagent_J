@@ -20,10 +20,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # OpenGL
     libopengl0 libglx0 \
     # OpenCL CPU backend (required by CLIJ2 / BioVoxxel 3D Box without a GPU)
-    # POCL provides a software OpenCL device so CLIJ2 can execute on CPU
-    pocl-opencl-icd ocl-icd-libopencl1 \
+    # pocl-opencl-icd   — POCL software OpenCL device (CPU execution)
+    # ocl-icd-libopencl1 — ICD loader runtime (libOpenCL.so.1)
+    # ocl-icd-opencl-dev — provides the unversioned libOpenCL.so symlink that
+    #                       JOCL needs for dlopen("libOpenCL.so") to succeed
+    pocl-opencl-icd ocl-icd-libopencl1 ocl-icd-opencl-dev \
     # Utilities
     wget unzip procps curl \
+    # Locale support — ilastik4ij sets LC_ALL=en_US.UTF-8 in the subprocess
+    # environment; without this the locale warning is printed to every log line
+    locales \
+    && locale-gen en_US.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Install Fiji ──────────────────────────────────────────────────────────────
@@ -55,7 +62,10 @@ RUN printf '%s\n' \
     'BoneJ https://sites.imagej.net/BoneJ' \
     'OrientationJ http://sites.imagej.net/BIG-EPFL/' \
     'BigStitcher http://sites.imagej.net/BigStitcher/'\
+    'clij https://sites.imagej.net/clij/' \
     'clij2 https://sites.imagej.net/clij2/' \
+    'clijx-assistant https://sites.imagej.net/clijx-assistant/' \
+    'clijx-assistant-extensions https://sites.imagej.net/clijx-assistant-extensions/' \
     'BioVoxxel http://sites.imagej.net/BioVoxxel/'\
     'BioVoxxel-3D-Box http://sites.imagej.net/bv3dbox/'\
     > /tmp/sites.txt \
@@ -78,8 +88,8 @@ RUN cp -a /opt/Fiji.app/update/plugins/. /opt/Fiji.app/plugins/ 2>/dev/null || t
 # ── Remove SPIM_Registration.jar (superseded by BigStitcher's multiview-reconstruction) ──
 # BigStitcher installs multiview-reconstruction.jar which registers the same menu
 # commands as the base Fiji SPIM_Registration.jar, causing duplicate command warnings.
-RUN rm -f /opt/Fiji.app/plugins/SPIM_Registration.jar \
-    && echo "SPIM_Registration.jar removed (superseded by multiview-reconstruction)"
+RUN find /opt/Fiji.app/plugins -name 'SPIM_Registration*.jar' -delete \
+    && echo "SPIM_Registration JAR(s) removed (superseded by multiview-reconstruction)"
 
 # ── Fix 3D ImageJ Suite: move mcib3d-core to jars/ ───────────────────────────
 # The Tboudier update site places mcib3d-core under plugins/3D_ImageJ_Suite/.
@@ -201,12 +211,11 @@ RUN /opt/conda/bin/conda create -n ilastik \
 
 # ilastik-core has no console_scripts entry point — create run_ilastik.sh wrapper.
 # ilastik4ij calls this script directly for all headless prediction workflows.
-RUN printf '#!/bin/bash\nexec "%s" -m ilastik "$@"\n' \
+RUN printf '#!/bin/bash\n# ilastik headless wrapper — invoked by ilastik4ij for all prediction workflows.\n# Logs the full command so mismatched args are visible in docker compose logs.\necho "[ilastik-wrapper] args: $*" >&2\nexec "%s" -m ilastik "$@"\n' \
         "/opt/conda/envs/ilastik/bin/python" \
         > /opt/conda/envs/ilastik/bin/run_ilastik.sh \
     && chmod +x /opt/conda/envs/ilastik/bin/run_ilastik.sh \
-    #&& /opt/conda/envs/ilastik/bin/python -m ilastik --help >/dev/null 2>&1 \
-    && echo "[OK] ilastik headless verified"
+    && echo "[OK] ilastik headless wrapper created"
 
 ENV ILASTIK_EXECUTABLE=/opt/conda/envs/ilastik/bin/run_ilastik.sh
 
@@ -316,6 +325,19 @@ ENV JAVA_HOME=/opt/conda/envs/local_imagent_J
 ENV HOME=/home/imagentj
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────
+# ── noVNC default settings: remote resize ────────────────────────────────────
+# noVNC has three resize modes:
+#   off    — fixed canvas, scrollbars if content is larger than viewport
+#   scale  — browser-side CSS scaling (blurry, no real resolution change)
+#   remote — sends VNC DesktopSize request to x11vnc, which calls xrandr
+#            so the X display physically matches the browser viewport size
+#
+# We set remote resize as the default by redirecting the index to vnc.html
+# with the resize and autoconnect parameters baked in.  Users can still
+# override the setting via noVNC's settings panel (gear icon) at runtime.
+RUN printf '<!DOCTYPE html>\n<html>\n<head>\n  <title>AgentJ</title>\n  <meta charset="utf-8"/>\n  <meta http-equiv="refresh" content="0; url=vnc.html?resize=remote&autoconnect=true"/>\n</head>\n<body></body>\n</html>\n' \
+    > /usr/share/novnc/index.html
+
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 

@@ -48,7 +48,7 @@ dependencies:
       - aiofiles
       - aiohttp-retry
       - anthropic
-      - antlr4-python3-runtime==4.9.3
+      - antlr4-python3-runtime
       - beautifulsoup4
       - click
       - colorlog

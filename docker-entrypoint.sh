@@ -236,6 +236,19 @@ fi
 # e.g. commons-compress-1.8.jar (seed) + commons-compress-1.27.jar (update).
 deduplicate_jars "post-update"
 
+# ── Remove SPIM_Registration (superseded by BigStitcher's multiview-reconstruction) ──
+# BigStitcher installs multiview_reconstruction-*.jar which registers the same
+# commands as SPIM_Registration-*.jar. Removing here (not just in Dockerfile)
+# ensures the JAR is also gone from the fiji_plugins named volume, which shadows
+# the image layer and would otherwise keep the old JAR across container restarts.
+spim_removed=0
+while IFS= read -r f; do
+    echo "[entrypoint] Removing duplicate SPIM_Registration JAR: $(basename "$f")"
+    rm -f "$f"
+    spim_removed=$((spim_removed + 1))
+done < <(find "$FIJI_HOME/plugins" -name 'SPIM_Registration*.jar' 2>/dev/null)
+[ "$spim_removed" -gt 0 ] && echo "[entrypoint] Removed $spim_removed SPIM_Registration JAR(s)" || true
+
 # ── Remove empty/stub JARs left by Fiji updater ──────────────────────────────
 # Fiji's updater creates zero-byte stub files as deletion markers.
 # These cause ZipException noise at startup — remove them.
@@ -258,8 +271,19 @@ session.screen0.workspaceNames: Fiji
 EOF
 
 # ── Start virtual display ────────────────────────────────────────────────────
-echo "[entrypoint] Starting Xvfb on display :1..."
-Xvfb :1 -screen 0 2480x1200x24 -ac +extension GLX +render -noreset &
+# Dynamic resize strategy:
+#   1. Xvfb starts with a large framebuffer (3840x2160 = 4K maximum).
+#      This is the upper bound; actual working area is set by xrandr below.
+#   2. xrandr sets the initial working resolution (SCREEN_RESOLUTION env var).
+#      Java/AWT sees this size and adds scroll arrows when menus overflow it.
+#   3. x11vnc runs with -randr so it can relay DesktopSize resize requests
+#      from the noVNC client directly to xrandr — the display adapts to the
+#      browser viewport whenever the user resizes or moves to another monitor.
+#
+# Override initial resolution via: environment: - SCREEN_RESOLUTION=1920x1080
+SCREEN_RESOLUTION="${SCREEN_RESOLUTION:-1920x768}"
+echo "[entrypoint] Starting Xvfb on display :1 (framebuffer: 3840x2160, initial: ${SCREEN_RESOLUTION})..."
+Xvfb :1 -screen 0 3840x2160x24 -ac +extension GLX +render -noreset &
 
 #export DISPLAY=:1
 #echo "[entrypoint] Enabling keyboard repeat..."
@@ -281,21 +305,30 @@ for i in $(seq 1 60); do
     sleep 0.5
 done
 
+# ── Set initial working resolution via xrandr ────────────────────────────────
+# xrandr --fb resizes the active framebuffer area within the 3840x2160 max.
+# Java/AWT queries this size at startup to determine screen bounds for menus.
+echo "[entrypoint] Setting initial display resolution to ${SCREEN_RESOLUTION}..."
+xrandr --display :1 --fb "${SCREEN_RESOLUTION}" 2>/dev/null \
+    && echo "[entrypoint] xrandr: active area set to ${SCREEN_RESOLUTION}" \
+    || echo "[entrypoint] WARNING: xrandr resize failed — using full framebuffer"
+
 # ── Start window manager ─────────────────────────────────────────────────────
 echo "[entrypoint] Starting fluxbox window manager..."
 fluxbox &
 sleep 1
 
 # ── Start VNC server ─────────────────────────────────────────────────────────
+# -randr: relay VNC DesktopSize pseudo-encoding requests from the noVNC client
+#         to xrandr so the display resizes dynamically with the browser window.
 echo "[entrypoint] Starting x11vnc on display :1..."
 if [ -n "$VNC_PASSWORD" ]; then
-    # Create password file if VNC_PASSWORD is set
     mkdir -p /home/imagentj/.vnc
     x11vnc -storepasswd "$VNC_PASSWORD" /home/imagentj/.vnc/passwd 2>/dev/null
-    x11vnc -display :1 -forever -rfbauth /home/imagentj/.vnc/passwd -shared -rfbport 5900 -quiet &
+    x11vnc -display :1 -forever -rfbauth /home/imagentj/.vnc/passwd -shared -rfbport 5900 -quiet -randr &
     echo "[entrypoint] VNC started with password authentication"
 else
-    x11vnc -display :1 -forever -nopw -shared -rfbport 5900 -quiet &
+    x11vnc -display :1 -forever -nopw -shared -rfbport 5900 -quiet -randr &
     echo "[entrypoint] WARNING: VNC started WITHOUT password (set VNC_PASSWORD env var for security)"
 fi
 sleep 1
