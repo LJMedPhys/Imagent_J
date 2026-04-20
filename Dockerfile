@@ -237,11 +237,14 @@ RUN mkdir -p /opt/appose \
     && chmod 777 /opt/appose
 
 # ── TrackMate micromamba shim ─────────────────────────────────────────────────
-# TrackMate-Cellpose v8 hardcodes /usr/local/opt/micromamba/bin/micromamba and
-# always calls it with '-n base'. The shim intercepts this, strips the env argument,
-# and forces '-n cellpose' so the correct environment is always used.
+# TrackMate-Cellpose hardcodes the micromamba path. Older versions use
+# /usr/local/opt/micromamba/bin/micromamba; newer versions use /opt/micromamba/bin/micromamba.
+# Install the shim at both locations so either version works.
 COPY micromamba_shim.sh /usr/local/opt/micromamba/bin/micromamba
-RUN chmod +x /usr/local/opt/micromamba/bin/micromamba
+RUN chmod +x /usr/local/opt/micromamba/bin/micromamba \
+    && mkdir -p /opt/micromamba/bin \
+    && cp /usr/local/opt/micromamba/bin/micromamba /opt/micromamba/bin/micromamba \
+    && chmod +x /opt/micromamba/bin/micromamba
 
 # ── Fonts (separate layer - changes here won't invalidate conda cache) ───────
 RUN apt-get update && apt-get install -y --no-install-recommends \
