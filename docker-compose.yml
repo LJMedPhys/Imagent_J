@@ -42,8 +42,13 @@ services:
       # Source code mount for development (remove in production image)
       - ./src:/app/src:ro
       - ./gui_runner.py:/app/gui_runner.py:ro
+      - ./setup_wizard.py:/app/setup_wizard.py:ro
       # Folder to save data
       - ./data:/app/data
+      # User home — persists api_keys.env (outside /app/data so agent can't read it)
+      - imagentj_home:/home/imagentj
+      # Cellpose models — bind-mount so models are available without rebuilding
+      - ./models:/home/imagentj/.cellpose/models:ro
       # Folder for skills
       - ./skills:/app/skills:ro
       # Entrypoint bind-mount so changes take effect without rebuilding
@@ -81,6 +86,7 @@ volumes:
   saved_scripts:
   qdrant_data:
   appose_envs:
+  imagentj_home:
 
 networks:
   imagent_net:

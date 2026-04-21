@@ -143,7 +143,7 @@ else:
     raise RuntimeError("No API key found. Set OPEN_ROUTER_API_KEY or OPENAI_API_KEY.")
 
 llm_supervisor = ChatOpenAI(
-    model="gpt-4o",
+    model="gpt-4.1",
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
@@ -152,7 +152,7 @@ llm_supervisor = ChatOpenAI(
 )
 
 llm_worker = ChatOpenAI(
-    model="gpt-4o",
+    model="gpt-4.1",
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
@@ -161,7 +161,7 @@ llm_worker = ChatOpenAI(
 )
 
 llm_analyst = ChatOpenAI(
-    model="gpt-4o-mini",
+    model="gpt-4.1",
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
@@ -170,7 +170,7 @@ llm_analyst = ChatOpenAI(
 )
 
 llm_nano = ChatOpenAI(
-    model="gpt-4o-mini",
+    model="gpt-4.1",
     api_key=api_key,
     base_url=base_url,
     temperature=0.,

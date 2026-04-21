@@ -37,34 +37,39 @@ log = logging.getLogger("imagentj")
 
 CHATS_DIR = Path(os.environ.get("CHAT_DATA_PATH", "/app/data/chats"))
 
-PRICE_TABLE: dict[str, tuple[float, float]] = {
-    # model-name-substring        input   output
-    "gpt-4o":                    (2.50,  10.00),
-    "gpt-4o-mini":               (0.15,   0.60),
-    "gpt-4.1":                   (2.00,   8.00),
-    "default":                   (1.00,   3.00),   # fallback
-    "gemini-3-flash-preview":    (0.50,   3.00),   
-    "kimi-k2.5":                 (0.45,   2.25),
-    "claude-opus-4.6":           (10.00,  37.50),
-    "deepseek-v3.2":             (0.25,   0.40),
-    "openai/gpt-5.2":            (1.75,   14.00),
-    "anthropic/claude-haiku-4.5":(1.00,   5.00),
-    "openai/gpt-5.3-codex":      (1.75,   14.00),
-    "qwen/qwen3-235b-a22b-2507": (0.071,   0.10),
-    "moonshotai/kimi-k2.5":      (0.45,   2.25),
-    "z-ai/glm-5":                (0.95,   2.55),
-    "mistralai/mistral-small-3.2-24b-instruct": (0.075, 0.2),
-    "google/gemini-2.5-pro" :    (1.25,   10.00),
-    "google/gemini-3.1-flash-lite-preview": (0.25,   1.50),
-    "openai/gpt-5-nano":          (0.05,   0.40),
-    "anthropic/claude-opus-4.6":  (5.00,  25.00),
-    "anthropic/claude-sonnet-4.6":(3.00,   15.00),
-    "anthropic/claude-haiku-4.5": (1.00,   5.00),
-    "google/gemini-3-pro-preview": (2.00,   12.00),
-    "google/gemini-3.1-pro-preview-customtools": (2.00,   12.00),
+PRICE_TABLE: dict[str, tuple[float, float, float]] = {
+    # model-name-substring                          input    output  cache_factor
+    # cache_factor = fraction of p_in charged for cached tokens (None = no caching)
+    "gpt-4o-mini":               (0.15,   0.60,  0.50),
+    "gpt-4o":                    (2.50,  10.00,  0.50),
+    "gpt-4.1-nano":              (0.10,   0.40,  0.25),
+    "gpt-4.1-mini":              (0.40,   1.60,  0.25),
+    "gpt-4.1":                   (2.00,   8.00,  0.25),
+    "o4-mini":                   (1.10,   4.40,  0.50),
+    "o4":                        (10.00, 40.00,  0.50),
+    "openai/gpt-5-nano":         (0.05,   0.40,  0.50),
+    "openai/gpt-5.2":            (1.75,  14.00,  0.50),
+    "openai/gpt-5.3-codex":      (1.75,  14.00,  0.50),
+    "openai/gpt-5":              (2.00,  16.00,  0.50),  # 5.x fallback
+    "default":                   (1.00,   3.00,  None),  # fallback, no cache discount
+    "gemini-3-flash-preview":    (0.50,   3.00,  None),
+    "kimi-k2.5":                 (0.45,   2.25,  None),
+    "claude-opus-4.6":           (10.00, 37.50,  None),
+    "deepseek-v3.2":             (0.25,   0.40,  None),
+    "anthropic/claude-haiku-4.5":(1.00,   5.00,  None),
+    "qwen/qwen3-235b-a22b-2507": (0.071,  0.10,  None),
+    "moonshotai/kimi-k2.5":      (0.45,   2.25,  None),
+    "z-ai/glm-5":                (0.95,   2.55,  None),
+    "mistralai/mistral-small-3.2-24b-instruct": (0.075, 0.2, None),
+    "google/gemini-2.5-pro":     (1.25,  10.00,  None),
+    "google/gemini-3.1-flash-lite-preview": (0.25, 1.50, None),
+    "anthropic/claude-opus-4.6": (5.00,  25.00,  None),
+    "anthropic/claude-sonnet-4.6":(3.00, 15.00,  None),
+    "google/gemini-3-pro-preview":(2.00, 12.00,  None),
+    "google/gemini-3.1-pro-preview-customtools": (2.00, 12.00, None),
 }
 
-def _price_for_model(model_name: str) -> tuple[float, float]:
+def _price_for_model(model_name: str) -> tuple[float, float, float | None]:
     lower = model_name.lower()
     for key, prices in PRICE_TABLE.items():
         if key != "default" and key in lower:
@@ -665,14 +670,29 @@ class UsageTrackerCallback(BaseCallbackHandler):
                     added_in  += tok.get("prompt_tokens",     tok.get("input_tokens",  0))
                     added_out += tok.get("completion_tokens", tok.get("output_tokens", 0))
 
+        # Extract cached input tokens for prompt-cache discount (OpenAI direct only)
+        cached_in = 0
+        if isinstance(usage, dict):
+            cached_in = (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
+        if not cached_in:
+            for gen_list in response.generations:
+                for gen in gen_list:
+                    meta = getattr(getattr(gen, "message", None), "response_metadata", {}) or {}
+                    tok  = meta.get("token_usage") or meta.get("usage") or {}
+                    cached_in = max(cached_in, (tok.get("prompt_tokens_details") or {}).get("cached_tokens", 0))
+
         if added_in or added_out:
             with self._m._lock:
                 self._m.input_tokens  += added_in
                 self._m.output_tokens += added_out
                 if not self._or_fetcher:
                     # Estimated cost — only applied when OR key is not set
-                    p_in, p_out = _price_for_model(model)
-                    cost = (added_in * p_in + added_out * p_out) / 1_000_000
+                    p_in, p_out, cache_factor = _price_for_model(model)
+                    non_cached = added_in - cached_in
+                    if cache_factor is not None and cached_in:
+                        cost = (non_cached * p_in + cached_in * p_in * cache_factor + added_out * p_out) / 1_000_000
+                    else:
+                        cost = (added_in * p_in + added_out * p_out) / 1_000_000
                     self._m.cost_usd += cost
 
             # ── per-query model breakdown (tokens always; cost only estimated path)

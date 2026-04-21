@@ -85,6 +85,16 @@ RUN cp -a /opt/Fiji.app/update/plugins/. /opt/Fiji.app/plugins/ 2>/dev/null || t
     && cp -a /opt/Fiji.app/update/lib/.     /opt/Fiji.app/lib/     2>/dev/null || true \
     && rm -rf /opt/Fiji.app/update/*
 
+# ── Pin TrackMate-StarDist to 1.2.0 ──────────────────────────────────────────
+# 2.0.0 has a ClassCastException in setSettings: TARGET_CHANNEL is deserialized
+# as String by TrackMate's default XML marshal/unmarshal (factory doesn't override
+# them), then cast to Integer — crash. 1.2.0 uses SCIJAVA_PYTHON directly
+# (set to /opt/conda/envs/stardist/bin/python) and avoids the issue entirely.
+# RUN rm -f /opt/Fiji.app/jars/TrackMate-StarDist-2.0.0.jar \
+#     && wget -q "https://sites.imagej.net/TrackMate-StarDist/jars/TrackMate-StarDist-1.2.0.jar" \
+#          -O /opt/Fiji.app/jars/TrackMate-StarDist-1.2.0.jar \
+#     && echo "TrackMate-StarDist pinned to 1.2.0"
+
 # ── Remove SPIM_Registration.jar (superseded by BigStitcher's multiview-reconstruction) ──
 # BigStitcher installs multiview-reconstruction.jar which registers the same menu
 # commands as the base Fiji SPIM_Registration.jar, causing duplicate command warnings.
@@ -242,9 +252,11 @@ RUN mkdir -p /opt/appose \
 # Install the shim at both locations so either version works.
 COPY micromamba_shim.sh /usr/local/opt/micromamba/bin/micromamba
 RUN chmod +x /usr/local/opt/micromamba/bin/micromamba \
+    && ln -sf micromamba /usr/local/opt/micromamba/bin/conda \
     && mkdir -p /opt/micromamba/bin \
     && cp /usr/local/opt/micromamba/bin/micromamba /opt/micromamba/bin/micromamba \
-    && chmod +x /opt/micromamba/bin/micromamba
+    && chmod +x /opt/micromamba/bin/micromamba \
+    && ln -sf micromamba /opt/micromamba/bin/conda
 
 # ── Fonts (separate layer - changes here won't invalidate conda cache) ───────
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -320,6 +332,24 @@ RUN mkdir -p /app/qdrant_data /home/imagentj/.cellpose \
     && chown -R imagentj:imagentj /app /home/imagentj /app/qdrant_data \
     && chown -R imagentj:imagentj /opt/Fiji.app \
     && chown -R imagentj:imagentj /opt/appose
+
+# ── Cellpose models ───────────────────────────────────────────────────────────
+# Classic models (cyto, cyto2, cyto3, nuclei, bact, etc.) are baked in from the
+# local models/ folder — no network required. cpsam (Cellpose-SAM) is not yet
+# in the archive; attempt a non-fatal download so it installs once the server
+# recovers, without blocking the build.
+RUN mkdir -p /home/imagentj/.cellpose/models
+COPY models/ /home/imagentj/.cellpose/models/
+# Uncomment once cellpose.org/models/cpsam is back up:
+RUN HOME=/home/imagentj /opt/conda/envs/cellpose/bin/python -c \
+        "from cellpose import models; models.Cellpose(model_type='cpsam')" \
+    || echo "[cellpose] WARNING: cpsam unavailable — will download at first use"
+RUN chown -R imagentj:imagentj /home/imagentj/.cellpose
+
+# ── Seed home dir for named-volume persistence ────────────────────────────────
+# imagentj_home is a named volume mounted at /home/imagentj. It starts empty,
+# shadowing these baked-in config files. The entrypoint seeds it on first start.
+RUN cp -a /home/imagentj /home/imagentj.seed
 
 # ── Environment defaults ─────────────────────────────────────────────────────
 ENV DISPLAY=:1

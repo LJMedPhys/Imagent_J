@@ -45,6 +45,7 @@ PYEOF
 
 _seed_volume "fiji_jars"    "$FIJI_HOME/jars.seed"    "$FIJI_HOME/jars"    "$FIJI_HOME/jars/.seeded"
 _seed_volume "fiji_plugins" "$FIJI_HOME/plugins.seed" "$FIJI_HOME/plugins" "$FIJI_HOME/plugins/.seeded"
+_seed_volume "imagentj_home" "/home/imagentj.seed" "/home/imagentj" "/home/imagentj/.seeded"
 
 # ── Clean up stale X11 lock files from previous runs ─────────────────────────
 # This prevents "Server is already active for display 1" errors on restart
@@ -156,6 +157,10 @@ find "$FIJI_HOME/update" -type f -name "*.jar" | while read -r f; do
             echo "[entrypoint] Skipping $base (pyimagej 1.7.0 compatibility)"
             rm "$f"
             ;;
+        # TrackMate-StarDist-*)
+        #     echo "[entrypoint] Skipping $base (pinned to 1.2.0 — 2.0.0 has ClassCastException bug)"
+        #     rm "$f"
+        #     ;;
     esac
 done
 
@@ -284,8 +289,28 @@ python3 -c "import langgraph.checkpoint.sqlite" 2>/dev/null || {
 }
 
 # ── Validate API key ─────────────────────────────────────────────────────────
-if [ -z "$OPENAI_API_KEY" ]; then
-    echo "[entrypoint] WARNING: OPENAI_API_KEY is not set. The agent will not work without it."
+API_KEYS_FILE=/home/imagentj/api_keys.env
+if [ -f "$API_KEYS_FILE" ]; then
+    echo "[entrypoint] Sourcing persisted API keys from $API_KEYS_FILE"
+    . "$API_KEYS_FILE"
+fi
+
+# ── Run setup wizard if no key is configured ────────────────────────────────
+if [ -z "$OPENAI_API_KEY" ] && [ -z "$OPEN_ROUTER_API_KEY" ]; then
+    echo "[entrypoint] No API key found — launching setup wizard on display :1"
+    python /app/setup_wizard.py || true
+
+    if [ -f "$API_KEYS_FILE" ]; then
+        echo "[entrypoint] Sourcing API keys written by setup wizard..."
+        . "$API_KEYS_FILE"
+    fi
+fi
+
+# ── Final key check (warn, never block) ─────────────────────────────────────
+if [ -z "$OPENAI_API_KEY" ] && [ -z "$OPEN_ROUTER_API_KEY" ]; then
+    echo "[entrypoint] WARNING: No API key is set. The agent will not work."
+    echo "[entrypoint]          Set OPENAI_API_KEY or OPEN_ROUTER_API_KEY in .env, or"
+    echo "[entrypoint]          place 'export OPENAI_API_KEY=...' in /home/imagentj/api_keys.env"
 fi
 
 # ── Launch the application ───────────────────────────────────────────────────
