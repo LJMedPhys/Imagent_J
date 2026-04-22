@@ -48,7 +48,7 @@ services:
       # User home — persists api_keys.env (outside /app/data so agent can't read it)
       - imagentj_home:/home/imagentj
       # Cellpose models — bind-mount so models are available without rebuilding
-      - ./models:/home/imagentj/.cellpose/models:ro
+      - ./models:/home/imagentj/.cellpose/models
       # Folder for skills
       - ./skills:/app/skills:ro
       # Entrypoint bind-mount so changes take effect without rebuilding
