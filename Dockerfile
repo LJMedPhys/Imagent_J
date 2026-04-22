@@ -32,6 +32,36 @@ RUN wget -q https://downloads.imagej.net/fiji/latest/fiji-latest-linux64-jdk.zip
 
 ENV FIJI_PATH=/opt/Fiji.app
 
+ARG IMGLIB2_UNSAFE_TAG=imglib2-unsafe-1.1.0
+ARG IMGLIB2_IMGLYB_TAG=imglib2-imglyb-1.1.0
+
+# Bundle ImgLib2 helper jars locally so PyImageJ does not need to fetch them
+# from maven.scijava.org during first startup.
+RUN mkdir -p /opt/imagentj-bootstrap/fiji-jars; \
+    set -eux; \
+    build_dir="$(mktemp -d)"; \
+    javac_bin="$(find /opt/Fiji.app/java -path '*/bin/javac' | head -n1)"; \
+    jar_bin="$(find /opt/Fiji.app/java -path '*/bin/jar' | head -n1)"; \
+    fiji_jars="$(find /opt/Fiji.app/jars -name '*.jar' -printf '%p:' | sed 's/:$//')"; \
+    curl -fsSL "https://github.com/imglib/imglib2-unsafe/archive/refs/tags/${IMGLIB2_UNSAFE_TAG}.zip" -o "${build_dir}/imglib2-unsafe.zip"; \
+    unzip -q "${build_dir}/imglib2-unsafe.zip" -d "${build_dir}"; \
+    unsafe_src="$(find "${build_dir}" -maxdepth 1 -type d -name 'imglib*unsafe*' | head -n1)"; \
+    mkdir -p "${build_dir}/unsafe-classes"; \
+    find "${unsafe_src}/src/main/java" -name '*.java' > "${build_dir}/unsafe-sources.txt"; \
+    "${javac_bin}" -proc:none -cp "${fiji_jars}" -d "${build_dir}/unsafe-classes" @"${build_dir}/unsafe-sources.txt"; \
+    "${jar_bin}" --create --file /opt/Fiji.app/jars/imglib2-unsafe-1.1.0-local.jar -C "${build_dir}/unsafe-classes" .; \
+    cp /opt/Fiji.app/jars/imglib2-unsafe-1.1.0-local.jar /opt/imagentj-bootstrap/fiji-jars/; \
+    curl -fsSL "https://github.com/imglib/imglib2-imglyb/archive/refs/tags/${IMGLIB2_IMGLYB_TAG}.zip" -o "${build_dir}/imglib2-imglyb.zip"; \
+    unzip -q "${build_dir}/imglib2-imglyb.zip" -d "${build_dir}"; \
+    imglyb_src="$(find "${build_dir}" -maxdepth 1 -type d -name 'imglib*imglyb*' | head -n1)"; \
+    python -c "from pathlib import Path; p = Path(r'${imglyb_src}/src/main/java/net/imglib2/python/Helpers.java'); text = p.read_text(); old = 'public static < T extends NativeType< T >, A > CachedCellImg< T, A > imgFromFunc('; new = 'public static < T extends NativeType< T >, A extends net.imglib2.img.basictypeaccess.DataAccess > CachedCellImg< T, A > imgFromFunc('; assert old in text, 'expected signature not found'; p.write_text(text.replace(old, new, 1))"; \
+    mkdir -p "${build_dir}/imglyb-classes"; \
+    find "${imglyb_src}/src/main/java" -name '*.java' > "${build_dir}/imglyb-sources.txt"; \
+    "${javac_bin}" -proc:none -cp "/opt/Fiji.app/jars/imglib2-unsafe-1.1.0-local.jar:${fiji_jars}" -d "${build_dir}/imglyb-classes" @"${build_dir}/imglyb-sources.txt"; \
+    "${jar_bin}" --create --file /opt/Fiji.app/jars/imglib2-imglyb-1.1.0-local.jar -C "${build_dir}/imglyb-classes" .; \
+    cp /opt/Fiji.app/jars/imglib2-imglyb-1.1.0-local.jar /opt/imagentj-bootstrap/fiji-jars/; \
+    rm -rf "${build_dir}"
+
 # ── Conda environment (heaviest layer - keep stable) ─────────────────────────
 COPY environment.yml /tmp/environment.yml
 RUN conda env create -f /tmp/environment.yml \
@@ -66,7 +96,7 @@ RUN mkdir -p /app/qdrant_data \
 # ── Environment defaults ─────────────────────────────────────────────────────
 ENV DISPLAY=:1
 ENV QT_QPA_PLATFORM=xcb
-ENV JAVA_HOME=/opt/conda/envs/local_imagent_J
+ENV JAVA_HOME=/opt/conda/envs/local_imagent_J/lib/jvm
 ENV HOME=/home/imagentj
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────

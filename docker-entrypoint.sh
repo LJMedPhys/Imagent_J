@@ -9,6 +9,7 @@ rm -f /tmp/.X11-unix/X1
 # ── Apply pending Fiji updates ───────────────────────────────────────────────
 # Fiji stages updates in /opt/Fiji.app/update/ - move them to their destinations
 FIJI_HOME=/opt/Fiji.app
+BOOTSTRAP_JARS_DIR=/opt/imagentj-bootstrap/fiji-jars
 if [ -d "$FIJI_HOME/update" ] && [ "$(ls -A $FIJI_HOME/update 2>/dev/null)" ]; then
     echo "[entrypoint] Applying pending Fiji updates..."
     # Copy plugins
@@ -31,6 +32,15 @@ if [ -d "$FIJI_HOME/update" ] && [ "$(ls -A $FIJI_HOME/update 2>/dev/null)" ]; t
     rm -rf "$FIJI_HOME/update/"*
     echo "[entrypoint] Updates applied successfully"
 fi
+
+# ── Restore bundled Fiji helper jars into runtime volumes if needed ──────────
+mkdir -p "$FIJI_HOME/jars"
+for jar_name in imglib2-unsafe-1.1.0-local.jar imglib2-imglyb-1.1.0-local.jar; do
+    if [ ! -f "$FIJI_HOME/jars/$jar_name" ] && [ -f "$BOOTSTRAP_JARS_DIR/$jar_name" ]; then
+        echo "[entrypoint] Restoring bundled Fiji helper jar: $jar_name"
+        cp -fv "$BOOTSTRAP_JARS_DIR/$jar_name" "$FIJI_HOME/jars/$jar_name"
+    fi
+done
 
 # ── Prepare runtime directories (tmpfs mounts start empty) ───────────────────
 mkdir -p /tmp/.X11-unix
