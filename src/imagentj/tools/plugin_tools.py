@@ -81,42 +81,42 @@ def search_fiji_plugins(query: str) -> list:
     Use this before delegating complex image analysis tasks to find existing Fiji plugins.
     """
     # Try Qdrant-based semantic search first
-    if is_plugin_db_available():
-        try:
-            from ..rag.RAG import hybrid_search_with_rrf, apply_rrf
+    # if is_plugin_db_available():
+    #     try:
+    #         from ..rag.RAG import hybrid_search_with_rrf, apply_rrf
 
-            # Expand the query for better retrieval
-            queries = get_expanded_queries(query)
+    #         # Expand the query for better retrieval
+    #         queries = get_expanded_queries(query)
 
-            all_points = []
-            for q in queries:
-                points = hybrid_search_with_rrf(q, collection_name=PLUGINS_COLLECTION_NAME, limit=5)
-                all_points.extend(points)
+    #         all_points = []
+    #         for q in queries:
+    #             points = hybrid_search_with_rrf(q, collection_name=PLUGINS_COLLECTION_NAME, limit=5)
+    #             all_points.extend(points)
 
-            # RRF re-ranking across all query variants
-            final_results = apply_rrf(all_points, k=60)[:5]
+    #         # RRF re-ranking across all query variants
+    #         final_results = apply_rrf(all_points, k=60)[:5]
 
-            results = []
-            for p in final_results:
-                meta = p.payload.get("metadata", {})
-                results.append({
-                    "name": meta.get("name"),
-                    "description": meta.get("description"),
-                    "category": meta.get("category"),
-                    "input_data": meta.get("input_data"),
-                    "output_data": meta.get("output_data"),
-                    "use_when": meta.get("use_when"),
-                    "do_not_use_when": meta.get("do_not_use_when"),
-                    "typical_use_cases": meta.get("typical_use_cases"),
-                    "update_site_name": meta.get("update_site_name"),
-                    "update_site_url": meta.get("update_site_url"),
-                    "documentation_url": meta.get("documentation_url"),
-                    "score": p.score,
-                })
+    #         results = []
+    #         for p in final_results:
+    #             meta = p.payload.get("metadata", {})
+    #             results.append({
+    #                 "name": meta.get("name"),
+    #                 "description": meta.get("description"),
+    #                 "category": meta.get("category"),
+    #                 "input_data": meta.get("input_data"),
+    #                 "output_data": meta.get("output_data"),
+    #                 "use_when": meta.get("use_when"),
+    #                 "do_not_use_when": meta.get("do_not_use_when"),
+    #                 "typical_use_cases": meta.get("typical_use_cases"),
+    #                 "update_site_name": meta.get("update_site_name"),
+    #                 "update_site_url": meta.get("update_site_url"),
+    #                 "documentation_url": meta.get("documentation_url"),
+    #                 "score": p.score,
+    #             })
 
-            return results
-        except Exception as e:
-            print(f"Qdrant search failed, falling back to keyword search: {e}")
+    #         return results
+    #     except Exception as e:
+    #         print(f"Qdrant search failed, falling back to keyword search: {e}")
 
     # Fallback to keyword-based search on JSON registry
     return _search_registry_fallback(query)

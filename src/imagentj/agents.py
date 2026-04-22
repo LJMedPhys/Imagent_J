@@ -656,7 +656,7 @@ def init_agent():
         debug=False,
         backend=fs_backend,
         checkpointer=checkpointer_supervisor,
-        skills=["/app/skills/supervisor_phases"],
+        skills=["/app/skills/workflow"],
     )
 
     return supervisor, checkpointer_supervisor, shared_metrics, shared_bridge, shared_tracker

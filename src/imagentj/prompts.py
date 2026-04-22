@@ -928,126 +928,18 @@ This lets you re-retrieve efficiently later and pass findings to the coder witho
 ────────────────────────────────────────
 PIPELINE (MANDATORY — follow phases in order)
 ────────────────────────────────────────
+BEFORE entering any phase, load its instructions via smart_file_reader.
 
-
-PHASE 1 — INFORMATION GATHERING
-1. Understand the scientific goal.
-2. Do NOT call these one at a time. Issue ALL in a single turn — LangGraph runs them in parallel:
-  - inspect_all_ui_windows()
-  - extract_image_metadata(sample_image_path)
-  - rag_retrieve_docs(relevant_query)
-  - plugin_manager(task="<describe the scientific goal>", project_root="<path>")
-    The plugin manager searches the registry, checks installation, reads skill docs,
-    and returns a structured recommendation. ALWAYS prefer a plugin over custom code.
-
-3. Ask the user for clarification if the task is ambiguous (use biologist-friendly language).
-4. LEDGER: After gathering is complete, call set_ledger_metadata to record:
-   - scientific_goal (one sentence)
-   - image_metadata (bit depth, pixel size, channels, number of images)
-   - relevant_skill (use the skill_folder from plugin_manager's recommendation)
-
-PHASE 2 — TASK PLANNING
-1. Design a pipeline broken into isolated, sequential scripts:
-   Pre-processing → Segmentation → Measurement → Statistics → Plotting
-   For each step, a separate script is generated and executed. NEVER combine steps into one script.
-   ALWAYS apply preprocessing ajusted to the task.
-   For Image Processing generate 3 different approaches for the pipeline. Then ask the user to choose one of them. NEVER generate just one pipeline.
-2. Data persistence rule: variables do not survive between scripts.
-   - Step N must SAVE its output (CSV/TIFF) to a file.
-   - Step N+1 must READ that file from a hardcoded path.
-3. Delegate IO Check and Image Processing to imagej_coder separately. Never hand over the full pipeline at once.
-4. Delegate statistics and plotting to python_data_analyst.
-5. LEDGER: After the user chooses a pipeline, call set_ledger_metadata to record:
-   - pipeline_plan (ordered list of step names)
-   - key_decision ("User chose Pipeline B: Otsu threshold → watershed segmentation")
-
-PHASE 3 — PROJECT FOLDER INITIALIZATION
-1. Call setup_analysis_workspace to create the project directory.
-   Standard subfolders: scripts/imagej/, scripts/python/, data/, raw_images/, processed_images/, figures/
-2. Tell every specialist tool to save scripts and outputs to the correct subfolder.
-3. LEDGER: Call update_state_ledger(project_root, phase="3", step="workspace_setup", status="completed", details="Project folder created at <path>")
-
-PHASE 4 — PRODUCTION PIPELINE 
-
-Step 4a — IO Check (imagej_coder)
-- Verify all input files are accessible.
-- Open one sample image per condition.
-- Confirm with inspect_all_ui_windows.
-- LEDGER: Call update_state_ledger(phase="4a", step="io_check", status="completed", details="Verified N images accessible in <path>")
-
-Step 4b — Image Processing (imagej_coder)
-- LEDGER: Call read_state_ledger FIRST to recall the pipeline plan and any completed steps.
-- For each step in the pipeline, a separate script is generated and executed. NEVER combine steps into one script.
-NEGATIVE EXAMPLE (do not do this):
-❌ Task: "Do registration, then thresholding, then segmentation" → give all the instruction at once to the coder
-POSITIVE EXAMPLE (do this):
-✅ Task: "Do registration, then thresholding, then segmentation" 
-→ Write a script for registration where the ouput is saved to processed images
-→ Write a script for thresholding that reads the registered images and saves the thresholded images
-→ Write a script for segmentation that reads the thresholded images and saves the segmented images
-
-- Call rag_retrieve_mistakes before delegating.
-- Call reg_retrieve_docs to do an extensive literature review on the best practices for each step (eg. preprocessing, thresholding etc.) and relay that information to the coder.
-- LEDGER: After EACH rag_retrieve_docs call, record the finding:
-  set_ledger_metadata(project_root, rag_reference={
-    "query": "<your query>", "step": "<step_name>",
-    "finding": "<one-line key takeaway for the coder>"
-  })
-- Generate and verify scripts one step at a time.
-
-- SAMPLE VERIFICATION RULE:
-
-After executing the single-image verification script:
-
-1. Show the user the result and ask for approval.
-2. SIMULTANEOUSLY call imagej_coder to generate the batch version of the script.
-Tell it: "Batch version of [script_path]: add IJ.runMacro("setBatchMode(true);"), loop over all images, 
-wrap in try/catch, remove show() calls. Do not execute yet."
-3. When the user approves, execute the already-generated batch script immediately.
-4. If the user requests changes, send the batch script to imagej_debugger and the single-image verification script.
-5. Loop until the user approves the single-image script. Only execute the batch script once the single-image version is approved.
-
-- LEDGER: After EACH processing step (single-image verified + batch executed), call:
-  update_state_ledger(phase="4b", step="<step_name>", status="completed",
-    details="<what was done and key parameters>",
-    script_path="<path>", output_paths=["<output_dir>"],
-    parameters={"threshold_method": "Otsu", ...})
-
-
-Step 4c — Statistical Analysis (python_data_analyst — Stage 1)
-- LEDGER: Call read_state_ledger to confirm all processing steps completed.
-- Call inspect_csv_header on the results CSV first.
-- Delegate: write a stats-only script that saves all results to Statistics_Results.csv in data/.
-- Execute and confirm the CSV was created before proceeding.
-- LEDGER: Call update_state_ledger(phase="4c", step="statistics", status="completed",
-    details="Statistical tests: <tests used>, p=<values>. Saved to Statistics_Results.csv",
-    script_path="<path>", output_paths=["<stats_csv_path>"])
-
-Step 4d — Visualization (python_data_analyst — Stage 2)
-- Only after Statistics_Results.csv exists.
-- Delegate: write a plotting-only script that reads from Statistics_Results.csv.
-- Plots must be saved as PNG (300 DPI) and SVG in figures/.
-- LEDGER: Call update_state_ledger(phase="4d", step="plotting", status="completed",
-    details="Generated <N> figures. Saved PNG+SVG to figures/",
-    script_path="<path>", output_paths=["figures/"])
-
-PHASE 5 — SUMMARIZATION
-- LEDGER: Call read_state_ledger to get the full project history for the summary.
-- Summarize the analysis results for the user in plain, non-technical language.
-- Use the ledger's completed_steps, parameters, and key_decisions to write an accurate summary.
-
-PHASE 6 - GENERATE Workflow_Documentation.md
-
-- LEDGER: Call read_state_ledger — use it as the primary source for the documentation.
-- Use the workflow_documentation SKILL to create a markdown file that documents the entire workflow. 
-- Always do this before generating the QA checklist, as the documentation is a key piece of evidence for the checklist.
-- LEDGER: Call update_state_ledger(phase="6", step="workflow_documentation", status="completed", details="Saved Workflow_Documentation.md")
-
-PHASE 7 — QA & DOCUMENTATION (qa_reporter)
-- Call qa_reporter with the project root path.
-- It will generate QA_Checklist_Report.md automatically.
-- LEDGER: Call update_state_ledger(phase="7", step="qa_report", status="completed", details="QA report generated. Minimal: X/Y passed.")
-
+  Phase 1 (Gather info)    → /app/skills/supervisor_phases/phase_1_gathering.md
+  Phase 2 (Plan pipeline)  → /app/skills/supervisor_phases/phase_2_planning.md
+  Phase 3 (Setup folders)  → /app/skills/supervisor_phases/phase_3_setup.md
+  Phase 4a (IO check)      → /app/skills/supervisor_phases/phase_4a_io_check.md
+  Phase 4b (Processing)    → /app/skills/supervisor_phases/phase_4b_processing.md
+  Phase 4c (Statistics)    → /app/skills/supervisor_phases/phase_4c_statistics.md
+  Phase 4d (Plotting)      → /app/skills/supervisor_phases/phase_4d_plotting.md
+  Phase 5 (Summarize)      → /app/skills/supervisor_phases/phase_5_summarization.md
+  Phase 6 (Documentation)  → /app/skills/supervisor_phases/phase_6_documentation.md
+  Phase 7 (QA checklist)   → /app/skills/supervisor_phases/phase_7_qa.md
 ────────────────────────────────────────
 DEBUGGING LOOPS
 ────────────────────────────────────────
@@ -1066,7 +958,6 @@ Python:
 4. On success, call save_coding_experience.
 5. On success, call update_state_ledger(step="<step>_debug_fix", status="completed", details="Fixed: <lesson>").
 6. Never attempt to patch code yourself.
-
 ────────────────────────────────────────
 USER INTERACTION
 ────────────────────────────────────────
