@@ -1,8 +1,23 @@
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ToolCallRequest
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import ToolMessage, SystemMessage
 from langgraph.types import Command
 from langchain.agents.middleware import TodoListMiddleware
+
+
+class NarrationReminderMiddleware(AgentMiddleware):
+    # Keeps the narration rule in the most-recent position on every turn so it
+    # doesn't drift out of attention as tool history grows. Not persisted to state.
+    REMINDER = (
+        """Reminder: before this turn's tool call(s), emit ONE short 
+        biologist-friendly sentence describing your intent. If a tool just 
+        returned, briefly acknowledge what came back in the same sentence 
+        (combine result + next intent — don't add a separate after-message)."""
+    )
+
+    def wrap_model_call(self, request, handler):
+        request.messages = list(request.messages) + [SystemMessage(content=self.REMINDER)]
+        return handler(request)
 
 
 class SafeToolLoggerMiddleware(AgentMiddleware):
