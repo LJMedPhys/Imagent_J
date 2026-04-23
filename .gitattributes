@@ -12,5 +12,8 @@ Dockerfile              text eol=lf
 # Python source — LF in the repo, LF inside the container.
 *.py                text eol=lf
 
+# Qdrant prebuilt vectorstore — large binary, tracked via Git LFS.
+*.sqlite filter=lfs diff=lfs merge=lfs -text
+
 # Default: let git auto-detect text vs binary; normalise text to LF on commit.
 *                   text=auto eol=lf
