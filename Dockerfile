@@ -52,7 +52,6 @@ RUN printf '%s\n' \
     'StarDist https://sites.imagej.net/StarDist/' \
     'DeepImageJ https://sites.imagej.net/DeepImageJ/' \
     'Neuroanatomy https://sites.imagej.net/Neuroanatomy/' \
-    #'ilastik https://sites.imagej.net/Ilastik/' \
     'TrackMate-StarDist https://sites.imagej.net/TrackMate-StarDist/' \
     'TrackMate-MorphoLibJ https://sites.imagej.net/TrackMate-MorphoLibJ/' \
     'TrackMate-Ilastik https://sites.imagej.net/TrackMate-Ilastik/' \
@@ -243,26 +242,6 @@ RUN /opt/conda/envs/stardist/bin/python -c \
 # TrackMate-StarDist looks for a Python executable via this env var
 ENV SCIJAVA_PYTHON=/opt/conda/envs/stardist/bin/python
 
-# ── Conda env: ilastik  (headless ilastik, served by TrackMate-Ilastik) ──────
-# ilastik-forge ships a self-contained ilastik-core build including
-# run_ilastik.sh, which the Fiji plugin invokes for headless prediction.
-# Python 3.10 matches the version ilastik-forge was built against.
-# this is ilastik-core ver 1.4.2rc1
-# RUN /opt/conda/bin/conda create -n ilastik \
-#         -c ilastik-forge -c conda-forge \
-#         ilastik-core python=3.11 -y \
-#     && /opt/conda/bin/conda clean -afy
-
-# # ilastik-core has no console_scripts entry point — create run_ilastik.sh wrapper.
-# # ilastik4ij calls this script directly for all headless prediction workflows.
-# RUN printf '#!/bin/bash\n# ilastik headless wrapper — invoked by ilastik4ij for all prediction workflows.\n# Logs the full command so mismatched args are visible in docker compose logs.\necho "[ilastik-wrapper] args: $*" >&2\nexec "%s" -m ilastik "$@"\n' \
-#         "/opt/conda/envs/ilastik/bin/python" \
-#         > /opt/conda/envs/ilastik/bin/run_ilastik.sh \
-#     && chmod +x /opt/conda/envs/ilastik/bin/run_ilastik.sh \
-#     && echo "[OK] ilastik headless wrapper created"
-
-# ENV ILASTIK_EXECUTABLE=/opt/conda/envs/ilastik/bin/run_ilastik.sh
-
 # ── DeepImageJ / APPOSE environment configuration ────────────────────────────
 # DeepImageJ 3.x uses APPOSE (via dl-modelrunner) to run Python inference.
 # APPOSE creates ONE environment per framework (TF, PyTorch) stored under
@@ -322,46 +301,6 @@ RUN mkdir -p /home/imagentj/.imagej \
         > /home/imagentj/.imagej/trackmate-conda.prefs \
     && chown -R imagentj:imagentj /home/imagentj/.imagej
 
-# ── ilastik plugin preferences ────────────────────────────────────────────────
-# ilastik4ij reads the executable path from ImageJ's SciJava prefs system.
-# The key org.ilastik.ilastik4ij.ui.IlastikOptions.executableFile must be set
-# in IJ_prefs.txt so the plugin can launch ilastik headless without the user
-# having to configure it manually via Plugins → ilastik → Configure.
-# The JSON file mirrors the path for any app-level code that reads it directly.
-# Two persistence backends exist in Fiji depending on which PrefService is active:
-#
-#   LegacyIJPrefService  → ij.Prefs → ~/IJ_prefs.txt  (legacy ImageJ1 path)
-#   DefaultPrefService   → java.util.prefs.Preferences → ~/.java/.userPrefs/ (Java NIO path)
-#
-# We write both so the executable is found regardless of which backend Fiji loads.
-# RUN mkdir -p /home/imagentj/.ilastik \
-#     # ── Backend 1: LegacyIJPrefService (~/IJ_prefs.txt) ──
-#     && printf '%s\n' \
-#         "org.ilastik.ilastik4ij.ui.IlastikOptions.executableFile=${ILASTIK_EXECUTABLE}" \
-#         "org.ilastik.ilastik4ij.ui.IlastikOptions.numThreads=-1" \
-#         "org.ilastik.ilastik4ij.ui.IlastikOptions.maxRamMb=4096" \
-#         >> /home/imagentj/IJ_prefs.txt \
-#     # ── Backend 2: DefaultPrefService (~/.java/.userPrefs/ XML) ──
-#     # Node path: Preferences.userNodeForPackage(IlastikOptions.class).node("IlastikOptions")
-#     # → /org/ilastik/ilastik4ij/ui/IlastikOptions on disk
-#     && mkdir -p /home/imagentj/.java/.userPrefs/org/ilastik/ilastik4ij/ui/IlastikOptions \
-#     && printf '%s\n' \
-#         '<?xml version="1.0" encoding="UTF-8" standalone="no"?>' \
-#         '<!DOCTYPE map SYSTEM "http://java.sun.com/dtd/preferences.dtd">' \
-#         '<map MAP_XML_VERSION="1.0">' \
-#         "  <entry key=\"executableFile\" value=\"${ILASTIK_EXECUTABLE}\"/>" \
-#         '  <entry key="numThreads" value="-1"/>' \
-#         '  <entry key="maxRamMb" value="4096"/>' \
-#         '</map>' \
-#         > /home/imagentj/.java/.userPrefs/org/ilastik/ilastik4ij/ui/IlastikOptions/prefs.xml \
-#     # ── JSON mirror (for any app-level code that reads it directly) ──
-#     && printf '{"executablePath":"%s"}\n' "${ILASTIK_EXECUTABLE}" \
-#         > /home/imagentj/.ilastik/fiji_plugin_prefs.json \
-#     && chown -R imagentj:imagentj \
-#         /home/imagentj/IJ_prefs.txt \
-#         /home/imagentj/.java \
-#         /home/imagentj/.ilastik
-
 RUN mkdir -p /app/qdrant_data /home/imagentj/.cellpose \
     && chown -R imagentj:imagentj /app /home/imagentj /app/qdrant_data \
     && chown -R imagentj:imagentj /opt/Fiji.app \
@@ -369,7 +308,7 @@ RUN mkdir -p /app/qdrant_data /home/imagentj/.cellpose \
 
 # ── Cellpose models ───────────────────────────────────────────────────────────
 # Models are NOT baked into the image — docker-compose bind-mounts ./models to
-# /home/imagentj/.cellpose/models at runtime (saves ~3.8 GB from the image layer).
+# /home/imagentj/.cellpose/models at runtime 
 # Create the directory so the seed has the correct structure and ownership.
 RUN mkdir -p /home/imagentj/.cellpose/models \
     && chown -R imagentj:imagentj /home/imagentj/.cellpose
