@@ -33,6 +33,7 @@ from .tools import (
     get_script_info, load_script, get_script_history,
     setup_analysis_workspace, save_markdown,
     capture_ij_window, build_compilation, analyze_image,
+    NarrationReminderMiddleware,
 )
 from imagentj.tracker import UsageMetrics, MetricsSignalBridge, UsageTrackerCallback
 
@@ -160,7 +161,7 @@ llm_supervisor = ChatOpenAI(
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
-    reasoning_effort="none",
+    reasoning_effort="low",
     verbose=True,
     callbacks=[shared_tracker],
 )
@@ -479,6 +480,7 @@ def init_agent():
             root_path="/app/data/",
             use_ripgrep=True,
         ),
+        NarrationReminderMiddleware(),
     ]
 
     supervisor = create_deep_agent(
