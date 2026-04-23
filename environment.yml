@@ -44,7 +44,7 @@ dependencies:
   - nest-asyncio
   - aiohttp
   - pip:
-      - accelerate
+      #- accelerate
       - aiofiles
       - aiohttp-retry
       - anthropic
@@ -136,7 +136,7 @@ dependencies:
       - rich
       - rpds-py
       - rtree
-      - safetensors
+      #- safetensors
       - semchunk
       - send2trash
       - shapely
@@ -148,12 +148,12 @@ dependencies:
       - tavily
       - tiktoken
       - tinycss2
-      - tokenizers
+      #- tokenizers
       - toml
-      - torch
-      - torchvision
+      # - torch
+      # - torchvision
       - tqdm
-      - transformers
+      #- transformers
       - tree-sitter
       - tree-sitter-c
       - tree-sitter-javascript

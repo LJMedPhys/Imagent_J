@@ -157,12 +157,17 @@ find "$FIJI_HOME/update" -type f -name "*.jar" | while read -r f; do
             echo "[entrypoint] Skipping $base (pyimagej 1.7.0 compatibility)"
             rm "$f"
             ;;
-        # TrackMate-StarDist-*)
-        #     echo "[entrypoint] Skipping $base (pinned to 1.2.0 — 2.0.0 has ClassCastException bug)"
-        #     rm "$f"
-        #     ;;
+        TrackMate-StarDist-[01].*)
+            echo "[entrypoint] Skipping $base (pre-2.0 — incompatible API for TrackMate 8.x)"
+            rm "$f"
+            ;;
     esac
 done
+
+# ── Remove stale TrackMate-StarDist 1.2.0 from named volume ──────────────────
+# 1.2.0 has AbstractMethodError with TrackMate 8.x (missing 4-arg getDetector).
+# The image now ships patched 2.0.0; remove any 1.x lingering in the volume.
+find "$FIJI_HOME/jars" -name 'TrackMate-StarDist-1*.jar' -delete 2>/dev/null && true
 
 # ── Apply pending Fiji updates ───────────────────────────────────────────────
 # Fiji stages updates in /opt/Fiji.app/update/ - move them to their destinations

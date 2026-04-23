@@ -1,6 +1,8 @@
 services:
   imagentj:
     image: imagentj:cpu #-with-chat-history
+    # Fiji has no Linux arm64 binary — pin to amd64 so Apple Silicon uses Rosetta
+    platform: linux/amd64
     build:
       context: .
       target: cpu

@@ -2,9 +2,10 @@
 # TrackMate micromamba shim
 # TrackMate v8 hardcodes /usr/local/opt/micromamba/bin/micromamba.
 # This shim forwards calls to conda, routing by the requested env name:
-#   '-n base' or no env arg → cellpose  (TrackMate-Cellpose default)
-#   '-n stardist'           → stardist  (TrackMate-StarDist)
-#   any other named env     → that env  (forward as-is)
+#   '-n base' or no env arg → cellpose   (TrackMate-Cellpose 3.x default)
+#   '-n cellpose4'          → cellpose4  (TrackMate Cellpose-SAM, cellpose 4.x)
+#   '-n stardist'           → stardist   (TrackMate-StarDist)
+#   any other named env     → that env   (forward as-is)
 CMD="${1:-}"
 if [ "$CMD" = "run" ]; then
     shift

@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QTextEdit, QPushButton, QLabel, QListWidget,
     QSplitter, QScrollArea, QMessageBox, QListWidgetItem,
-    QSizePolicy, QFrame, QGroupBox, QFileDialog,
+    QSizePolicy, QFrame, QGroupBox, QFileDialog, QCheckBox,
 )
 from PySide6.QtCore import QObject, Signal, Slot, QThread, Qt, QSize, QEvent, QTimer
 from queue import Queue
@@ -344,6 +344,8 @@ class SubagentHeartbeatTimer:
 class MetricsPanelWidget(QWidget):
     """Shows token/cost/tool metrics for the active conversation."""
 
+    qa_toggled = Signal(bool)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._build_ui()
@@ -400,6 +402,29 @@ class MetricsPanelWidget(QWidget):
             "color: white; border-radius: 3px; font-size: 11px;"
         )
         root.addWidget(self._btn_save)
+
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.HLine)
+        sep2.setFrameShadow(QFrame.Sunken)
+        root.addWidget(sep2)
+
+        agent_box = QGroupBox("Agent Options")
+        agent_layout = QVBoxLayout(agent_box)
+        agent_layout.setSpacing(4)
+        self._qa_checkbox = QCheckBox("QA Agent")
+        self._qa_checkbox.setChecked(False)
+        self._qa_checkbox.setToolTip(
+            "Enable the QA Reporter agent.\n"
+            "Runs a full audit at project end and generates\n"
+            "QA_Checklist_Report.md. Off by default, \n"
+            "as it adds significant cost per workflow."
+        )
+        self._qa_checkbox.stateChanged.connect(
+            lambda state: self.qa_toggled.emit(state == Qt.Checked)
+        )
+        agent_layout.addWidget(self._qa_checkbox)
+        root.addWidget(agent_box)
+
         root.addStretch()
 
         self.update_metrics({
@@ -638,6 +663,7 @@ class ImageJAgentGUI(QWidget):
         self.metrics_panel.setMinimumWidth(190)
         self.metrics_panel.setMaximumWidth(250)
         self.metrics_panel._btn_save.clicked.connect(self._save_report)
+        self.metrics_panel.qa_toggled.connect(self._on_qa_toggled)
 
         splitter.addWidget(self.history_panel)
         splitter.addWidget(chat_widget)
@@ -822,6 +848,28 @@ class ImageJAgentGUI(QWidget):
             self.send_button.setStyleSheet(
                 "background-color: #3498db; color: white; font-weight: bold; padding: 8px; border:none;"
             )
+
+    # ------------------------------------------------------------------
+    # Agent options
+    # ------------------------------------------------------------------
+
+    def _on_qa_toggled(self, enabled: bool):
+        if self._agent_is_busy():
+            # Revert the checkbox — can't reinit while agent is running
+            self.metrics_panel._qa_checkbox.blockSignals(True)
+            self.metrics_panel._qa_checkbox.setChecked(not enabled)
+            self.metrics_panel._qa_checkbox.blockSignals(False)
+            self.set_status("Cannot change QA Agent setting while agent is running.")
+            return
+        (self.supervisor,
+         self.checkpointer,
+         self._metrics,
+         self._metrics_bridge,
+         self._tracker_cb) = init_agent(enable_qa=enabled)
+        self.worker.supervisor = self.supervisor
+        self._metrics_bridge.updated.connect(self.metrics_panel.update_metrics)
+        state = "enabled" if enabled else "disabled"
+        self.set_status(f"QA Agent {state}.")
 
     # ------------------------------------------------------------------
     # Agent lifecycle

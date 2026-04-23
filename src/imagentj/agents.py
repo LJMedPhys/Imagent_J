@@ -369,21 +369,26 @@ def qa_reporter(project_root: str) -> QAHandoff:
 # Factory
 # ---------------------------------------------------------------------------
 
-def init_agent():
+def init_agent(enable_qa: bool = False):
     fs_backend = FilesystemBackend(
         root_dir="/app/data/",
         virtual_mode=False,
     )
 
+    subagent_tools = [
+        imagej_coder,
+        imagej_debugger,
+        python_data_analyst,
+        # vlm_judge,  # VLM disabled
+    ]
+    if enable_qa:
+        subagent_tools.append(qa_reporter)
+
     supervisor = create_deep_agent(
         name="ImageJ_Supervisor",
         tools=[
             # ── subagents as tools (return typed JSON) ──────────────────────
-            imagej_coder,
-            imagej_debugger,
-            python_data_analyst,
-            # vlm_judge,  # VLM disabled
-            qa_reporter,
+            *subagent_tools,
             # ── supervisor's own tools ───────────────────────────────────────
             internet_search,
             inspect_all_ui_windows,

@@ -52,7 +52,7 @@ RUN printf '%s\n' \
     'StarDist https://sites.imagej.net/StarDist/' \
     'DeepImageJ https://sites.imagej.net/DeepImageJ/' \
     'Neuroanatomy https://sites.imagej.net/Neuroanatomy/' \
-    'ilastik https://sites.imagej.net/Ilastik/' \
+    #'ilastik https://sites.imagej.net/Ilastik/' \
     'TrackMate-StarDist https://sites.imagej.net/TrackMate-StarDist/' \
     'TrackMate-MorphoLibJ https://sites.imagej.net/TrackMate-MorphoLibJ/' \
     'TrackMate-Ilastik https://sites.imagej.net/TrackMate-Ilastik/' \
@@ -85,15 +85,37 @@ RUN cp -a /opt/Fiji.app/update/plugins/. /opt/Fiji.app/plugins/ 2>/dev/null || t
     && cp -a /opt/Fiji.app/update/lib/.     /opt/Fiji.app/lib/     2>/dev/null || true \
     && rm -rf /opt/Fiji.app/update/*
 
-# ── Pin TrackMate-StarDist to 1.2.0 ──────────────────────────────────────────
-# 2.0.0 has a ClassCastException in setSettings: TARGET_CHANNEL is deserialized
-# as String by TrackMate's default XML marshal/unmarshal (factory doesn't override
-# them), then cast to Integer — crash. 1.2.0 uses SCIJAVA_PYTHON directly
-# (set to /opt/conda/envs/stardist/bin/python) and avoids the issue entirely.
-# RUN rm -f /opt/Fiji.app/jars/TrackMate-StarDist-2.0.0.jar \
-#     && wget -q "https://sites.imagej.net/TrackMate-StarDist/jars/TrackMate-StarDist-1.2.0.jar" \
-#          -O /opt/Fiji.app/jars/TrackMate-StarDist-1.2.0.jar \
-#     && echo "TrackMate-StarDist pinned to 1.2.0"
+# ── Patch TrackMate-StarDist 2.0.0 ClassCastException ────────────────────────
+# 2.0.0 has the correct TrackMate 8.x API (4-arg getDetector) but no
+# marshal/unmarshal overrides: TARGET_CHANNEL is saved as String in XML, then
+# cast to Integer in setSettings() and getDetector() → ClassCastException.
+# Fix: use javassist to insertBefore in both methods, converting String→Integer.
+# 1.2.0 (wrong API for TM 8.x) is left absent so AbstractMethodError doesn't recur.
+COPY patch_stardist/PatchStarDist.java /tmp/PatchStarDist.java
+RUN set -e \
+    && FIJI=/opt/Fiji.app \
+    # Locate the JDK bundled with Fiji
+    && JAVA_BIN=$(find "$FIJI/java" -name 'java'  -not -name '*.class' 2>/dev/null | head -1) \
+    && JAVAC_BIN=$(find "$FIJI/java" -name 'javac' 2>/dev/null | head -1) \
+    && [ -n "$JAVA_BIN"  ] || JAVA_BIN=java \
+    && [ -n "$JAVAC_BIN" ] || JAVAC_BIN=javac \
+    && echo "[patch] Using java: $JAVA_BIN  javac: $JAVAC_BIN" \
+    # Locate javassist — already in Fiji after plugins are installed; fall back to Maven Central
+    && JAVASSIST=$(find "$FIJI" -name 'javassist*.jar' 2>/dev/null | head -1) \
+    && if [ -z "$JAVASSIST" ]; then \
+         echo "[patch] javassist not found in Fiji — downloading from Maven Central"; \
+         wget -q -O /tmp/javassist.jar \
+             "https://repo1.maven.org/maven2/org/javassist/javassist/3.29.2-GA/javassist-3.29.2-GA.jar"; \
+         JAVASSIST=/tmp/javassist.jar; \
+       fi \
+    && echo "[patch] javassist: $JAVASSIST" \
+    # Compile PatchStarDist.java (also updates the JAR via java.util.zip — no 'zip' CLI needed)
+    && mkdir -p /tmp/patch-classes \
+    && $JAVAC_BIN -cp "$JAVASSIST" /tmp/PatchStarDist.java -d /tmp/patch-classes \
+    && $JAVA_BIN  -cp "/tmp/patch-classes:$JAVASSIST" PatchStarDist \
+    && rm -rf /tmp/patch-classes /tmp/stardist-patched-classes /tmp/PatchStarDist.java \
+              /tmp/javassist.jar 2>/dev/null || true \
+    && echo "[patch] TrackMate-StarDist 2.0.0 ClassCastException fix applied"
 
 # ── Remove SPIM_Registration.jar (superseded by BigStitcher's multiview-reconstruction) ──
 # BigStitcher installs multiview-reconstruction.jar which registers the same menu
@@ -183,9 +205,21 @@ ENV CONDA_DEFAULT_ENV=local_imagent_J
 # ── Conda env: cellpose  (PyTorch + Cellpose, served by TrackMate-Cellpose) ───
 RUN /opt/conda/bin/conda create -n cellpose python=3.10 -y \
     && /opt/conda/envs/cellpose/bin/pip install --no-cache-dir \
-        torch torchvision --index-url https://download.pytorch.org/whl/cu124 \
+        torch torchvision --index-url https://download.pytorch.org/whl/cpu \
     && /opt/conda/envs/cellpose/bin/pip install --no-cache-dir 'cellpose[gui]==3.1.1.2' \
     && /opt/conda/envs/cellpose/bin/cellpose --version \
+    && /opt/conda/bin/conda clean -afy
+
+# ── Conda env: cellpose4  (Cellpose 4.x + SAM, served by TrackMate Cellpose-SAM) ──
+# Separate env so cellpose 3.x (regular detection) and 4.x (SAM) can coexist.
+# TrackMate's CondaCLIConfigurator lists all conda envs in a dropdown — the user
+# selects 'cellpose4' in the Cellpose-SAM detector panel.
+# The micromamba shim routes '-n cellpose4' → /opt/conda/envs/cellpose4.
+RUN /opt/conda/bin/conda create -n cellpose4 python=3.11 -y \
+    && /opt/conda/envs/cellpose4/bin/pip install --no-cache-dir \
+        torch torchvision --index-url https://download.pytorch.org/whl/cpu \
+    && /opt/conda/envs/cellpose4/bin/pip install --no-cache-dir 'cellpose[gui]>=4.0' \
+    && /opt/conda/envs/cellpose4/bin/cellpose --version \
     && /opt/conda/bin/conda clean -afy
 
 # ── Conda env: stardist  (TensorFlow + CSBDeep + StarDist inference) ─────────
@@ -214,20 +248,20 @@ ENV SCIJAVA_PYTHON=/opt/conda/envs/stardist/bin/python
 # run_ilastik.sh, which the Fiji plugin invokes for headless prediction.
 # Python 3.10 matches the version ilastik-forge was built against.
 # this is ilastik-core ver 1.4.2rc1
-RUN /opt/conda/bin/conda create -n ilastik \
-        -c ilastik-forge -c conda-forge \
-        ilastik-core python=3.11 -y \
-    && /opt/conda/bin/conda clean -afy
+# RUN /opt/conda/bin/conda create -n ilastik \
+#         -c ilastik-forge -c conda-forge \
+#         ilastik-core python=3.11 -y \
+#     && /opt/conda/bin/conda clean -afy
 
-# ilastik-core has no console_scripts entry point — create run_ilastik.sh wrapper.
-# ilastik4ij calls this script directly for all headless prediction workflows.
-RUN printf '#!/bin/bash\n# ilastik headless wrapper — invoked by ilastik4ij for all prediction workflows.\n# Logs the full command so mismatched args are visible in docker compose logs.\necho "[ilastik-wrapper] args: $*" >&2\nexec "%s" -m ilastik "$@"\n' \
-        "/opt/conda/envs/ilastik/bin/python" \
-        > /opt/conda/envs/ilastik/bin/run_ilastik.sh \
-    && chmod +x /opt/conda/envs/ilastik/bin/run_ilastik.sh \
-    && echo "[OK] ilastik headless wrapper created"
+# # ilastik-core has no console_scripts entry point — create run_ilastik.sh wrapper.
+# # ilastik4ij calls this script directly for all headless prediction workflows.
+# RUN printf '#!/bin/bash\n# ilastik headless wrapper — invoked by ilastik4ij for all prediction workflows.\n# Logs the full command so mismatched args are visible in docker compose logs.\necho "[ilastik-wrapper] args: $*" >&2\nexec "%s" -m ilastik "$@"\n' \
+#         "/opt/conda/envs/ilastik/bin/python" \
+#         > /opt/conda/envs/ilastik/bin/run_ilastik.sh \
+#     && chmod +x /opt/conda/envs/ilastik/bin/run_ilastik.sh \
+#     && echo "[OK] ilastik headless wrapper created"
 
-ENV ILASTIK_EXECUTABLE=/opt/conda/envs/ilastik/bin/run_ilastik.sh
+# ENV ILASTIK_EXECUTABLE=/opt/conda/envs/ilastik/bin/run_ilastik.sh
 
 # ── DeepImageJ / APPOSE environment configuration ────────────────────────────
 # DeepImageJ 3.x uses APPOSE (via dl-modelrunner) to run Python inference.
@@ -300,33 +334,33 @@ RUN mkdir -p /home/imagentj/.imagej \
 #   DefaultPrefService   → java.util.prefs.Preferences → ~/.java/.userPrefs/ (Java NIO path)
 #
 # We write both so the executable is found regardless of which backend Fiji loads.
-RUN mkdir -p /home/imagentj/.ilastik \
-    # ── Backend 1: LegacyIJPrefService (~/IJ_prefs.txt) ──
-    && printf '%s\n' \
-        "org.ilastik.ilastik4ij.ui.IlastikOptions.executableFile=${ILASTIK_EXECUTABLE}" \
-        "org.ilastik.ilastik4ij.ui.IlastikOptions.numThreads=-1" \
-        "org.ilastik.ilastik4ij.ui.IlastikOptions.maxRamMb=4096" \
-        >> /home/imagentj/IJ_prefs.txt \
-    # ── Backend 2: DefaultPrefService (~/.java/.userPrefs/ XML) ──
-    # Node path: Preferences.userNodeForPackage(IlastikOptions.class).node("IlastikOptions")
-    # → /org/ilastik/ilastik4ij/ui/IlastikOptions on disk
-    && mkdir -p /home/imagentj/.java/.userPrefs/org/ilastik/ilastik4ij/ui/IlastikOptions \
-    && printf '%s\n' \
-        '<?xml version="1.0" encoding="UTF-8" standalone="no"?>' \
-        '<!DOCTYPE map SYSTEM "http://java.sun.com/dtd/preferences.dtd">' \
-        '<map MAP_XML_VERSION="1.0">' \
-        "  <entry key=\"executableFile\" value=\"${ILASTIK_EXECUTABLE}\"/>" \
-        '  <entry key="numThreads" value="-1"/>' \
-        '  <entry key="maxRamMb" value="4096"/>' \
-        '</map>' \
-        > /home/imagentj/.java/.userPrefs/org/ilastik/ilastik4ij/ui/IlastikOptions/prefs.xml \
-    # ── JSON mirror (for any app-level code that reads it directly) ──
-    && printf '{"executablePath":"%s"}\n' "${ILASTIK_EXECUTABLE}" \
-        > /home/imagentj/.ilastik/fiji_plugin_prefs.json \
-    && chown -R imagentj:imagentj \
-        /home/imagentj/IJ_prefs.txt \
-        /home/imagentj/.java \
-        /home/imagentj/.ilastik
+# RUN mkdir -p /home/imagentj/.ilastik \
+#     # ── Backend 1: LegacyIJPrefService (~/IJ_prefs.txt) ──
+#     && printf '%s\n' \
+#         "org.ilastik.ilastik4ij.ui.IlastikOptions.executableFile=${ILASTIK_EXECUTABLE}" \
+#         "org.ilastik.ilastik4ij.ui.IlastikOptions.numThreads=-1" \
+#         "org.ilastik.ilastik4ij.ui.IlastikOptions.maxRamMb=4096" \
+#         >> /home/imagentj/IJ_prefs.txt \
+#     # ── Backend 2: DefaultPrefService (~/.java/.userPrefs/ XML) ──
+#     # Node path: Preferences.userNodeForPackage(IlastikOptions.class).node("IlastikOptions")
+#     # → /org/ilastik/ilastik4ij/ui/IlastikOptions on disk
+#     && mkdir -p /home/imagentj/.java/.userPrefs/org/ilastik/ilastik4ij/ui/IlastikOptions \
+#     && printf '%s\n' \
+#         '<?xml version="1.0" encoding="UTF-8" standalone="no"?>' \
+#         '<!DOCTYPE map SYSTEM "http://java.sun.com/dtd/preferences.dtd">' \
+#         '<map MAP_XML_VERSION="1.0">' \
+#         "  <entry key=\"executableFile\" value=\"${ILASTIK_EXECUTABLE}\"/>" \
+#         '  <entry key="numThreads" value="-1"/>' \
+#         '  <entry key="maxRamMb" value="4096"/>' \
+#         '</map>' \
+#         > /home/imagentj/.java/.userPrefs/org/ilastik/ilastik4ij/ui/IlastikOptions/prefs.xml \
+#     # ── JSON mirror (for any app-level code that reads it directly) ──
+#     && printf '{"executablePath":"%s"}\n' "${ILASTIK_EXECUTABLE}" \
+#         > /home/imagentj/.ilastik/fiji_plugin_prefs.json \
+#     && chown -R imagentj:imagentj \
+#         /home/imagentj/IJ_prefs.txt \
+#         /home/imagentj/.java \
+#         /home/imagentj/.ilastik
 
 RUN mkdir -p /app/qdrant_data /home/imagentj/.cellpose \
     && chown -R imagentj:imagentj /app /home/imagentj /app/qdrant_data \
@@ -334,17 +368,11 @@ RUN mkdir -p /app/qdrant_data /home/imagentj/.cellpose \
     && chown -R imagentj:imagentj /opt/appose
 
 # ── Cellpose models ───────────────────────────────────────────────────────────
-# Classic models (cyto, cyto2, cyto3, nuclei, bact, etc.) are baked in from the
-# local models/ folder — no network required. cpsam (Cellpose-SAM) is not yet
-# in the archive; attempt a non-fatal download so it installs once the server
-# recovers, without blocking the build.
-RUN mkdir -p /home/imagentj/.cellpose/models
-COPY models/ /home/imagentj/.cellpose/models/
-# Uncomment once cellpose.org/models/cpsam is back up:
-RUN HOME=/home/imagentj /opt/conda/envs/cellpose/bin/python -c \
-        "from cellpose import models; models.Cellpose(model_type='cpsam')" \
-    || echo "[cellpose] WARNING: cpsam unavailable — will download at first use"
-RUN chown -R imagentj:imagentj /home/imagentj/.cellpose
+# Models are NOT baked into the image — docker-compose bind-mounts ./models to
+# /home/imagentj/.cellpose/models at runtime (saves ~3.8 GB from the image layer).
+# Create the directory so the seed has the correct structure and ownership.
+RUN mkdir -p /home/imagentj/.cellpose/models \
+    && chown -R imagentj:imagentj /home/imagentj/.cellpose
 
 # ── Seed home dir for named-volume persistence ────────────────────────────────
 # imagentj_home is a named volume mounted at /home/imagentj. It starts empty,
