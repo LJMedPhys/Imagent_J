@@ -42,7 +42,7 @@ def get_expanded_queries(query: str) -> list[str]:
         "Focus on technical API terms, alternative function names, and common library methods.\n"
         "Output only the queries, one per line."
     )
-    chain = prompt | llm | StrOutputParser()
+    chain = prompt | llm_nano | StrOutputParser()
     variants = chain.invoke({"question": query}).strip().split("\n")
     return list(set([query] + [v.strip("- ").strip() for v in variants]))
 
