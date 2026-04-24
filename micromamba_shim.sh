@@ -40,7 +40,11 @@ if [ "$CMD" = "run" ]; then
         exec /opt/conda/bin/conda run --prefix /opt/conda/envs/"$ENV_NAME" "${ARGS[@]}"
     fi
 elif [ "$CMD" = "env" ] && [ "${2:-}" = "list" ]; then
-    exec /opt/conda/bin/conda env list
+    # Print real env list, then inject a virtual 'omnipose' entry so TrackMate
+    # shows it in the dropdown. The run branch above routes '-n omnipose' to
+    # the cellpose env where omnipose is actually installed.
+    /opt/conda/bin/conda env list
+    echo "omnipose                 /opt/conda/envs/cellpose"
 else
     exec /opt/conda/bin/conda "$@"
 fi

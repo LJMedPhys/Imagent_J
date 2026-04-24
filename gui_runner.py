@@ -429,7 +429,7 @@ class MetricsPanelWidget(QWidget):
             "as it adds significant cost per workflow."
         )
         self._qa_checkbox.stateChanged.connect(
-            lambda state: self.qa_toggled.emit(state == Qt.Checked)
+            lambda _: self.qa_toggled.emit(self._qa_checkbox.isChecked())
         )
         agent_layout.addWidget(self._qa_checkbox)
         root.addWidget(agent_box)
@@ -1052,7 +1052,7 @@ class ImageJAgentGUI(QWidget):
          self._tracker_cb) = init_agent(enable_qa=enabled)
         self.worker.supervisor = self.supervisor
         self._metrics_bridge.updated.connect(self.metrics_panel.update_metrics)
-        state = "enabled" if enabled else "disabled"
+        #self.set_status(f"QA Agent {'enabled' if enabled else 'disabled'}.")
 
 
     # ------------------------------------------------------------------

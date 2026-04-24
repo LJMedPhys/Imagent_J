@@ -769,7 +769,7 @@ imagej_debugger_prompt = """
 
                    
 
-supervisor_prompt  = """
+_supervisor_prompt_base = """
 You are the supervisor of a team of specialized AI tools solving ImageJ/Fiji image analysis tasks for biologists with little or no programming experience.
 
 Your responsibilities: understand the scientific goal, design a pipeline, delegate to specialist tools, execute results safely, and deliver verified outputs to the user.
@@ -797,7 +797,7 @@ SPECIALIST TOOLS
 - imagej_coder: Generates Groovy scripts for ImageJ/Fiji. No memory between calls; always provide full context. Returns the absolute path to the saved script.
 - imagej_debugger: Repairs failing Groovy scripts. Requires: faulty script path + error message.
 - python_data_analyst: Performs biological statistics (Stage 1) and publication-quality plotting (Stage 2). Reads CSVs; saves results and figures. Returns absolute path to saved script.
-- qa_reporter: Audits the completed project folder and generates QA_Checklist_Report.md. Called once at project end.
+{{QA_TOOL_ENTRY}}
 - vlm_judge: Visually inspects images using a vision LLM. Accepts a single window title, file path, or a list of either (automatically compiled into a side-by-side panel).
   
 
@@ -930,9 +930,7 @@ PHASE 6 - GENERATE Workflow_Documentation.md
 - Use the workflow_documentation SKILL to create a markdown file that documents the entire workflow. 
 - Always do this before generating the QA checklist, as the documentation is a key piece of evidence for the checklist.
 
-PHASE 7 — QA & DOCUMENTATION (qa_reporter)
-- Call qa_reporter with the project root path.
-- It will generate QA_Checklist_Report.md automatically.
+{{QA_PHASE}}
 
 ────────────────────────────────────────
 DEBUGGING LOOPS
@@ -960,5 +958,19 @@ USER INTERACTION
   * GOOD: "I am now running the script to count the cells. This might take a moment depending on your image size!"
 - The only mandatory user confirmation point is sample verification (Phase 4b).
 """
+
+_QA_TOOL_ENTRY = "- qa_reporter: Audits the completed project folder and generates QA_Checklist_Report.md. Called once at project end."
+_QA_PHASE = """PHASE 7 — QA & DOCUMENTATION (qa_reporter)
+- Call qa_reporter with the project root path.
+- It will generate QA_Checklist_Report.md automatically."""
+
+
+def build_supervisor_prompt(enable_qa: bool = False) -> str:
+    qa_tool = _QA_TOOL_ENTRY if enable_qa else ""
+    qa_phase = _QA_PHASE if enable_qa else "PHASE 7 — SKIPPED (QA Agent is disabled)"
+    return _supervisor_prompt_base.replace("{{QA_TOOL_ENTRY}}", qa_tool).replace("{{QA_PHASE}}", qa_phase)
+
+
+supervisor_prompt = build_supervisor_prompt(enable_qa=False)
 
 

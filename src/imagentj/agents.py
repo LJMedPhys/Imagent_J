@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from .prompts import (
     imagej_coder_prompt,
     imagej_debugger_prompt,
-    supervisor_prompt,
+    build_supervisor_prompt,
     python_analyst_prompt,
     qa_reporter_prompt,
     # vlm_judge_prompt,  # VLM disabled
@@ -387,7 +387,6 @@ def init_agent(enable_qa: bool = False):
     supervisor = create_deep_agent(
         name="ImageJ_Supervisor",
         tools=[
-            # ── subagents as tools (return typed JSON) ──────────────────────
             *subagent_tools,
             # ── supervisor's own tools ───────────────────────────────────────
             internet_search,
@@ -410,8 +409,7 @@ def init_agent(enable_qa: bool = False):
             setup_analysis_workspace,
             save_markdown,
         ],
-        system_prompt=supervisor_prompt,
-        subagents=[],           # all subagents are now tools above
+        subagents=[],
         middleware=[
             ContextEditingMiddleware(
                 edits=[
@@ -429,6 +427,7 @@ def init_agent(enable_qa: bool = False):
                 use_ripgrep=True,
             ),
         ],
+        system_prompt=build_supervisor_prompt(enable_qa),
         model=llm_supervisor,
         debug=False,
         backend=fs_backend,
