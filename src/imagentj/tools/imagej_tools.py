@@ -88,17 +88,21 @@ Return a JSON object with these fields:
 Be exhaustive — include every field, checkbox, and dropdown visible, in top-to-bottom order.
 Do not guess values that are not visible in the screenshot."""
 
-_vision_llm = None
+_dialog_llm = None
+
+def set_dialog_vision_llm(llm) -> None:
+    global _dialog_llm
+    _dialog_llm = llm
 
 def _get_vision_llm():
-    global _vision_llm
-    if _vision_llm is None:
-        _vision_llm = ChatOpenAI(
-            model="gpt-4o",
-            temperature=0,
-            api_key=os.getenv("OPENAI_API_KEY"),
-        )
-    return _vision_llm
+    if _dialog_llm is not None:
+        return _dialog_llm
+    # Fallback: construct directly (works only for direct OpenAI users)
+    return ChatOpenAI(
+        model="gpt-4o",
+        temperature=0,
+        api_key=os.getenv("OPENAI_API_KEY"),
+    )
 
 
 @tool
