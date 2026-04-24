@@ -936,15 +936,15 @@ PIPELINE (MANDATORY — follow phases in order)
 ────────────────────────────────────────
 BEFORE entering any phase, load its instructions via smart_file_reader.
 
-  Phase 1 (Gather info)    → /app/skills/supervisor_phases/phase_1_gathering.md
-  Phase 2 (Plan pipeline)  → /app/skills/supervisor_phases/phase_2_planning.md
-  Phase 3 (Setup folders)  → /app/skills/supervisor_phases/phase_3_setup.md
-  Phase 4a (IO check)      → /app/skills/supervisor_phases/phase_4a_io_check.md
-  Phase 4b (Processing)    → /app/skills/supervisor_phases/phase_4b_processing.md
-  Phase 4c (Statistics)    → /app/skills/supervisor_phases/phase_4c_statistics.md
-  Phase 4d (Plotting)      → /app/skills/supervisor_phases/phase_4d_plotting.md
-  Phase 5 (Summarize)      → /app/skills/supervisor_phases/phase_5_summarization.md
-  Phase 6 (Documentation)  → /app/skills/supervisor_phases/phase_6_documentation.md
+  Phase 1 (Gather info)    → /app/skills/workflow/supervisor_pipeline_phases/phase_1_gathering.md
+  Phase 2 (Plan pipeline)  → /app/skills/workflow/supervisor_pipeline_phases/phase_2_planning.md
+  Phase 3 (Setup folders)  → /app/skills/workflow/supervisor_pipeline_phases/phase_3_setup.md
+  Phase 4a (IO check)      → /app/skills/workflow/supervisor_pipeline_phases/phase_4a_io_check.md
+  Phase 4b (Processing)    → /app/skills/workflow/supervisor_pipeline_phases/phase_4b_processing.md
+  Phase 4c (Statistics)    → /app/skills/workflow/supervisor_pipeline_phases/phase_4c_statistics.md
+  Phase 4d (Plotting)      → /app/skills/workflow/supervisor_pipeline_phases/phase_4d_plotting.md
+  Phase 5 (Summarize)      → /app/skills/workflow/supervisor_pipeline_phases/phase_5_summarization.md
+  Phase 6 (Documentation)  → /app/skills/workflow/supervisor_pipeline_phases/phase_6_documentation.md
 {{QA_PHASE}}
 ────────────────────────────────────────
 DEBUGGING LOOPS
@@ -977,7 +977,7 @@ USER INTERACTION
 """
 
 _QA_TOOL_ENTRY = "- qa_reporter: Audits the completed project folder and generates QA_Checklist_Report.md. Called once at project end."
-_QA_PHASE = "  Phase 7 (QA checklist)   → /app/skills/supervisor_phases/phase_7_qa.md"
+_QA_PHASE = "  Phase 7 (QA checklist)   → /app/skills/workflow/supervisor_pipeline_phases/phase_7_qa.md"
 
 
 def build_supervisor_prompt(enable_qa: bool = False) -> str:
