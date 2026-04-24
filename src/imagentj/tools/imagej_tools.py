@@ -252,7 +252,7 @@ def inspect_all_ui_windows():
 # Titles of known non-dialog Fiji windows to skip when looking for plugin dialogs
 _SKIP_TITLES = {"ImageJ", "Fiji", "Log", "Results", "ROI Manager", "Recorder",
                 "Brightness/Contrast", "Channels Tool", "Synchronize Windows",
-                "3D Viewer", "BigDataViewer"}
+                "Console"}
 
 _IMAGE_EXTENSIONS = {".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp", ".gif",
                      ".fits", ".hdf5", ".h5", ".czi", ".lif", ".nd2", ".ims"}
