@@ -18,13 +18,13 @@ from pydantic import BaseModel
 from .prompts import (
     imagej_coder_prompt,
     imagej_debugger_prompt,
-    supervisor_prompt,
+    build_supervisor_prompt,
     python_analyst_prompt,
     qa_reporter_prompt,
-    vlm_judge_prompt,
+    # vlm_judge_prompt,  # VLM disabled
 )
 from .tools import (
-    internet_search, inspect_all_ui_windows,
+    internet_search, inspect_all_ui_windows, capture_plugin_dialog,
     rag_retrieve_docs, inspect_java_class, save_coding_experience,
     rag_retrieve_mistakes, save_reusable_script, inspect_folder_tree,
     smart_file_reader, inspect_csv_header,
@@ -32,8 +32,8 @@ from .tools import (
     check_plugin_installed, mkdir_copy, save_script, execute_script,
     get_script_info, load_script, get_script_history,
     setup_analysis_workspace, save_markdown,
-    capture_ij_window, build_compilation, analyze_image,
     NarrationReminderMiddleware,
+    # capture_ij_window, build_compilation, analyze_image,  # VLM disabled
 )
 from imagentj.tracker import UsageMetrics, MetricsSignalBridge, UsageTrackerCallback
 
@@ -65,7 +65,7 @@ try:
     print(f"[agents] Using SqliteSaver at {_db_path}")
 except ImportError:
     checkpointer_supervisor = MemorySaver()
-    print("[agents] WARNING: SqliteSaver not available — using MemorySaver")
+    print("[agents] WARNING: langgraph-checkpoint-sqlite not installed — using MemorySaver (history lost on restart)")
 
 
 # ---------------------------------------------------------------------------
@@ -108,28 +108,23 @@ class QAHandoff(BaseModel):
     success: bool
 
 
-
-class VLMCheckResult(BaseModel):
-    """Result of a single visual check performed by the VLM judge."""
-    check_name:    str   # e.g. "segmentation_quality", "scale_bar"
-    verdict:       str   # "PASS" | "WARN" | "FAIL"
-    observation:   str   # exactly what the vision model reported
-    image_path:    Optional[str] = None  # path to the image (or compilation) used for this check
- 
- 
-class VLMHandoff(BaseModel):
-    """Returned by vlm_judge."""
-    overall_verdict:       str                  # "PASS" | "WARN" | "FAIL"
-    summary:               str                  # 2–4 sentence plain-English summary
-    checks:                list[VLMCheckResult] # one entry per visual check
-    issues_found:          list[str]            # empty on PASS
-    recommended_action:    str                  # exact next step for the supervisor
-                                                # e.g. "FAIL: send segmenter.groovy to
-                                                #  imagej_debugger — nuclei merging detected"
-    image_paths_inspected: list[str]            # all images / compilations analysed
-    pipeline_step:         str                  # echoed from the task for logging
-    success:               bool                 # False only if the agent itself crashed
-    error_message:         Optional[str] = None
+# VLM disabled — uncomment to re-enable
+# class VLMCheckResult(BaseModel):
+#     check_name:    str
+#     verdict:       str   # "PASS" | "WARN" | "FAIL"
+#     observation:   str
+#     image_path:    Optional[str] = None
+#
+# class VLMHandoff(BaseModel):
+#     overall_verdict:       str
+#     summary:               str
+#     checks:                list[VLMCheckResult]
+#     issues_found:          list[str]
+#     recommended_action:    str
+#     image_paths_inspected: list[str]
+#     pipeline_step:         str
+#     success:               bool
+#     error_message:         Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +137,7 @@ if open_router_key:
     use_openrouter = True
 elif openai_key:
     api_key = openai_key
-    base_url = None  # default OpenAI endpoint
+    base_url = None
     use_openrouter = False
 else:
     raise RuntimeError("No API key found. Set OPEN_ROUTER_API_KEY or OPENAI_API_KEY.")
@@ -150,7 +145,6 @@ else:
 def m(name: str) -> str:
     if use_openrouter:
         return name
-    # only keep openai/* models when hitting OpenAI directly
     if name.startswith("openai/"):
         return name.split("/", 1)[1]
     raise ValueError(f"Model {name} not available on OpenAI direct; needs OpenRouter.")
@@ -161,7 +155,6 @@ llm_supervisor = ChatOpenAI(
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
-    reasoning_effort="low",
     verbose=True,
     callbacks=[shared_tracker],
 )
@@ -195,26 +188,19 @@ llm_nano = ChatOpenAI(
     callbacks=[shared_tracker],
 )
 
-llm_vlm = ChatOpenAI(
-    model=m("openai/gpt-5.4-nano"),
-    api_key=api_key,
-    base_url=base_url,
-    temperature=0.,
-    reasoning_effort="none",
-    verbose=True,
-    callbacks=[shared_tracker],
-)
-
-from .tools.vision_tools import set_vision_llm 
-set_vision_llm(llm_vlm)
+# llm_vlm = ChatOpenAI(  # VLM disabled
+#     model=m("openai/gpt-5.4-nano"),
+#     api_key=api_key,
+#     base_url=base_url,
+#     temperature=0.,
+#     reasoning_effort="none",
+#     verbose=True,
+#     callbacks=[shared_tracker],
+# )
 
 # ---------------------------------------------------------------------------
 # Subagent instances — created once at module level, stateless invocation
 # ---------------------------------------------------------------------------
-# Subagents have no checkpointer — they are stateless workers.
-# The supervisor holds all project state and re-injects context per call.
-# ContextEditingMiddleware trims their internal tool history if a single
-# call grows large (e.g. a coder writing many scripts in one invocation).
 
 def _make_coder_agent(model, name, system_prompt):
     return create_agent(
@@ -227,14 +213,14 @@ def _make_coder_agent(model, name, system_prompt):
             get_script_history,
             smart_file_reader,
             rag_retrieve_mistakes,
-            inspect_folder_tree,   # ← lets agent survey /app/skills/ before reading
+            inspect_folder_tree,   # lets agent survey /app/skills/ before reading
         ],
         system_prompt=system_prompt,
         response_format=ScriptHandoff,
         name=name,
         middleware=[
             FilesystemFileSearchMiddleware(
-                root_path="/app/skills/",  # ← scoped to skills only
+                root_path="/app/skills/",  # scoped to skills only
                 use_ripgrep=True,
             ),
             ContextEditingMiddleware(
@@ -250,7 +236,6 @@ def _make_coder_agent(model, name, system_prompt):
             ),
         ],
     )
-
 
 
 _analyst_agent = create_agent(
@@ -282,18 +267,13 @@ _qa_agent = create_agent(
     name="qa_reporter",
 )
 
-_vlm_agent = create_agent(
-    llm_vlm,
-    tools=[
-        capture_ij_window,   # save named open IJ window as PNG via PyImageJ
-        build_compilation,   # fuse multiple images into a labelled side-by-side panel
-        analyze_image,       # send image/compilation to vision LLM, return analysis
-    ],
-    system_prompt=vlm_judge_prompt,
-    response_format=VLMHandoff,
-    name="vlm_judge",
-)
-
+# _vlm_agent = create_agent(  # VLM disabled
+#     llm_vlm,
+#     tools=[capture_ij_window, build_compilation, analyze_image],
+#     system_prompt=vlm_judge_prompt,
+#     response_format=VLMHandoff,
+#     name="vlm_judge",
+# )
 
 
 @tool
@@ -310,11 +290,7 @@ def imagej_coder(task: str, project_root: str) -> ScriptHandoff:
     If requires_user_approval=True, show the user the result before batch processing.
     If success=False, pass script_path + error_message to imagej_debugger.
     """
-
-    model = llm_worker  # ← codex is best for code generation, even for Python analyst tasks
-
-    agent = _make_coder_agent(model, "imagej_coder", imagej_coder_prompt)
-
+    agent = _make_coder_agent(llm_worker, "imagej_coder", imagej_coder_prompt)
     result = agent.invoke({
         "messages": [{
             "role": "user",
@@ -334,7 +310,6 @@ def imagej_debugger(script_path: str, error_message: str) -> ScriptHandoff:
     After success, pass lesson to save_coding_experience.
     """
     agent = _make_coder_agent(llm_worker, "imagej_debugger", imagej_debugger_prompt)
-
     result = agent.invoke({
         "messages": [{
             "role": "user",
@@ -385,85 +360,41 @@ def qa_reporter(project_root: str) -> QAHandoff:
     })
     return result["structured_response"]
 
-@tool
-def vlm_judge(
-    task:            str,
-    pipeline_step:   str,
-    expected_output: str,
-    image_source:    str | list[str],
-    labels:          Optional[list[str]] = None,
-) -> VLMHandoff:
-    """
-    Visually inspect one or more images using a vision LLM and return a structured verdict.
- 
-    ⚠️  COST NOTICE — vision API calls are significantly more expensive than text:
-        Call vlm_judge selectively — see WHEN TO CALL below.
- 
-    IMAGE SOURCE — two modes:
-        Single string:  open IJ window title  → captured via IJ API then analysed.
-                        absolute file path    → analysed directly, no capture.
-        List of strings: multiple window titles and/or file paths
-                        → automatically fused into a side-by-side compilation panel
-                          before analysis. Much more effective for comparisons than
-                          sending images separately (VLM gets direct spatial reference).
- 
-    Args:
-        task:            What to inspect and what criteria to judge against.
-        pipeline_step:   Short stage identifier for traceability, e.g. "segmentation".
-        expected_output: What a correct result looks like — used as pass/fail benchmark.
-        image_source:    Window title, file path, or list of either.
-                         Window titles: e.g. "MAX_DAPI.tif", "mask_nuclei.tif"
-                         File paths:    e.g. "/app/data/projects/study/processed/mask.tif"
-        labels:          Optional panel captions for compilations, e.g. ["Original", "Mask"].
-                         Ignored for single images.
- 
-    Returns VLMHandoff with overall_verdict ("PASS"/"WARN"/"FAIL"), per-check breakdown,
-    issues_found, and recommended_action.
- 
-    WHEN TO CALL (be selective — each call costs money):
-        ✅ Sample verification (Phase 4b) — once per pipeline, on the verification image.
-        ✅ Segmentation / threshold output — use compilation with original + result.
-        ✅ When a script exits cleanly but output is suspected to be wrong.
-        ✅ Final QA before qa_reporter — scale bar and output image check.
-        ✅ When the user reports a visual problem.
-        ❌ Do NOT call after every batch script execution.
-        ❌ Do NOT call to list open windows — use inspect_all_ui_windows.
-        ❌ Do NOT call to read CSV or log output — use inspect_csv_header / smart_file_reader.
- 
-    ACTING ON THE VERDICT:
-        PASS → proceed. Show summary to user at sample verification.
-        WARN → continue pipeline; report issues in Phase 5 summary.
-        FAIL → stop. Send script path + issues_found to imagej_debugger. AFTER asking the user for visual verfification. 
-               Re-run and call vlm_judge again after the fix.
-    """
-    sources = image_source if isinstance(image_source, list) else [image_source]
- 
-    content = (
-        f"PIPELINE STEP: {pipeline_step}\n"
-        f"IMAGE SOURCE(S): {sources}\n"
-        f"LABELS: {labels or []}\n"
-        f"EXPECTED OUTPUT: {expected_output}\n\n"
-        f"TASK: {task}"
-    )
- 
-    result = _vlm_agent.invoke({"messages": [{"role": "user", "content": content}]})
-    return result["structured_response"]
+
+# VLM disabled — uncomment to re-enable
+# @tool
+# def vlm_judge(task, pipeline_step, expected_output, image_source, labels=None):
+#     sources = image_source if isinstance(image_source, list) else [image_source]
+#     content = (
+#         f"PIPELINE STEP: {pipeline_step}\n"
+#         f"IMAGE SOURCE(S): {sources}\n"
+#         f"LABELS: {labels or []}\n"
+#         f"EXPECTED OUTPUT: {expected_output}\n\n"
+#         f"TASK: {task}"
+#     )
+#     result = _vlm_agent.invoke({"messages": [{"role": "user", "content": content}]})
+#     return result["structured_response"]
+
 
 # ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
-def init_agent():
+def init_agent(enable_qa: bool = False):
     fs_backend = FilesystemBackend(
         root_dir="/app/data/",
         virtual_mode=False,
     )
 
-    # Note: create_deep_agent already adds SummarizationMiddleware internally.
-    # Adding it here too would cause a duplicate-name error in create_agent
-    # (middleware names are checked via __class__.__name__).
-    # deepagents' built-in SummarizationMiddleware also persists history to
-    # the backend, so there is no need to add our own.
+    subagent_tools = [
+        imagej_coder,
+        imagej_debugger,
+        python_data_analyst,
+        # vlm_judge,  # VLM disabled
+    ]
+    if enable_qa:
+        subagent_tools.append(qa_reporter)
+
     supervisor_middleware = [
         ContextEditingMiddleware(
             edits=[
@@ -486,15 +417,11 @@ def init_agent():
     supervisor = create_deep_agent(
         name="ImageJ_Supervisor",
         tools=[
-            # ── subagents as tools (return typed JSON) ──────────────────────
-            imagej_coder,
-            imagej_debugger,
-            python_data_analyst,
-            vlm_judge,
-            qa_reporter,
+            *subagent_tools,
             # ── supervisor's own tools ───────────────────────────────────────
             internet_search,
             inspect_all_ui_windows,
+            capture_plugin_dialog,
             rag_retrieve_docs,
             save_coding_experience,
             rag_retrieve_mistakes,
@@ -512,7 +439,7 @@ def init_agent():
             setup_analysis_workspace,
             save_markdown,
         ],
-        system_prompt=supervisor_prompt,
+        system_prompt=build_supervisor_prompt(enable_qa),
         subagents=[],
         middleware=supervisor_middleware,
         model=llm_supervisor,

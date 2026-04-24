@@ -42,10 +42,9 @@ def get_expanded_queries(query: str) -> list[str]:
         "Focus on technical API terms, alternative function names, and common library methods.\n"
         "Output only the queries, one per line."
     )
-    chain = prompt | llm_nano | StrOutputParser()
+    chain = prompt | llm | StrOutputParser()
     variants = chain.invoke({"question": query}).strip().split("\n")
     return list(set([query] + [v.strip("- ").strip() for v in variants]))
-
 
 
 @tool("rag_retrieve")
@@ -54,7 +53,7 @@ def rag_retrieve_docs(query: str) -> list:
     Retrieve relevant context from the document RAG using Hybrid Search + Query Expansion.
     """
     if not is_rag_available():
-       return is_rag_available()
+        return is_rag_available()
 
     from ..rag.RAG import hybrid_search_with_rrf, apply_rrf, DOCS_COLLECTION_NAME
 
@@ -115,7 +114,7 @@ def save_coding_experience(language: str, error_description: str, failed_code: s
     Saves a successful fix to the persistent Memory RAG.
     Use this after the debugger fixes a script to prevent the error from happening again.
 
-    Args:   
+    Args:
 
     language: Programming language of the code (e.g., "Groovy", "Python").
     error_description: A brief description of the error encountered.

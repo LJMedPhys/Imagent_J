@@ -5,6 +5,7 @@ sys.path.insert(0, 'src')
 import os
 import re
 import json
+import time
 import html as html_module
 import logging
 import jpype
@@ -13,6 +14,7 @@ from PySide6.QtWidgets import (
     QTextEdit, QPushButton, QLabel, QListWidget,
     QSplitter, QScrollArea, QMessageBox, QListWidgetItem,
     QSizePolicy, QFrame, QGroupBox, QFileDialog,
+    QDialog, QDialogButtonBox, QPlainTextEdit, QCheckBox,
 )
 from PySide6.QtCore import QObject, Signal, Slot, QThread, Qt, QSize, QEvent, QTimer
 from queue import Queue
@@ -345,6 +347,8 @@ class SubagentHeartbeatTimer:
 class MetricsPanelWidget(QWidget):
     """Shows token/cost/tool metrics for the active conversation."""
 
+    qa_toggled = Signal(bool)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._build_ui()
@@ -401,6 +405,36 @@ class MetricsPanelWidget(QWidget):
             "color: white; border-radius: 3px; font-size: 11px;"
         )
         root.addWidget(self._btn_save)
+
+        self._btn_report = QPushButton("Report Issue")
+        self._btn_report.setStyleSheet(
+            "padding: 4px; background-color: #e74c3c; "
+            "color: white; border-radius: 3px; font-size: 11px;"
+        )
+        root.addWidget(self._btn_report)
+
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.HLine)
+        sep2.setFrameShadow(QFrame.Sunken)
+        root.addWidget(sep2)
+
+        agent_box = QGroupBox("Agent Options")
+        agent_layout = QVBoxLayout(agent_box)
+        agent_layout.setSpacing(4)
+        self._qa_checkbox = QCheckBox("QA Agent")
+        self._qa_checkbox.setChecked(False)
+        self._qa_checkbox.setToolTip(
+            "Enable the QA Reporter agent.\n"
+            "Runs a full audit at project end, checks for publication readiness, and generates\n"
+            "QA_Checklist_Report.md. Off by default, \n"
+            "as it adds significant cost per workflow."
+        )
+        self._qa_checkbox.stateChanged.connect(
+            lambda _: self.qa_toggled.emit(self._qa_checkbox.isChecked())
+        )
+        agent_layout.addWidget(self._qa_checkbox)
+        root.addWidget(agent_box)
+
         root.addStretch()
 
         self.update_metrics({
@@ -435,6 +469,171 @@ class MetricsPanelWidget(QWidget):
         self._lbl_calls.setText( f("Total",       str(data["tool_calls"]),            "#2c3e50"))
         self._lbl_failed.setText(f("Hard errors", str(data["failed_tool_calls"]),     "#e74c3c"))
         self._lbl_soft.setText(  f("Soft errors", str(data["soft_error_tool_calls"]), "#e67e22"))
+
+# ---------------------------------------------------------------------------
+# Feedback / Error-Report dialog
+# ---------------------------------------------------------------------------
+
+class FeedbackDialog(QDialog):
+    """Modal dialog for collecting user feedback and exporting an error report."""
+
+    def __init__(self, tracker_cb, history_manager, current_thread_id, parent=None):
+        super().__init__(parent)
+        self._tracker_cb = tracker_cb
+        self._history_manager   = history_manager
+        self._current_thread_id = current_thread_id
+        self.setWindowTitle("Report Issue")
+        self.setMinimumWidth(480)
+        self.setModal(True)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        layout.setContentsMargins(14, 14, 14, 14)
+
+        desc_label = QLabel(
+            "<b>Describe the problem</b><br>"
+            "<span style='color:#555; font-size:11px;'>"
+            "What did you ask the agent to do, and what went wrong?</span>"
+        )
+        desc_label.setTextFormat(Qt.RichText)
+        desc_label.setWordWrap(True)
+        layout.addWidget(desc_label)
+
+        self._text_edit = QPlainTextEdit()
+        self._text_edit.setPlaceholderText(
+            "e.g. 'The script ran but measured 0 cells on my fluorescence image.'"
+        )
+        self._text_edit.setFixedHeight(120)
+        layout.addWidget(self._text_edit)
+
+        options_box = QGroupBox("Export options")
+        options_layout = QVBoxLayout(options_box)
+        options_layout.setSpacing(4)
+        self._chk_usage = QCheckBox("Include usage stats (token counts, cost)")
+        self._chk_usage.setChecked(True)
+        options_layout.addWidget(self._chk_usage)
+        layout.addWidget(options_box)
+
+        conv_box = QGroupBox("Include conversations")
+        conv_layout = QVBoxLayout(conv_box)
+        conv_layout.setSpacing(2)
+        self._conv_list = QListWidget()
+        self._conv_list.setSelectionMode(QListWidget.NoSelection)
+        threads = self._history_manager.list_threads()
+        for thread_id, meta in threads:
+            title   = meta.get("title", thread_id)
+            display = f"{title[:45]}\u2026" if len(title) > 45 else title
+            item = QListWidgetItem(display)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(
+                Qt.Checked if thread_id == self._current_thread_id else Qt.Unchecked
+            )
+            item.setData(Qt.UserRole, thread_id)
+            self._conv_list.addItem(item)
+        self._conv_list.setFixedHeight(min(len(threads), 6) * 22 + 6)
+        conv_layout.addWidget(self._conv_list)
+        sel_row = QHBoxLayout()
+        btn_all  = QPushButton("Select all")
+        btn_none = QPushButton("Select none")
+        btn_all.setFixedHeight(20)
+        btn_none.setFixedHeight(20)
+        btn_all.clicked.connect(lambda: self._set_all_checks(Qt.Checked))
+        btn_none.clicked.connect(lambda: self._set_all_checks(Qt.Unchecked))
+        sel_row.addWidget(btn_all)
+        sel_row.addWidget(btn_none)
+        conv_layout.addLayout(sel_row)
+        layout.addWidget(conv_box)
+
+        info = QLabel(
+            "<span style='color:#888; font-size:10px;'>"
+            "The report includes: error details and script code from selected conversation, "
+            "your description, and basic system info (OS, Python version). "
+            "No image data or raw file contents are included. Multiple conversations are exported as a ZIP.</span>"
+        )
+        info.setTextFormat(Qt.RichText)
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        btn_box = QDialogButtonBox()
+        btn_box.addButton("Save Report\u2026", QDialogButtonBox.AcceptRole)
+        btn_box.addButton("Cancel", QDialogButtonBox.RejectRole)
+        btn_box.accepted.connect(self._on_export)
+        btn_box.rejected.connect(self.reject)
+        layout.addWidget(btn_box)
+
+    def _set_all_checks(self, state):
+        for i in range(self._conv_list.count()):
+            self._conv_list.item(i).setCheckState(state)
+
+    def _on_export(self):
+
+        selected = []
+        for i in range(self._conv_list.count()):
+            item = self._conv_list.item(i)
+            if item.checkState() == Qt.Checked:
+                selected.append(item.data(Qt.UserRole))
+
+        if not selected:
+            QMessageBox.warning(self, "Nothing selected",
+                                "Please select at least one conversation.")
+            return
+        
+        self._tracker_cb.set_user_feedback(self._text_edit.toPlainText().strip())
+
+        include_usage = self._chk_usage.isChecked()
+
+        if len(selected) == 1:
+            # Single conversation → plain JSON
+            report = self._tracker_cb.get_error_report_for_thread(
+                selected[0], include_usage_stats=include_usage
+            )
+        
+            default_name = os.path.expanduser(
+                f"~/imagentj_issue_{time.strftime('%Y%m%d_%H%M%S')}.json"
+            )
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Save Issue Report", default_name,
+                "JSON files (*.json);;All files (*)",
+            )
+            if not path:
+                return
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(report, f, indent=2, ensure_ascii=False)
+                QMessageBox.information(self, "Report Saved",
+                    f"Issue report saved to:\n{path}\n\nThank you for the feedback!")
+                self.accept()
+            except Exception as e:
+                log.exception(f"Failed to save issue report: {e}")
+                QMessageBox.warning(self, "Save Failed", str(e))
+        else:
+            # Multiple conversations → ZIP
+            default_name = os.path.expanduser(
+                f"~/imagentj_issue_{time.strftime('%Y%m%d_%H%M%S')}.zip"
+            )
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Save Issue Report Bundle", default_name,
+                "ZIP archives (*.zip);;All files (*)",
+            )
+            if not path:
+                return
+            try:
+                import zipfile
+                with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+                    for thread_id in selected:
+                        report = self._tracker_cb.get_error_report_for_thread(
+                            thread_id, include_usage_stats=include_usage
+                        )
+                        fname = f"report_{thread_id[:8]}.json"
+                        zf.writestr(fname, json.dumps(report, indent=2, ensure_ascii=False))
+                QMessageBox.information(self, "Report Saved",
+                    f"Bundle with {len(selected)} conversation(s) saved to:\n{path}"
+                    "\n\nThank you for the feedback!")
+                self.accept()
+            except Exception as e:
+                log.exception(f"Failed to save issue bundle: {e}")
+                QMessageBox.warning(self, "Save Failed", str(e))
+        
 
 
 # ---------------------------------------------------------------------------
@@ -639,6 +838,8 @@ class ImageJAgentGUI(QWidget):
         self.metrics_panel.setMinimumWidth(190)
         self.metrics_panel.setMaximumWidth(250)
         self.metrics_panel._btn_save.clicked.connect(self._save_report)
+        self.metrics_panel._btn_report.clicked.connect(self._open_feedback_dialog)
+        self.metrics_panel.qa_toggled.connect(self._on_qa_toggled)
 
         splitter.addWidget(self.history_panel)
         splitter.addWidget(chat_widget)
@@ -782,6 +983,15 @@ class ImageJAgentGUI(QWidget):
             QMessageBox.warning(self, "Save Failed", str(e))
 
 
+    def _open_feedback_dialog(self):
+        dlg = FeedbackDialog(
+            self._tracker_cb,
+            self.history_manager,
+            self.current_thread_id,
+            parent=self,
+        )
+        dlg.exec()
+
     # ------------------------------------------------------------------
     # Status / UI helpers
     # ------------------------------------------------------------------
@@ -823,6 +1033,28 @@ class ImageJAgentGUI(QWidget):
             self.send_button.setStyleSheet(
                 "background-color: #3498db; color: white; font-weight: bold; padding: 8px; border:none;"
             )
+
+    # ------------------------------------------------------------------
+    # Agent options
+    # ------------------------------------------------------------------
+
+    def _on_qa_toggled(self, enabled: bool):
+        if self._agent_is_busy():
+            # Revert the checkbox — can't reinit while agent is running
+            self.metrics_panel._qa_checkbox.blockSignals(True)
+            self.metrics_panel._qa_checkbox.setChecked(not enabled)
+            self.metrics_panel._qa_checkbox.blockSignals(False)
+            self.set_status("Cannot change QA Agent setting while agent is running.")
+            return
+        (self.supervisor,
+         self.checkpointer,
+         self._metrics,
+         self._metrics_bridge,
+         self._tracker_cb) = init_agent(enable_qa=enabled)
+        self.worker.supervisor = self.supervisor
+        self._metrics_bridge.updated.connect(self.metrics_panel.update_metrics)
+        #self.set_status(f"QA Agent {'enabled' if enabled else 'disabled'}.")
+
 
     # ------------------------------------------------------------------
     # Agent lifecycle
@@ -986,10 +1218,7 @@ class ImageJAgentGUI(QWidget):
                     continue
 
                 # ── AI text (supervisor speaking to user) ─────────────────────
-                # Show content whenever present — including when tool_calls is also
-                # set (the supervisor's MANDATORY NARRATION comes through as a
-                # message with both content and tool_calls on the same object).
-                if content:
+                if content and not tool_calls:
                     self._stop_heartbeat()
                     self._status_bubble = None
 

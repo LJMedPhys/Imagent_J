@@ -6,6 +6,80 @@ from imagentj.imagej_context import get_ij
 
 
 @tool
+def get_imagej_log(last_lines: int = 100) -> str:
+    """
+    Read all visible text/error windows from the running Fiji instance.
+
+    USE THIS TOOL when:
+    - The user reports an error, something "not working", unexpected results, or nothing happening.
+    - The word 'error', 'failed', 'exception', 'crash', 'nothing happened', or 'not working'
+      appears in the user's message.
+    - inspect_all_ui_windows reveals a window named 'Log' or 'Exception' is open.
+
+    Scans ALL visible Fiji frames (Log window, Exception pop-ups, Script Editor console, etc.)
+    by reading their TextPanel content directly — more reliable than IJ.getLog() which only
+    captures IJ.log() calls and misses exception dialogs.
+    """
+    try:
+        from scyjava import jimport
+        Frame     = jimport("java.awt.Frame")
+        TextWindow = jimport("ij.text.TextWindow")
+    except Exception as e:
+        return f"ERROR: Could not import Java classes: {e}"
+
+    error_keywords = ("exception", "error", "warning", "failed", "caused by", "at ij.", "at net.")
+    sections = []
+
+    try:
+        frames = Frame.getFrames()
+    except Exception as e:
+        return f"ERROR: Could not list Fiji frames: {e}"
+
+    for frame in frames:
+        try:
+            if not frame.isVisible():
+                continue
+            title = str(frame.getTitle())
+
+            # Only read TextWindow instances (Log, Exception, Console, etc.)
+            if not isinstance(frame, TextWindow):
+                continue
+
+            panel = frame.getTextPanel()
+            text = str(panel.getText()) if panel is not None else ""
+
+            if not text.strip():
+                continue
+
+            lines = text.splitlines()
+            tail = lines[-last_lines:]
+
+            annotated = []
+            for line in tail:
+                if any(kw in line.lower() for kw in error_keywords):
+                    annotated.append(f"⚠️  {line}")
+                else:
+                    annotated.append(f"   {line}")
+
+            sections.append(
+                f"=== Window: '{title}' ({len(lines)} lines total, showing last {len(tail)}) ===\n"
+                + "\n".join(annotated)
+            )
+
+        except Exception:
+            continue
+
+    if not sections:
+        return (
+            "No visible TextWindow content found in Fiji. "
+            "The error may only exist in the script execution output (STDERR) "
+            "already returned by execute_script."
+        )
+
+    return "\n\n".join(sections)
+
+
+@tool
 def internet_search(query: str, max_results: int = 5):
     """Run a web search"""
     ddgs = DDGS()

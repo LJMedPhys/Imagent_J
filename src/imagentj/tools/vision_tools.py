@@ -3,7 +3,7 @@ vision.py — Vision tools for the VLM judge agent.
 
   capture_ij_window   → saves a named open IJ window as PNG via PyImageJ/scyjava
   build_compilation   → fuses multiple images into a labelled side-by-side panel
-  analyze_image       → resizes to ≤1024 px and sends to a vision LLM via OpenRouter
+  analyze_image       → resizes to ≤1024 px and sends to a vision LLM via OpenAI
 
 Comparison workflow:
     path1 = capture_ij_window("raw_DAPI.tif")
@@ -20,7 +20,6 @@ import time
 from pathlib import Path
 from typing import Optional
 
-import requests
 from PIL import Image, ImageDraw, ImageFont
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage

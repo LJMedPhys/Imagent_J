@@ -1,14 +1,19 @@
 services:
   imagentj:
-    image: imagent_j-imagent-with-chat-history
-    build: .
+    image: imagentj:cpu #-with-chat-history
+    # Fiji has no Linux arm64 binary — pin to amd64 so Apple Silicon uses Rosetta
+    platform: linux/amd64
+    build:
+      context: .
+      target: cpu
     ports:
       # Bind to localhost only by default for security
       # Change to "0.0.0.0:6080:6080" if you need network access (not recommended)
       - "0.0.0.0:6080:6080"
     environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPEN_ROUTER_API_KEY=${OPEN_ROUTER_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - LANGSMITH_API_KEY=${LANGSMITH_API_KEY:-}
       - LANGSMITH_TRACING=${LANGSMITH_TRACING:-true}
       - LANGSMITH_ENDPOINT=${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
@@ -23,27 +28,37 @@ services:
       - PYTHONUNBUFFERED=1
 
     volumes:
-      # Fiji plugin persistence across container rebuilds
+      # Fiji plugin persistence — seeded from image on first run by entrypoint
       - fiji_plugins:/opt/Fiji.app/plugins
       - fiji_jars:/opt/Fiji.app/jars
-      - ./fiji_update:/opt/Fiji.app/update
+      # DeepImageJ APPOSE framework environments (TF, PyTorch) — persisted so
+      # they are created once on first model run and reused on every subsequent start
+      - appose_envs:/opt/appose
       # Saved scripts persistence
       - saved_scripts:/app/scripts/saved_scripts
       # Qdrant vector database for plugin search and RAG
-      # Use bind mount (./qdrant_data on host) instead of named volume to preserve host permissions
-      - ./qdrant_data:/app/qdrant_data
+      # Named volume so Docker initialises it with the correct imagentj ownership from the image.
+      # (dev compose overrides this with a bind mount for direct host access)
+      - qdrant_data:/app/qdrant_data
       # Image data directory (place images in ./data on host, access as /mnt/data in container)
       - ${IMAGE_DATA_DIR:-./data}:/data
-      # Entrypoint script (contains security features like VNC password support)
-      - ./docker-entrypoint.sh:/docker-entrypoint.sh
       # Source code mount for development (remove in production image)
       - ./src:/app/src:ro
       - ./gui_runner.py:/app/gui_runner.py:ro
       - ./setup_wizard.py:/app/setup_wizard.py:ro
       # Folder to save data
       - ./data:/app/data
+      # User home — persists api_keys.env (outside /app/data so agent can't read it)
+      - imagentj_home:/home/imagentj
+      # Cellpose models — bind-mount so models are available without rebuilding
+      - ./models:/home/imagentj/.cellpose/models
       # Folder for skills
       - ./skills:/app/skills:ro
+      # Entrypoint bind-mount so changes take effect without rebuilding
+      - ./docker-entrypoint.sh:/docker-entrypoint.sh:ro
+      # Shim bind-mounts — host file is executable; avoids needing root chmod after cp
+      - ./micromamba_shim.sh:/usr/local/opt/micromamba/bin/micromamba:ro
+      - ./micromamba_shim.sh:/opt/micromamba/bin/micromamba:ro
     env_file:
       - path: .env
         required: false
@@ -74,8 +89,10 @@ services:
 volumes:
   fiji_plugins:
   fiji_jars:
-  fiji_update:
   saved_scripts:
+  qdrant_data:
+  appose_envs:
+  imagentj_home:
 
 networks:
   imagent_net:

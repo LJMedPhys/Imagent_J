@@ -80,23 +80,20 @@ def get_embeddings_models():
     """
     Returns the initialized dense and sparse embedding models.
     """
-
     if openrouter_key:
         dense_embeddings = OpenAIEmbeddings(
-        model="openai/text-embedding-3-large",
-        api_key=openrouter_key,
-        openai_api_base="https://openrouter.ai/api/v1",
+            model="openai/text-embedding-3-large",
+            api_key=openrouter_key,
+            openai_api_base="https://openrouter.ai/api/v1",
         )
-
     elif openai_key and not openrouter_key:
         dense_embeddings = OpenAIEmbeddings(
             model="text-embedding-3-large",
             api_key=openai_key,
         )
-
     else:
-        raise ValueError("No API key found for OpenAI or OpenRouter. Please set OPENAI_API_KEY or OPEN_ROUTER_API_KEY environment variable.")
-    
+        raise ValueError("No API key found. Set OPEN_ROUTER_API_KEY or OPENAI_API_KEY.")
+
     sparse_embeddings = FastEmbedSparse(model_name=SPARSE_MODEL_NAME)
     return dense_embeddings, sparse_embeddings
 
