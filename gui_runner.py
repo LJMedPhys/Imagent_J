@@ -669,6 +669,7 @@ class AgentWorker(QObject):
             config = {
                 "configurable": {"thread_id": self.thread_id},
                 "callbacks":    [self.tracker_callback],
+                "recursion_limit": int(os.getenv("AGENT_RECURSION_LIMIT", "40")),
             }
             for event in self.supervisor.stream(
                 {"messages": [{"role": "user", "content": user_input}]},

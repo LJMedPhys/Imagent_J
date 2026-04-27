@@ -21,6 +21,18 @@ services:
       - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-}
       - LANGCHAIN_CALLBACKS_BACKGROUND=${LANGCHAIN_CALLBACKS_BACKGROUND:-true}
       - FIJI_PATH=/opt/Fiji.app
+      # Optional NapariMCP bridge. Defaults to a host-side napari session.
+      # Override NAPARI_MCP_URL when using a different bridge endpoint.
+      - NAPARI_MCP_URL=${NAPARI_MCP_URL:-http://host.docker.internal:9999/mcp}
+      - NAPARI_MCP_HOST_DATA_DIR=${NAPARI_MCP_HOST_DATA_DIR:-${PWD}/data}
+      - NAPARI_MCP_COMMAND=${NAPARI_MCP_COMMAND:-}
+      - NAPARI_MCP_ARGS=${NAPARI_MCP_ARGS:-}
+      - NAPARI_MCP_BRIDGE_PORT=${NAPARI_MCP_BRIDGE_PORT:-9999}
+      - NAPARI_MCP_AUTOSTART=${NAPARI_MCP_AUTOSTART:-false}
+      - NAPARI_MCP_AUTOSTART_COMMAND=${NAPARI_MCP_AUTOSTART_COMMAND:-}
+      - NAPARI_MCP_AUTOSTART_CWD=${NAPARI_MCP_AUTOSTART_CWD:-}
+      - NAPARI_MCP_AUTOSTART_LOG=${NAPARI_MCP_AUTOSTART_LOG:-}
+      - NAPARI_MCP_AUTOSTART_WAIT_SECONDS=${NAPARI_MCP_AUTOSTART_WAIT_SECONDS:-20}
       - QDRANT_DATA_PATH=/app/qdrant_data
       - DISPLAY=:1
       # Optional: Set a VNC password (recommended if exposing to network)
