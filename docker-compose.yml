@@ -36,10 +36,11 @@ services:
       - appose_envs:/opt/appose
       # Saved scripts persistence
       - saved_scripts:/app/scripts/saved_scripts
-      # Qdrant vector database for plugin search and RAG
-      # Named volume so Docker initialises it with the correct imagentj ownership from the image.
-      # (dev compose overrides this with a bind mount for direct host access)
-      - qdrant_data:/app/qdrant_data
+      # Qdrant vector database for plugin search and RAG.
+      # Bind-mount the host folder directly: qdrant_data/ is in .dockerignore and therefore
+      # never reaches the image, so a named volume would always seed empty. The host folder
+      # is the source of truth for ingested data.
+      - ./qdrant_data:/app/qdrant_data
       # Image data directory (place images in ./data on host, access as /mnt/data in container)
       - ${IMAGE_DATA_DIR:-./data}:/data
       # Source code mount for development (remove in production image)
@@ -90,7 +91,6 @@ volumes:
   fiji_plugins:
   fiji_jars:
   saved_scripts:
-  qdrant_data:
   appose_envs:
   imagentj_home:
 
