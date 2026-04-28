@@ -1,15 +1,20 @@
+# End-user compose file for the published Docker Hub image.
+# Users only need this single file plus an optional .env for API keys.
+#
+# Usage:
+#   1. Save this file as docker-compose.yml in an empty directory
+#   2. (Optional) Create a .env file alongside it with API keys
+#   3. docker compose pull && docker compose up
+#   4. Open http://localhost:6080 in a browser
+#
+# Place input images in ./data on the host; they appear at /data inside the
+# container.
+
 services:
   imagentj:
-    image: ${IMAGENTJ_IMAGE:-imagentj:cpu-mac-test}
-    # Do not pin platform here: Docker/BuildKit builds for the host architecture
-    # by default, and the Dockerfile routes arch-specific steps via TARGETARCH.
-    build:
-      context: .
-      dockerfile: ${IMAGENTJ_DOCKERFILE:-Dockerfile}
-      target: cpu
+    image: ${IMAGENTJ_IMAGE:-yourdockerhubuser/imagentj:latest}
+    pull_policy: missing
     ports:
-      # Bind to localhost only by default for security
-      # Change to "0.0.0.0:6080:6080" if you need network access (not recommended)
       - "0.0.0.0:6080:6080"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -20,55 +25,34 @@ services:
       - LANGSMITH_ENDPOINT=${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
       - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-}
       - LANGCHAIN_CALLBACKS_BACKGROUND=${LANGCHAIN_CALLBACKS_BACKGROUND:-true}
-      - FIJI_PATH=/opt/Fiji.app
-      - QDRANT_DATA_PATH=/app/qdrant_data
-      - DISPLAY=:1
-      # Optional: Set a VNC password (recommended if exposing to network)
       - VNC_PASSWORD=${VNC_PASSWORD:-}
-      - PYTHONPATH=/app:/app/src:/app/extra_packages
-      - PYTHONUNBUFFERED=1
 
     volumes:
-      # Fiji plugin persistence — seeded from image on first run by entrypoint
+      # Fiji plugin/jar persistence — auto-seeded from the image on first run
       - fiji_plugins:/opt/Fiji.app/plugins
       - fiji_jars:/opt/Fiji.app/jars
-      # DeepImageJ APPOSE framework environments (TF, PyTorch) — persisted so
-      # they are created once on first model run and reused on every subsequent start
+      # DeepImageJ APPOSE framework environments (TF, PyTorch)
       - appose_envs:/opt/appose
-      # Saved scripts persistence
+      # User-saved scripts
       - saved_scripts:/app/scripts/saved_scripts
-      # Qdrant vector database for plugin search and RAG
-      # Named volume so Docker initialises it with the correct imagentj ownership from the image.
-      # (dev compose overrides this with a bind mount for direct host access)
+      # Qdrant vector database (plugin search & RAG)
       - qdrant_data:/app/qdrant_data
-      # Image data directory (place images in ./data on host, access as /mnt/data in container)
-      - ${IMAGE_DATA_DIR:-./data}:/data
-      # Source code mount for development (remove in production image)
-      - ./src:/app/src:ro
-      - ./gui_runner.py:/app/gui_runner.py:ro
-      - ./setup_wizard.py:/app/setup_wizard.py:ro
-      # Folder to save data
-      - ./data:/app/data
-      # User home — persists api_keys.env (outside /app/data so agent can't read it)
+      # User home — persists API keys written by the in-app setup wizard
       - imagentj_home:/home/imagentj
-      # Cellpose models — bind-mount so models are available without rebuilding
-      - ./models:/home/imagentj/.cellpose/models
-      # Folder for skills
-      - ./skills:/app/skills:ro
-      # Entrypoint bind-mount so changes take effect without rebuilding
-      - ./docker-entrypoint.sh:/docker-entrypoint.sh:ro
-      # Shim bind-mounts — host file is executable; avoids needing root chmod after cp
-      - ./micromamba_shim.sh:/usr/local/opt/micromamba/bin/micromamba:ro
-      - ./micromamba_shim.sh:/opt/micromamba/bin/micromamba:ro
+      # Cellpose models — downloaded on demand into this named volume
+      - cellpose_models:/home/imagentj/.cellpose/models
+      # Host-mounted data folder: drop input images here, find outputs here too
+      - ${IMAGE_DATA_DIR:-./data}:/data
+
     env_file:
       - path: .env
         required: false
+
     shm_size: '2gb'
 
     networks:
       - imagent_net
 
-    # ── Resource limits ────────────────────────────────────────────────────
     deploy:
       resources:
         limits:
@@ -77,13 +61,9 @@ services:
         reservations:
           memory: 2G
 
-    # ── Security hardening ──────────────────────────────────────────────────
-    # Run as non-root (also set in Dockerfile, belt-and-suspenders)
     user: "imagentj"
-    # Prevent privilege escalation
     security_opt:
       - no-new-privileges:true
-    # Drop all Linux capabilities — none are needed
     cap_drop:
       - ALL
 
@@ -94,11 +74,11 @@ volumes:
   qdrant_data:
   appose_envs:
   imagentj_home:
+  cellpose_models:
 
 networks:
   imagent_net:
     ipam:
       driver: default
       config:
-        # Using 10.10.10.0/24 is usually safe from 172.x conflicts
         - subnet: 10.10.10.0/24

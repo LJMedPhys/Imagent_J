@@ -86,21 +86,6 @@ esac
 rm -f /tmp/.X1-lock
 rm -f /tmp/.X11-unix/X1
 
-# ── Ensure Nashorn JavaScript engine JAR is present ──────────────────────────
-# Java 15+ removed the built-in Nashorn engine. Rhino (also installed) covers
-# generic JSR-223 JS, but Fiji macros that request the engine by the name
-# "nashorn" specifically will not find it without the standalone nashorn-core JAR.
-# This check ensures the JAR is in the fiji_jars volume even on pre-existing
-# volumes that predate its addition to the image.
-NASHORN_JAR="$FIJI_HOME/jars/nashorn-core-15.4.jar"
-if [ ! -f "$NASHORN_JAR" ]; then
-    echo "[entrypoint] Downloading nashorn-core-15.4.jar (JavaScript engine)..."
-    wget -q -O "$NASHORN_JAR" \
-        "https://repo1.maven.org/maven2/org/openjdk/nashorn/nashorn-core/15.4/nashorn-core-15.4.jar" \
-    && echo "[entrypoint] nashorn-core-15.4.jar installed" \
-    || { echo "[entrypoint] WARNING: failed to download nashorn-core JAR — .js macros may not work"; rm -f "$NASHORN_JAR"; }
-fi
-
 # ── Fix CSBDeep/StarDist protobuf JAR conflict ───────────────────────────────
 # CSBDeep's TensorFlow 1.x bindings require protobuf-java-3.6.x.
 # The makeExtensionsImmutable() NoSuchMethodError is caused by a newer protobuf
@@ -319,13 +304,6 @@ websockify --web /usr/share/novnc 6080 localhost:5900 &
 sleep 1
 
 echo "[entrypoint] noVNC is listening on http://localhost:6080"
-
-# ── Ensure langgraph-checkpoint-sqlite is installed (needed for chat persistence) ──
-python3 -c "import langgraph.checkpoint.sqlite" 2>/dev/null || {
-    echo "[entrypoint] Installing langgraph-checkpoint-sqlite..."
-    pip install langgraph-checkpoint-sqlite -q
-    echo "[entrypoint] langgraph-checkpoint-sqlite installed"
-}
 
 # ── Load persisted API keys (if any) ────────────────────────────────────────
 API_KEYS_FILE=/home/imagentj/api_keys.env

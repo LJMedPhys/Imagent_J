@@ -329,6 +329,13 @@ RUN chmod +x /usr/local/opt/micromamba/bin/micromamba \
     && chmod +x /opt/micromamba/bin/micromamba \
     && ln -sf micromamba /opt/micromamba/bin/conda
 
+# ── Bake in nashorn-core JAR (JavaScript engine for Fiji macros) ─────────────
+# Java 15+ removed the built-in Nashorn engine. Fiji macros that request the
+# engine by name "nashorn" need this JAR. Baked in here so the image is
+# self-contained and works without network access at runtime.
+RUN wget -q -O /opt/Fiji.app/jars/nashorn-core-15.4.jar \
+    "https://repo1.maven.org/maven2/org/openjdk/nashorn/nashorn-core/15.4/nashorn-core-15.4.jar"
+
 # ── Fonts (separate layer - changes here won't invalidate conda cache) ───────
 RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-dejavu-core fonts-liberation fonts-noto-color-emoji \
@@ -371,10 +378,16 @@ RUN mkdir -p /app/qdrant_data /home/imagentj/.cellpose /home/imagentj/.cache \
 RUN mkdir -p /home/imagentj/.cellpose/models \
     && chown -R imagentj:imagentj /home/imagentj/.cellpose
 
-# ── Seed home dir for named-volume persistence ────────────────────────────────
-# imagentj_home is a named volume mounted at /home/imagentj. It starts empty,
-# shadowing these baked-in config files. The entrypoint seeds it on first start.
-RUN cp -a /home/imagentj /home/imagentj.seed
+# ── Seed dirs for named-volume persistence ───────────────────────────────────
+# fiji_jars, fiji_plugins, imagentj_home are named volumes that mount empty,
+# shadowing these baked-in dirs. Docker auto-initialises an empty volume from
+# the image content on first attach, but on rebuilds the existing volume keeps
+# its old contents — so the entrypoint re-seeds from these .seed snapshots
+# (skipping files already present) to propagate any new JARs/plugins added
+# in the new image build.
+RUN cp -a /opt/Fiji.app/jars    /opt/Fiji.app/jars.seed \
+    && cp -a /opt/Fiji.app/plugins /opt/Fiji.app/plugins.seed \
+    && cp -a /home/imagentj        /home/imagentj.seed
 
 # ── Environment defaults ─────────────────────────────────────────────────────
 ENV DISPLAY=:1
