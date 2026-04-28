@@ -1,0 +1,16 @@
+# Force LF line endings for files that are executed inside the Linux container.
+# Without this, Windows clones with autocrlf=true get CRLF in the working tree,
+# and bash fails with `\r: command not found` when these files are bind-mounted.
+*.sh                text eol=lf
+docker-entrypoint.sh    text eol=lf
+micromamba_shim.sh      text eol=lf
+Dockerfile              text eol=lf
+.dockerignore           text eol=lf
+*.yml                   text eol=lf
+*.yaml                   text eol=lf
+
+# Python source — LF in the repo, LF inside the container.
+*.py                text eol=lf
+
+# Default: let git auto-detect text vs binary; normalise text to LF on commit.
+*                   text=auto eol=lf
