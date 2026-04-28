@@ -1,4 +1,4 @@
-"# ImageJ Agent (ImagentJ)
+# ImageJ Agent (ImagentJ)
 
 An AI-powered agent for ImageJ/Fiji scripting and bioimage analysis.
 
@@ -68,10 +68,64 @@ To add new documents to the knowledge base:
 - CLI version: `python run.py`
 - GUI version: `python gui_runner.py`
 
+## Optional NapariMCP Integration
+
+Agent J can act as an MCP host for a host-side napari session. This lets Agent J
+open images in napari, inspect layers, adjust viewer state, and call other tools
+provided by `napari-mcp`.
+
+Run the setup script on the host machine, not inside the Docker container:
+
+Install, register, and immediately start the bridge in one command:
+
+```bash
+python scripts/setup_napari_mcp.py --start-bridge
+```
+
+The script creates or reuses an isolated `imagentj-napari-mcp` environment with
+`napari`, `pyqt6`, `napari-mcp`, and a compatible `fastmcp<3`, then writes
+`.imagentj/mcp.json`. Docker Compose mounts that file into
+`/app/.imagentj/mcp.json`, so Agent J can discover the MCP server when it starts.
+
+Or first set up the environment and register the MCP server, then start the bridge separately:
+
+```bash
+python scripts/setup_napari_mcp.py
+```
+
+Start the host-side napari bridge:
+
+```bash
+conda run -n imagentj-napari-mcp python scripts/start_napari_mcp_bridge.py
+```
+
+If the setup script selected `mamba`, `micromamba`, or a virtualenv, use the
+launch command printed by the script instead.
+
+Then start or restart Agent J so it discovers the dynamic MCP tools:
+
+```bash
+docker compose up imagentj
+# or, if the container is already running:
+docker compose restart imagentj
+```
+
+For a non-Docker Agent J process, register a localhost endpoint instead:
+
+```bash
+python scripts/setup_napari_mcp.py --agentj-target local
+```
+
+If discovery succeeds, Agent J will expose tools such as
+`mcp__napari_mcp__session_information`, `mcp__napari_mcp__list_layers`, and
+`mcp__napari_mcp__add_layer`.
+
+See `docs/napari_mcp_agentj.md` for manual configuration and troubleshooting.
+
 
 ## Project Structure
 
 - `src/imagentj/`: Main package
 - `scripts/`: Saved scripts
 - `data/`: Data storage
-- `src/config/`: Configuration files" 
+- `src/config/`: Configuration files

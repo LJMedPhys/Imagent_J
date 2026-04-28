@@ -11,6 +11,9 @@ services:
       # Bind to localhost only by default for security
       # Change to "0.0.0.0:6080:6080" if you need network access (not recommended)
       - "0.0.0.0:6080:6080"
+    extra_hosts:
+      # Makes the host-side NapariMCP bridge reachable from Linux Docker too.
+      - "host.docker.internal:host-gateway"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPEN_ROUTER_API_KEY=${OPEN_ROUTER_API_KEY:-}
