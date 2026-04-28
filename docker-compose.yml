@@ -26,6 +26,10 @@ services:
       - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-}
       - LANGCHAIN_CALLBACKS_BACKGROUND=${LANGCHAIN_CALLBACKS_BACKGROUND:-true}
       - VNC_PASSWORD=${VNC_PASSWORD:-}
+      # Chat history → into the imagentj_home named volume so it survives
+      # `docker compose down`. Default path /app/data/chats is the container's
+      # writable layer and would be lost when the container is recreated.
+      - CHAT_DATA_PATH=/home/imagentj/chats
 
     volumes:
       # Fiji plugin/jar persistence — auto-seeded from the image on first run
