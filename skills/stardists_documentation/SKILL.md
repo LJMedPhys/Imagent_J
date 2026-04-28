@@ -131,15 +131,31 @@ rm.reset()
 IJ.run("Clear Results", "")
 ```
 
-### Pitfall 5 — Single channel only
-StarDist errors or silently uses the first channel on multi-channel images.
-Extract the target channel before running:
-```groovy
-if (imp.getNChannels() > 1) {
-    IJ.run(imp, "Slice Keeper", "first=1 last=1 increment=1")
-    imp = IJ.getImage()
-}
-```
+### Pitfall 5 — Single grayscale channel only (RGB and multi-channel both fail)
+
+The `Versatile (fluorescent nuclei)` model expects a **single-channel grayscale**
+image. Two distinct failure modes:
+
+1. **RGB images** (`bitDepth == 24`, `type == ImagePlus.COLOR_RGB`) — the detector
+   returns a null prediction and the run yields zero ROIs (or throws
+   `NullPointerException: prediction is null` when wrapped by TrackMate-StarDist).
+   Convert first:
+   ```groovy
+   if (imp.getType() == ImagePlus.COLOR_RGB) {
+       IJ.run(imp, "8-bit", "")    // luminosity → single 8-bit channel
+   }
+   ```
+   For H&E, use `Versatile (H&E nuclei)` instead and **do not** convert — that
+   model expects the original RGB.
+
+2. **Multi-channel composites** (`getNChannels() > 1`) — StarDist silently uses
+   the first channel. Extract the target channel before running:
+   ```groovy
+   if (imp.getNChannels() > 1) {
+       IJ.run(imp, "Slice Keeper", "first=1 last=1 increment=1")
+       imp = IJ.getImage()
+   }
+   ```
 
 ---
 
