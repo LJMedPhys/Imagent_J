@@ -7,12 +7,12 @@
 #   3. docker compose pull && docker compose up
 #   4. Open http://localhost:6080 in a browser
 #
-# Place input images in ./data on the host; they appear at /data inside the
-# container.
+# Place input images in ./data on the host; they appear at /app/data inside
+# the container.
 
 services:
   imagentj:
-    image: ${IMAGENTJ_IMAGE:-yourdockerhubuser/imagentj:latest}
+    image: ${IMAGENTJ_IMAGE:-imagentj:cpu}
     pull_policy: missing
     ports:
       - "0.0.0.0:6080:6080"
@@ -45,8 +45,10 @@ services:
       - imagentj_home:/home/imagentj
       # Cellpose models — downloaded on demand into this named volume
       - cellpose_models:/home/imagentj/.cellpose/models
-      # Host-mounted data folder: drop input images here, find outputs here too
-      - ${IMAGE_DATA_DIR:-./data}:/data
+      # Host-mounted data folder: drop input images here, find outputs here too.
+      # Mounted at /app/data because the application code (logging, projects,
+      # chats, RAG, tracker, vision tools) hardcodes that path.
+      - ${IMAGE_DATA_DIR:-./data}:/app/data
 
     env_file:
       - path: .env
