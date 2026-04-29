@@ -23,6 +23,12 @@ import ij.IJ
 
 def imp = IJ.getImage()
 
+// Dynamic nTiles calculation to prevent OOM on large images
+// Formula: max(1, ceil(W*H / 10^7))
+long w = imp.getWidth()
+long h = imp.getHeight()
+int calculatedTiles = (int) Math.max(1, Math.ceil((w * h) / 10000000.0))
+
 def res = command.run(StarDist2D, false,
     "input",               imp,
     "modelChoice",         "Versatile (fluorescent nuclei)",
@@ -32,13 +38,13 @@ def res = command.run(StarDist2D, false,
     "probThresh",          0.5,
     "nmsThresh",           0.4,
     "outputType",          "Both",
-    "nTiles",              1,
+    "nTiles",              calculatedTiles, // Dynamic tiling
     "excludeBoundary",     2,
     "roiPosition",         "Automatic",
     "verbose",             false,
     "showCsbdeepProgress", false,
     "showProbAndDist",     false
-).get()                              // .get() is REQUIRED — blocks until inference is done
+).get()                         // .get() is REQUIRED — blocks until inference is done
 
 // getOutput("label") returns a SciJava Dataset — must be shown before using as ImagePlus
 def labelDataset = res.getOutput("label")
@@ -129,7 +135,7 @@ IJ.log("Cells: " + cellCount)
 | `probThresh` | `double` | `0.5` | 0–1; higher = fewer detections |
 | `nmsThresh` | `double` | `0.4` | 0–1; lower = less overlap allowed |
 | `outputType` | `String` | — | `"Label Image"` / `"ROI Manager"` / `"Both"` |
-| `nTiles` | `int` | `1` | 1, 4, 9, 16 (use square grid values) |
+| `nTiles` | `int` | `1` | if Image > 5MP, set nTiles>= 4 by default, 1, 4, 9, 16 (use square grid values) |
 | `excludeBoundary` | `int` | `2` | ≥0 pixels |
 | `roiPosition` | `String` | `"Automatic"` | `"Automatic"` / `"Stack"` / `"Hyperstack"` |
 | `verbose` | `boolean` | `false` | `true` / `false` |
@@ -169,7 +175,22 @@ def res = command.run(StarDist2D, false, ...).get()
 def label = res.getOutput("label")
 ```
 
-### Pitfall 3 — `getOutput("label")` is a Dataset, not an ImagePlus
+### Pitfall 3 — Out-of-Memory (OOM) on large images
+
+StarDist 2D processes images in the GPU/CPU memory. Large images (e.g., > 10MP) often crash without tiling.
+
+Solution: Always calculate nTiles based on image area. In the StarDist 2D plugin, nTiles refers to the number of tiles per dimension (e.g., nTiles = 2 creates a 2×2 grid). The heuristic max(1, ceil(W*H/10^7)) is a safe baseline for most systems.
+
+Groovy example for dynamic nTiles calculation:
+
+```groovy
+long w = imp.getWidth()
+long h = imp.getHeight()
+int calculatedTiles = (int) Math.max(1, Math.ceil((w * h) / 10000000.0))
+```
+
+
+### Pitfall 4 — `getOutput("label")` is a Dataset, not an ImagePlus
 ```groovy
 // WRONG — Dataset does not have setTitle(), getProcessor(), etc.:
 def labelImp = res.getOutput("label")
@@ -181,7 +202,7 @@ def labelImp = IJ.getImage()
 labelImp.setTitle("labels")
 ```
 
-### Pitfall 4 — ROI Manager must be cleared between images in batch
+### Pitfall 5 — ROI Manager must be cleared between images in batch
 ```groovy
 // At the start of each image in a loop:
 def rm = RoiManager.getInstance() ?: new RoiManager()
@@ -189,14 +210,14 @@ rm.reset()
 IJ.run("Clear Results", "")
 ```
 
-### Pitfall 5 — Single grayscale channel only for certain models (RGB and multi-channel both fail)
+### Pitfall 6 — Single grayscale channel only for certain models (RGB and multi-channel both fail)
 
 The `Versatile (fluorescent nuclei)` model expects a **single-channel grayscale** image.
 
 For H&E, use `Versatile (H&E nuclei)` instead and DO NOT convert RGB for the H&E nuclei model, it expects RGB input.
 
 
-Two distinct failure modes:
+Two distinct failure modes for models OTHER than the H&E nuclei model:
 
 1. **RGB images** (`bitDepth == 24`, `type == ImagePlus.COLOR_RGB`) — the detector
    returns a null prediction and the run yields zero ROIs (or throws
