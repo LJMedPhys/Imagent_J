@@ -10,7 +10,6 @@ __pycache__/
 .ruff_cache/
 .venv/
 data/
-qdrant_data/
 src/config/keys.py
 .env
 *.log
