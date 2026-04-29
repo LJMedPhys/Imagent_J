@@ -15,3 +15,6 @@
    - scientific_goal (one sentence)
    - image_metadata (bit depth, pixel size, channels, number of images)
    - relevant_skill (use the skill_folder from plugin_manager's recommendation)
+   - recommended_plugin (use the recommended_plugin name from plugin_manager).
+     This is propagated to the coder, which must use this plugin and not silently
+     substitute an alternative. If plugin_manager returned no recommendation, omit this field.

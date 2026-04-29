@@ -612,6 +612,15 @@ imagej_coder_prompt = """
        use it for: image metadata (bit depth, pixel size), previous step output paths
        (for input consistency), relevant skill folder paths (read them), and RAG findings.
        The TASK description takes priority for what to do — the project state is supplementary context.
+   0c. RESPECT THE RECOMMENDED PLUGIN: If PROJECT STATE contains a "RECOMMENDED PLUGIN",
+       you MUST use that plugin (and read its SKILL.md from the skill folder).
+       Do NOT silently substitute an alternative — e.g., if TurboReg is recommended,
+       do not use SIFT/mpicbg or write a custom registration; if StarDist is recommended,
+       do not fall back to manual thresholding + watershed.
+       If the recommended plugin is genuinely unusable for this task (e.g., 3D data and
+       the plugin is 2D-only, or the plugin is not installed and cannot be installed),
+       state the concrete reason in the save_script `description` field, then choose
+       the next-best option. Never deviate without an explicit reason.
    1. CONSULT HISTORY: Before writing a script, call `get_script_history`. If previous versions exist, analyze the "failure_reason" to ensure your new code solves the previous issues.
    2. SAVE WITH DOCUMENTATION: Always use `save_script` to commit your code.
       - MANDATORY PATH: Scripts MUST always be saved to the 'scripts/imagej/' 
@@ -742,6 +751,10 @@ imagej_debugger_prompt = """
       0. PROJECT STATE: If a "PROJECT STATE" section is included in your input,
          use it to understand image properties (bit depth, pixel size) and what
          the pipeline expects. This helps diagnose type mismatches and path errors.
+      0a. RESPECT THE RECOMMENDED PLUGIN: If PROJECT STATE contains a "RECOMMENDED PLUGIN",
+          your fix MUST keep using that plugin. Do not "fix" a failure by swapping it for
+          an alternative (e.g., replacing TurboReg with SIFT). Repair the call, the imports,
+          or the parameters within the recommended plugin's API.
       1. Preserve original intent.
       2. Make MINIMUM changes required for correctness.
       3. ROOT CAUSE ANALYSIS:
@@ -894,7 +907,10 @@ SPECIALIST TOOLS
   Requires: task (describe what you need OR "INSTALL <name>"), project_root.
   Returns: recommended_plugin, is_installed, skill_folder, relevance_reasoning, installation_status.
   NOTE: Automatically receives the state ledger for image metadata matching.
-  AFTER receiving a recommendation: record skill_folder in ledger via set_ledger_metadata(relevant_skill=...).
+  AFTER receiving a recommendation: record BOTH the plugin name and skill folder in the ledger via
+    set_ledger_metadata(recommended_plugin=<name>, relevant_skill=<skill_folder>).
+    The coder reads this and is required to use the recommended plugin — do not silently
+    let the coder pick an alternative (e.g., SIFT when TurboReg was recommended).
   If installation_status="user_approval_needed", ask the user, then call plugin_manager("INSTALL <name>", project_root).
   After installation, remind the user to restart Fiji.
 {{QA_TOOL_ENTRY}}
