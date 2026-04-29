@@ -507,9 +507,15 @@ def _send_report_email(subject: str, body: str, attachments: list[tuple[str, byt
         msg.attach(part)
 
     ctx = ssl.create_default_context()
-    with smtplib.SMTP("smtp.gmail.com", 587) as smtp:
+    # Connect via resolved IPv4 (Docker containers often have IPv6 disabled,
+    # errno 97), but restore the hostname so STARTTLS certificate check passes.
+    import socket
+    smtp_ip = socket.getaddrinfo("smtp.gmail.com", 587, socket.AF_INET)[0][4][0]
+    with smtplib.SMTP(smtp_ip, 587) as smtp:
+        smtp._host = "smtp.gmail.com"  # needed so starttls verifies against hostname
         smtp.ehlo()
         smtp.starttls(context=ctx)
+        smtp.ehlo()
         smtp.login(_REPORT_EMAIL, app_password)
         smtp.sendmail(_REPORT_EMAIL, _REPORT_EMAIL, msg.as_bytes())
 
