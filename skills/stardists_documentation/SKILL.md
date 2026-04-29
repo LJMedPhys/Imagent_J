@@ -47,6 +47,64 @@ def labelImp = IJ.getImage()         // now retrieve it
 labelImp.setTitle("my-labels")
 ```
 
+### H&E histology — use the H&E model directly on the RGB image
+
+**DO NOT** preprocess H&E with Color Deconvolution → take the haematoxylin
+channel → run `Versatile (fluorescent nuclei)`. This is a common mistake but
+it is wrong for two reasons:
+1. The H&E model `Versatile (H&E nuclei)` was trained directly on raw RGB H&E
+   patches; feeding it a deconvolved single channel (or feeding the fluorescence
+   model H&E data) gives noticeably worse segmentation.
+2. Color Deconvolution depends on the chosen vector matrix and is fragile across
+   scanners. The H&E model is robust to staining variation.
+
+The correct H&E pipeline is one step:
+
+```groovy
+#@ CommandService command
+#@ UIService uiService
+
+import de.csbdresden.stardist.StarDist2D
+import ij.IJ
+
+def imp = IJ.openImage("/path/to/he_slide.tif")
+imp.show()
+
+// H&E model expects RGB. Do NOT convert to 8-bit, do NOT split channels,
+// do NOT run Color Deconvolution. If your image is not RGB, fix that upstream.
+assert imp.getType() == ij.ImagePlus.COLOR_RGB :
+       "Versatile (H&E nuclei) requires an RGB image"
+
+def res = command.run(StarDist2D, false,
+    "input",               imp,
+    "modelChoice",         "Versatile (H&E nuclei)",
+    "normalizeInput",      true,
+    "percentileBottom",    1.0,
+    "percentileTop",       99.8,
+    "probThresh",          0.692,     // model default for H&E
+    "nmsThresh",           0.3,       // model default for H&E
+    "outputType",          "Both",
+    "nTiles",              1,         // raise to 4/9/16 if OOM on large slides
+    "excludeBoundary",     2,
+    "roiPosition",         "Automatic",
+    "verbose",             false,
+    "showCsbdeepProgress", false,
+    "showProbAndDist",     false
+).get()
+
+uiService.show(res.getOutput("label"))
+def labelImp = IJ.getImage()
+labelImp.setTitle("he-nuclei-labels")
+
+import ij.plugin.frame.RoiManager
+int n = RoiManager.getInstance().getCount()
+IJ.log("H&E nuclei found: " + n)
+```
+
+Use Color Deconvolution only when you genuinely need a separated stain channel
+for downstream measurement (e.g. quantifying DAB intensity per nucleus AFTER
+segmentation) — never to preprocess input for StarDist segmentation.
+
 ### Count cells after running
 
 ```groovy
