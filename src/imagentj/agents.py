@@ -35,7 +35,7 @@ from .tools import (
     check_plugin_installed, mkdir_copy, save_script, execute_script,
     get_script_info, load_script, get_script_history,
     setup_analysis_workspace, save_markdown,
-    NarrationReminderMiddleware,
+    NarrationReminderMiddleware, PhaseGuardMiddleware,
     update_state_ledger, read_state_ledger, set_ledger_metadata, get_ledger_context,
     set_dialog_vision_llm,
     # capture_ij_window, build_compilation, analyze_image,  # VLM disabled
@@ -625,6 +625,7 @@ def init_agent(enable_qa: bool = False):
             use_ripgrep=True,
         ),
         NarrationReminderMiddleware(),
+        PhaseGuardMiddleware(),
     ]
 
     supervisor = create_deep_agent(

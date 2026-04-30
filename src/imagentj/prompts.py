@@ -926,6 +926,7 @@ CORE CONSTRAINTS
 SPECIALIST TOOLS
 ────────────────────────────────────────
 - imagej_coder: Generates Groovy scripts for ImageJ/Fiji. No memory between calls; always provide full context. Returns the absolute path to the saved script.
+  ALWAYS prefer the python_data_analyst for plotting  
   NOTE: The coder automatically receives the state ledger (image metadata, previous step outputs, skill paths, RAG findings). You do NOT need to repeat this info in the task description — focus the task on WHAT to do.
 - imagej_debugger: Repairs failing Groovy scripts. Requires: script_path, error_message, project_root.
   NOTE: The debugger automatically receives the state ledger for context.
@@ -985,7 +986,26 @@ This lets you re-retrieve efficiently later and pass findings to the coder witho
 ────────────────────────────────────────
 PIPELINE (MANDATORY — follow phases in order)
 ────────────────────────────────────────
-{{PIPELINE_PHASES}}
+The detailed rules for each phase live in separate skill files. You MUST
+`smart_file_reader` the matching file BEFORE doing any work in that phase.
+Do NOT begin a phase from memory.
+
+| Phase | When to read |  File path |
+|-------|--------------|------------|
+| 1 — Gather requirements | Start of every new project | `/app/skills/workflow/supervisor_pipeline_phases/phase_1_gathering.md` |
+| 2 — Plan pipeline       | After Phase 1, before proposing pipelines | `/app/skills/workflow/supervisor_pipeline_phases/phase_2_planning.md` |
+| 3 — Setup folders       | After user approves pipeline | `/app/skills/workflow/supervisor_pipeline_phases/phase_3_setup.md` |
+| 4a — IO check           | Before any image processing | `/app/skills/workflow/supervisor_pipeline_phases/phase_4a_io_check.md` |
+| 4b — Processing         | For each processing step | `/app/skills/workflow/supervisor_pipeline_phases/phase_4b_processing.md` |
+| 4c — Statistics         | After all processing complete | `/app/skills/workflow/supervisor_pipeline_phases/phase_4c_statistics.md` |
+| 4d — Plotting           | After Statistics_Results.csv confirmed | `/app/skills/workflow/supervisor_pipeline_phases/phase_4d_plotting.md` |
+| 5 — Summarise           | After all figures generated | `/app/skills/workflow/supervisor_pipeline_phases/phase_5_summarization.md` |
+| 6 — Document            | Before QA | `/app/skills/workflow/supervisor_pipeline_phases/phase_6_documentation.md` |
+{{QA_PHASE_ROW}}
+A `[PHASE GUARD]` reminder may appear in your context if you appear to be
+operating in a phase whose file you have not read recently. When it does:
+read the file, then proceed.
+
 ────────────────────────────────────────
 DEBUGGING LOOPS
 ────────────────────────────────────────
@@ -1018,49 +1038,25 @@ USER INTERACTION
 
 _QA_TOOL_ENTRY = "- qa_reporter: Audits the completed project folder and generates QA_Checklist_Report.md. Called once at project end."
 
-# Phase files are inlined at prompt-build time so the supervisor never needs
-# to read them via tool calls (saves 5-10 tool calls per run).
-_PHASES_DIR = (
-    __import__("pathlib").Path(__file__).parent.parent.parent
-    / "skills" / "workflow" / "supervisor_pipeline_phases"
+# Phase files now live as skill files read on demand by the supervisor — see
+# /app/skills/workflow/supervisor_pipeline_phases/. The PhaseGuardMiddleware
+# (in tools/middleware.py) nudges the supervisor if it operates in a phase
+# without having read the matching file. The supervisor prompt only carries
+# the phase index; full content is fetched via smart_file_reader.
+
+_QA_PHASE_ROW = (
+    "| 7 — QA checklist | Final step | "
+    "`/app/skills/workflow/supervisor_pipeline_phases/phase_7_qa.md` |"
 )
-
-_PHASE_FILES = [
-    ("Phase 1 — Gather requirements", "phase_1_gathering.md"),
-    ("Phase 2 — Plan pipeline",       "phase_2_planning.md"),
-    ("Phase 3 — Setup folders",       "phase_3_setup.md"),
-    ("Phase 4a — IO check",           "phase_4a_io_check.md"),
-    ("Phase 4b — Processing",         "phase_4b_processing.md"),
-    ("Phase 4c — Statistics",         "phase_4c_statistics.md"),
-    ("Phase 4d — Plotting",           "phase_4d_plotting.md"),
-    ("Phase 5 — Summarise",           "phase_5_summarization.md"),
-    ("Phase 6 — Document",            "phase_6_documentation.md"),
-]
-_QA_PHASE_FILE = ("Phase 7 — QA checklist", "phase_7_qa.md")
-
-
-def _build_pipeline_phases(include_qa: bool) -> str:
-    files = list(_PHASE_FILES)
-    if include_qa:
-        files.append(_QA_PHASE_FILE)
-    parts = []
-    for label, filename in files:
-        path = _PHASES_DIR / filename
-        try:
-            content = path.read_text(encoding="utf-8").strip()
-        except FileNotFoundError:
-            content = f"[phase file not found: {path}]"
-        parts.append(f"══ {label} ══\n{content}")
-    return "\n\n".join(parts)
 
 
 def build_supervisor_prompt(enable_qa: bool = False) -> str:
-    qa_tool = _QA_TOOL_ENTRY if enable_qa else ""
-    pipeline_phases = _build_pipeline_phases(include_qa=enable_qa)
+    qa_tool      = _QA_TOOL_ENTRY if enable_qa else ""
+    qa_phase_row = _QA_PHASE_ROW  if enable_qa else ""
     return (
         _supervisor_prompt_base
         .replace("{{QA_TOOL_ENTRY}}", qa_tool)
-        .replace("{{PIPELINE_PHASES}}", pipeline_phases)
+        .replace("{{QA_PHASE_ROW}}",  qa_phase_row)
     )
 
 
