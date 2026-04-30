@@ -896,6 +896,19 @@ CORE CONSTRAINTS
 - NEVER execute code you wrote yourself.
 - NEVER use `read_file`; always use `smart_file_reader`.
 - ALWAYS delegate code generation to the appropriate specialist tool.
+- NEVER ask the user to take or send a screenshot. Use capture_plugin_dialog yourself.
+- ALWAYS call setup_analysis_workspace BEFORE any ledger tool (set_ledger_metadata, update_state_ledger).
+  project_root MUST be /app/data/projects/<name> — never a bare /projects or relative path.
+
+- FILE PATHS — user images are at /data/<filename> (e.g. /data/gel.png, /data/experiment/).
+  Do NOT assume images are inside the project folder (raw_images/ is for copies you make).
+  If unsure of the exact filename, call inspect_folder_tree("/data") ONCE to list available files.
+  Project outputs (scripts, processed images, CSVs, figures) go under /app/data/projects/<name>/.
+
+- OPERATING MODE: Check `operating_mode` in the state ledger at the start of Phase 2.
+  - "script" (default): delegate image processing to imagej_coder/imagej_debugger as normal.
+  - "ui": do NOT call imagej_coder or imagej_debugger. Guide the user step-by-step through Fiji menus
+    and dialogs. Use `capture_plugin_dialog` when a dialog is open.
 
 - If imagej_coder returns ScriptHandoff with success=True, call execute_script DIRECTLY.
 - Only call get_script_info if success=False or if the description is missing.
@@ -936,7 +949,10 @@ TOOLS
 - get_script_info(directory, filename): Read a script's documented logic
 - extract_image_metadata(path): Returns calibration, intensity stats, and recommended processing parameters.
 - inspect_all_ui_windows: List all open ImageJ windows. Use to verify inputs and outputs.
-- capture_plugin_dialog: Screenshot every open plugin dialog window and return a structured description of all its fields (labels, types, current values, dropdown options, buttons). Call this whenever the user has a plugin dialog open and asks what values to enter, or when you have directed the user to open a plugin GUI and need to give field-by-field guidance. Do NOT call for the main ImageJ/Fiji window, image windows, Log, or Results — only for plugin parameter dialogs.
+- capture_plugin_dialog: Screenshots every open plugin dialog and returns a structured description of all fields (labels, types, current values, dropdown options, buttons).
+  Do NOT ask the user to send or describe a screenshot. 
+  Call it whenever the user asks about a dialog, mentions a parameter, or reports confusion about a window.
+  Do NOT call for the main ImageJ/Fiji window, image windows, Log, or Results — only for plugin parameter dialogs.
 - setup_analysis_workspace: Create structured project folder with subfolders for scripts, data, figures, and raw images.
 - inspect_folder_tree: List files in a directory.
 - inspect_csv_header: Read column names and first 5 rows of a CSV before delegating analysis.
@@ -966,18 +982,7 @@ This lets you re-retrieve efficiently later and pass findings to the coder witho
 ────────────────────────────────────────
 PIPELINE (MANDATORY — follow phases in order)
 ────────────────────────────────────────
-BEFORE entering any phase, load its instructions via smart_file_reader.
-
-  Phase 1 (Gather info)    → /app/skills/workflow/supervisor_pipeline_phases/phase_1_gathering.md
-  Phase 2 (Plan pipeline)  → /app/skills/workflow/supervisor_pipeline_phases/phase_2_planning.md
-  Phase 3 (Setup folders)  → /app/skills/workflow/supervisor_pipeline_phases/phase_3_setup.md
-  Phase 4a (IO check)      → /app/skills/workflow/supervisor_pipeline_phases/phase_4a_io_check.md
-  Phase 4b (Processing)    → /app/skills/workflow/supervisor_pipeline_phases/phase_4b_processing.md
-  Phase 4c (Statistics)    → /app/skills/workflow/supervisor_pipeline_phases/phase_4c_statistics.md
-  Phase 4d (Plotting)      → /app/skills/workflow/supervisor_pipeline_phases/phase_4d_plotting.md
-  Phase 5 (Summarize)      → /app/skills/workflow/supervisor_pipeline_phases/phase_5_summarization.md
-  Phase 6 (Documentation)  → /app/skills/workflow/supervisor_pipeline_phases/phase_6_documentation.md
-{{QA_PHASE}}
+{{PIPELINE_PHASES}}
 ────────────────────────────────────────
 DEBUGGING LOOPS
 ────────────────────────────────────────
@@ -1009,13 +1014,51 @@ USER INTERACTION
 """
 
 _QA_TOOL_ENTRY = "- qa_reporter: Audits the completed project folder and generates QA_Checklist_Report.md. Called once at project end."
-_QA_PHASE = "  Phase 7 (QA checklist)   → /app/skills/workflow/supervisor_pipeline_phases/phase_7_qa.md"
+
+# Phase files are inlined at prompt-build time so the supervisor never needs
+# to read them via tool calls (saves 5-10 tool calls per run).
+_PHASES_DIR = (
+    __import__("pathlib").Path(__file__).parent.parent.parent
+    / "skills" / "workflow" / "supervisor_pipeline_phases"
+)
+
+_PHASE_FILES = [
+    ("Phase 1 — Gather requirements", "phase_1_gathering.md"),
+    ("Phase 2 — Plan pipeline",       "phase_2_planning.md"),
+    ("Phase 3 — Setup folders",       "phase_3_setup.md"),
+    ("Phase 4a — IO check",           "phase_4a_io_check.md"),
+    ("Phase 4b — Processing",         "phase_4b_processing.md"),
+    ("Phase 4c — Statistics",         "phase_4c_statistics.md"),
+    ("Phase 4d — Plotting",           "phase_4d_plotting.md"),
+    ("Phase 5 — Summarise",           "phase_5_summarization.md"),
+    ("Phase 6 — Document",            "phase_6_documentation.md"),
+]
+_QA_PHASE_FILE = ("Phase 7 — QA checklist", "phase_7_qa.md")
+
+
+def _build_pipeline_phases(include_qa: bool) -> str:
+    files = list(_PHASE_FILES)
+    if include_qa:
+        files.append(_QA_PHASE_FILE)
+    parts = []
+    for label, filename in files:
+        path = _PHASES_DIR / filename
+        try:
+            content = path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            content = f"[phase file not found: {path}]"
+        parts.append(f"══ {label} ══\n{content}")
+    return "\n\n".join(parts)
 
 
 def build_supervisor_prompt(enable_qa: bool = False) -> str:
     qa_tool = _QA_TOOL_ENTRY if enable_qa else ""
-    qa_phase = _QA_PHASE if enable_qa else ""
-    return _supervisor_prompt_base.replace("{{QA_TOOL_ENTRY}}", qa_tool).replace("{{QA_PHASE}}", qa_phase)
+    pipeline_phases = _build_pipeline_phases(include_qa=enable_qa)
+    return (
+        _supervisor_prompt_base
+        .replace("{{QA_TOOL_ENTRY}}", qa_tool)
+        .replace("{{PIPELINE_PHASES}}", pipeline_phases)
+    )
 
 
 supervisor_prompt = build_supervisor_prompt(enable_qa=False)

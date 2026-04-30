@@ -13,6 +13,7 @@ Design principles:
 
 import json
 import os
+import tempfile
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -29,16 +30,39 @@ def _ledger_path(project_root: str) -> str:
 
 def _load_ledger(project_root: str) -> dict:
     path = _ledger_path(project_root)
-    if os.path.exists(path):
+    if not os.path.exists(path):
+        return {}
+    try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
-    return {}
+    except (json.JSONDecodeError, ValueError):
+        # Corrupted or empty file (e.g. from a partial/interrupted write).
+        # Return empty so the caller re-initialises rather than crashing.
+        return {}
 
 
 def _save_ledger(project_root: str, ledger: dict) -> None:
+    # Guard: project_root must be inside /app/data to avoid writing to system paths.
+    # The supervisor sometimes guesses a path before setup_analysis_workspace is called.
+    if not os.path.normpath(project_root).startswith("/app/data"):
+        raise ValueError(
+            f"project_root '{project_root}' is outside /app/data. "
+            "Call setup_analysis_workspace first to create the project folder."
+        )
+    # Atomic write: serialise to a temp file in the same directory, then
+    # replace the target. os.replace() is atomic on POSIX, so readers never
+    # see a partially-written or empty file.
     path = _ledger_path(project_root)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(ledger, f, indent=2, ensure_ascii=False)
+    dir_ = os.path.dirname(path)
+    os.makedirs(dir_, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=dir_, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(ledger, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, path)
+    except Exception:
+        os.unlink(tmp)
+        raise
 
 
 def _now_iso() -> str:
@@ -51,6 +75,7 @@ def _format_ledger(ledger: dict) -> str:
 
     lines.append(f"PROJECT: {ledger.get('project_root', 'unknown')}")
     lines.append(f"SCIENTIFIC GOAL: {ledger.get('scientific_goal', '[not set]')}")
+    lines.append(f"OPERATING MODE: {ledger.get('operating_mode', '[not set]')}")
     lines.append(f"CURRENT PHASE: {ledger.get('current_phase', '[not set]')}")
 
     # Pipeline plan
@@ -216,6 +241,7 @@ def read_state_ledger(project_root: str) -> str:
 def set_ledger_metadata(
     project_root: str,
     scientific_goal: Optional[str] = None,
+    operating_mode: Optional[str] = None,
     pipeline_plan: Optional[list[str]] = None,
     key_decision: Optional[str] = None,
     image_metadata: Optional[dict] = None,
@@ -234,6 +260,9 @@ def set_ledger_metadata(
         project_root:    Absolute path to the project folder.
         scientific_goal: One-sentence description of what the user wants to achieve.
                          Example: "Count and measure nuclei in DAPI-stained HeLa cells across 3 drug conditions"
+        operating_mode:  How the user wants to work: "script" (automated Groovy scripts, default)
+                         or "ui" (step-by-step guidance through the Fiji GUI).
+                         Set this once in Phase 1 after asking the user.
         pipeline_plan:   Ordered list of processing step names.
                          Example: ["preprocessing", "thresholding", "watershed_segmentation", "measurement"]
         key_decision:    A single decision to append to the decisions log.
@@ -258,6 +287,9 @@ def set_ledger_metadata(
 
     if scientific_goal is not None:
         ledger["scientific_goal"] = scientific_goal
+
+    if operating_mode is not None:
+        ledger["operating_mode"] = operating_mode
 
     if pipeline_plan is not None:
         ledger["pipeline_plan"] = pipeline_plan
