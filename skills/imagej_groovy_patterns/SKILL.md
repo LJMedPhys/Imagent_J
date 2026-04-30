@@ -15,6 +15,7 @@ folder.
 | [`pitfall_rgb_vs_multichannel.md`](pitfall_rgb_vs_multichannel.md) | RGB vs composite — `getNChannels()` lies for RGB | `getNChannels() == 1` for an RGB image; only red band processed |
 | [`pitfall_image_calculator_import.md`](pitfall_image_calculator_import.md) | `ImageCalculator` arithmetic | `unable to resolve class ImageCalculator` |
 | [`pitfall_common_imports.md`](pitfall_common_imports.md) | Other commonly-missed `ij.plugin.*` / `ij.measure.*` imports | `unable to resolve class <X>` for `Duplicator`, `RoiManager`, `ResultsTable`, `Measurements`, `ChannelSplitter`, `WindowManager` |
+| [`pitfall_z_vs_t_dimensions.md`](pitfall_z_vs_t_dimensions.md) | Image-sequence planes loaded as Z instead of T (time) | `Image must be 2D over time, got an image with multiple Z` (TrackMate); `getNFrames() == 1` on a timelapse |
 
 ---
 
