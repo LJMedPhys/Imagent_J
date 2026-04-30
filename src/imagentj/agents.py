@@ -2,6 +2,8 @@ import os
 import sqlite3
 from typing import Optional
 
+from . import stop_signal
+
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
 from langchain.agents import create_agent
@@ -355,12 +357,10 @@ def imagej_coder(task: str, project_root: str) -> ScriptHandoff:
 
     agent = _make_coder_agent(model, "imagej_coder", imagej_coder_prompt)
 
-    result = agent.invoke({
-        "messages": [{
-            "role": "user",
-            "content": "\n\n".join(sections),
-        }]
-    })
+    result = stop_signal.SubagentRunner(
+        agent.invoke,
+        {"messages": [{"role": "user", "content": "\n\n".join(sections)}]},
+    ).run()
     return result["structured_response"]
 
 
@@ -386,12 +386,10 @@ def imagej_debugger(script_path: str, error_message: str, project_root: str = ""
         if ledger_ctx:
             sections.insert(1, f"PROJECT STATE (for context):\n{ledger_ctx}")
 
-    result = agent.invoke({
-        "messages": [{
-            "role": "user",
-            "content": "\n\n".join(sections),
-        }]
-    })
+    result = stop_signal.SubagentRunner(
+        agent.invoke,
+        {"messages": [{"role": "user", "content": "\n\n".join(sections)}]},
+    ).run()
     return result["structured_response"]
 
 
@@ -425,12 +423,10 @@ def python_data_analyst(task: str, input_csv: str, output_dir: str, project_root
             sections.append(f"PROJECT STATE (use for axis labels, units, and context):\n{ledger_ctx}")
     sections.append(f"TASK: {task}")
 
-    result = _analyst_agent.invoke({
-        "messages": [{
-            "role": "user",
-            "content": "\n\n".join(sections),
-        }]
-    })
+    result = stop_signal.SubagentRunner(
+        _analyst_agent.invoke,
+        {"messages": [{"role": "user", "content": "\n\n".join(sections)}]},
+    ).run()
     return result["structured_response"]
 
 
@@ -456,12 +452,10 @@ def qa_reporter(project_root: str) -> QAHandoff:
     if ledger_ctx:
         sections.append(f"WORKFLOW SUMMARY (from state ledger — use as primary reference):\n{ledger_ctx}")
 
-    result = _qa_agent.invoke({
-        "messages": [{
-            "role": "user",
-            "content": "\n\n".join(sections),
-        }]
-    })
+    result = stop_signal.SubagentRunner(
+        _qa_agent.invoke,
+        {"messages": [{"role": "user", "content": "\n\n".join(sections)}]},
+    ).run()
     return result["structured_response"]
 
 
@@ -510,12 +504,10 @@ def plugin_manager(task: str, project_root: str = "") -> PluginRecommendation:
             sections.append(f"PROJECT STATE (for context):\n{ledger_ctx}")
     sections.append(f"TASK: {task}")
 
-    result = _plugin_agent.invoke({
-        "messages": [{
-            "role": "user",
-            "content": "\n\n".join(sections),
-        }]
-    })
+    result = stop_signal.SubagentRunner(
+        _plugin_agent.invoke,
+        {"messages": [{"role": "user", "content": "\n\n".join(sections)}]},
+    ).run()
     return result["structured_response"]
 
 

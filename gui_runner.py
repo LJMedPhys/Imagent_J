@@ -28,6 +28,7 @@ from imagentj.agents import init_agent
 from imagentj.imagej_context import get_ij
 from imagentj.chat_history import ChatHistoryManager
 from imagentj.tools.analyst_tools import kill_running_processes
+import imagentj.stop_signal as stop_signal
 
 from imagentj.benchmark_gui_hooks import is_benchmark_mode, setup_benchmark_gui
 
@@ -715,7 +716,6 @@ class AgentWorker(QObject):
         self.tracker_callback = tracker_callback
         self.tasks            = Queue()
         self._stop_requested  = False
-        self._current_gen     = None  # reference to the active LangGraph stream generator
 
     @Slot()
     def start(self):
@@ -726,6 +726,7 @@ class AgentWorker(QObject):
             if prompt is None:
                 break
             self._stop_requested = False
+            stop_signal.clear()
             self._run_prompt(prompt)
 
     def _run_prompt(self, user_input: str):
@@ -739,15 +740,11 @@ class AgentWorker(QObject):
                 config=config,
                 stream_mode="updates",
             )
-            self._current_gen = gen
-            try:
-                for event in gen:
-                    if self._stop_requested:
-                        gen.close()  # stop the LangGraph generator (prevents next LLM call)
-                        break
-                    self.event_received.emit(event)
-            finally:
-                self._current_gen = None
+            for event in gen:
+                if self._stop_requested:
+                    gen.close()
+                    break
+                self.event_received.emit(event)
         except Exception as e:
             log.exception(f"_run_prompt exception: {e}")
             self.error.emit(str(e))
@@ -760,17 +757,11 @@ class AgentWorker(QObject):
 
     def request_stop(self):
         self._stop_requested = True
+        stop_signal.request_stop()
         # Kill any running subprocesses immediately (Python scripts, etc.)
         killed = kill_running_processes()
         if killed:
             log.info(f"Stop: killed {killed} running subprocess(es)")
-        # Close the generator if it's between events (prevents next LLM turn)
-        gen = self._current_gen
-        if gen is not None:
-            try:
-                gen.close()
-            except Exception:
-                pass
 
 
 # ---------------------------------------------------------------------------
@@ -1144,6 +1135,8 @@ class ImageJAgentGUI(QWidget):
 
     def on_stop(self):
         if hasattr(self, 'worker') and self.worker:
+            self._stop_heartbeat()      # kill rotating prompts immediately
+            self._status_bubble = None  # next set_status creates a fresh line
             self.chat_scroll.add_message('system', "Stopping agent...")
             self.worker.request_stop()
             self.set_status("Stopping...")
