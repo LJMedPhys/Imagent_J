@@ -49,8 +49,8 @@ import fiji.plugin.trackmate.TrackMate
 import fiji.plugin.trackmate.Logger
 import fiji.plugin.trackmate.SpotCollection
 import fiji.plugin.trackmate.cellpose.CellposeDetectorFactory
-import fiji.plugin.trackmate.tracking.jaqaman.SparseLAPTrackerFactory
 import fiji.plugin.trackmate.features.FeatureFilter
+// NOTE: tracker factory is loaded via reflection (Pitfall C5) — no hardcoded import.
 import fiji.plugin.trackmate.io.TmXmlWriter
 import ij.IJ
 import ij.ImagePlus
@@ -160,8 +160,25 @@ try {
     settings.initialSpotFilterValue = 0.0d
     settings.addAllAnalyzers()
 
-    settings.trackerFactory = new SparseLAPTrackerFactory()
-    settings.trackerSettings = settings.trackerFactory.getDefaultSettings()
+    // C5 — reflection-based tracker factory loader (handles sparselap→jaqaman rename).
+    String[] trackerCandidates = [
+        'fiji.plugin.trackmate.tracking.jaqaman.SparseLAPTrackerFactory',
+        'fiji.plugin.trackmate.tracking.jaqaman.SimpleSparseLAPTrackerFactory',
+        'fiji.plugin.trackmate.tracking.sparselap.SparseLAPTrackerFactory',
+    ]
+    def trackerFactory = null
+    for (String cn : trackerCandidates) {
+        try {
+            trackerFactory = Class.forName(cn).getDeclaredConstructor().newInstance()
+            IJ.log('[INFO] Tracker factory: ' + cn); break
+        } catch (Throwable ignored) { }
+    }
+    if (trackerFactory == null) {
+        IJ.log('[ERROR] No SparseLAP/SimpleSparseLAP factory found; aborting.')
+        println('FINAL STATUS: FAILURE - No tracker factory.'); return
+    }
+    settings.trackerFactory  = trackerFactory
+    settings.trackerSettings = trackerFactory.getDefaultSettings()
     settings.trackerSettings['LINKING_MAX_DISTANCE']     = (double) linkingDist
     settings.trackerSettings['GAP_CLOSING_MAX_DISTANCE'] = (double) gapClosingDist
     settings.trackerSettings['MAX_FRAME_GAP']            = (Integer) maxFrameGap
