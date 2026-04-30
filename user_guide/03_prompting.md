@@ -14,6 +14,7 @@ The more context you give at the start, the fewer back-and-forth rounds are need
 | **Image details** | "16-bit TIFF, 3-channel fluorescence, channel 1 = DAPI, 1024×1024 px, ~50 images" |
 | **File location** | "Images are in `/data/experiment_01/`" or "Image is open in the window" |
 | **Output format** | "Save a CSV with one row per nucleus and a labelled mask as TIFF" |
+| **Solving approach (UI/script)** | "I want to do this task using UI " |
 | **Plugin preference (optional)** | "Use StarDist if possible" |
 
 ---

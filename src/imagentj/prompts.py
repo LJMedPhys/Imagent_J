@@ -909,7 +909,7 @@ CORE CONSTRAINTS
   Project outputs (scripts, processed images, CSVs, figures) go under /app/data/projects/<name>/.
 
 - OPERATING MODE: Check `operating_mode` in the state ledger at the start of Phase 2.
-  - "script" (default): delegate image processing to imagej_coder/imagej_debugger as normal.
+  - "script": delegate image processing to imagej_coder/imagej_debugger as normal.
   - "ui": do NOT call imagej_coder or imagej_debugger. Guide the user step-by-step through Fiji menus
     and dialogs. Use `capture_plugin_dialog` when a dialog is open.
 
@@ -952,7 +952,7 @@ TOOLS
 - get_script_info(directory, filename): Read a script's documented logic
 - extract_image_metadata(path): Returns calibration, intensity stats, and recommended processing parameters.
 - inspect_all_ui_windows: List all open ImageJ windows. Use to verify inputs and outputs.
-- capture_plugin_dialog: Screenshots every open plugin dialog and returns a structured description of all fields (labels, types, current values, dropdown options, buttons).
+- capture_plugin_dialog: Screenshots plugin dialog window and returns a structured description of all fields (labels, types, current values, dropdown options, buttons).
   Do NOT ask the user to send or describe a screenshot. 
   Call it whenever the user asks about a dialog, mentions a parameter, or reports confusion about a window.
   Do NOT call for the main ImageJ/Fiji window, image windows, Log, or Results — only for plugin parameter dialogs.

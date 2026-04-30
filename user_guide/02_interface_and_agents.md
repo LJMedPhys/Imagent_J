@@ -53,7 +53,7 @@ The supervisor follows a structured pipeline: gather requirements → select plu
 
 ### Dialog window vision
 
-When you ask "What does this window do?" or similar, the agent uses a **GPT-4o-mini vision call** to capture a screenshot of the active Fiji dialog and explain each parameter in context. This is not a separate agent — it is a tool (`capture_plugin_dialog`) called directly by the supervisor. It works regardless of whether you use an OpenAI or OpenRouter key.
+When you ask "What does this window do?" or similar, the agent uses a **GPT-4o-mini vision call** to capture a screenshot of the active Fiji dialog and explain each parameter in context. This is not a separate agent — it is a tool (`capture_plugin_dialog`) called directly by the supervisor. It works regardless of whether you use an OpenAI or OpenRouter key. For a successful screen capture, do make sure that the screen of interest is clearly visible in the display, i.e. it is not occluded or behind some other window. 
 
 ---
 
@@ -97,12 +97,12 @@ Due to display size restrictions, you may not see all of your plugins in the `Pl
 ## Deep learning plugins — important notes
 
 ### StarDist (nuclei/cell segmentation)
-**Prefer the StarDist plugin** (`Plugins > StarDist > StarDist 2D`) over standalone DeepImageJ for StarDist models. StarDist runs natively in this container.
+**Prefer the StarDist plugin** (`Plugins > StarDist > StarDist 2D`) over standalone DeepImageJ for StarDist models. StarDist runs natively in this container. There is also the option to run StarDist on TrackMate (`Plugins > Tracking > TrackMate`, choose StarDist detector)
 
 ### Cellpose
-When you want to use CellPose, opt for the **TrackMate-Cellpose** (`Plugins > Tracking > TrackMate`, choose Cellpose detector). The Cellpose conda environment automatically. 
+When you want to use CellPose, opt for the **TrackMate-Cellpose** (`Plugins > Tracking > TrackMate`, choose Cellpose detector). The Cellpose conda environment works automatically. For this, you can just choose `cellpose` as the Conda environment in the dropdown.
 
-**Cellpose-SAM** (the SAM-based Cellpose 4 model in TrackMate) is CPU-only in this container and is **very slow** on large images — expect several minutes per image. Use it only when no simpler segmentation approach is sufficient.
+**Cellpose-SAM** (the SAM-based Cellpose 4 model in TrackMate) is CPU-only in this container and is **very slow** on large images — expect several minutes per image. Use it only when no simpler segmentation approach is sufficient. For this, you can just choose `cellpose4` as the Conda environment in the dropdown TrackMate Cellpose detector view.
 
 ---
 
