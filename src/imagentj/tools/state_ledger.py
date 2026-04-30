@@ -109,6 +109,17 @@ def _format_ledger(ledger: dict) -> str:
                 line += f"  outputs={s['output_paths']}"
             lines.append(line)
 
+    # Recommended plugin (must be respected by coder)
+    rec = ledger.get("recommended_plugin")
+    if rec:
+        lines.append(
+            f"RECOMMENDED PLUGIN: {rec}  "
+            f"← USE THIS PLUGIN. Do not substitute an alternative "
+            f"(e.g., do not use SIFT when TurboReg is recommended). "
+            f"If the recommended plugin is genuinely unusable for the task, "
+            f"state the reason explicitly in the script's documentation."
+        )
+
     # Skill paths identified
     skills = ledger.get("relevant_skills", [])
     if skills:
@@ -235,6 +246,7 @@ def set_ledger_metadata(
     key_decision: Optional[str] = None,
     image_metadata: Optional[dict] = None,
     relevant_skill: Optional[str] = None,
+    recommended_plugin: Optional[str] = None,
     rag_reference: Optional[dict] = None,
 ) -> str:
     """
@@ -259,6 +271,9 @@ def set_ledger_metadata(
                          Example: {"bit_depth": 16, "pixel_size_um": 0.325, "channels": 3, "n_images": 24}
         relevant_skill:  Path to a skill folder to record as relevant.
                          Example: "/app/skills/morpholibj/"
+        recommended_plugin: Name of the plugin recommended by plugin_manager.
+                         The coder MUST prefer this plugin over alternatives.
+                         Example: "TurboReg", "StarDist", "TrackMate"
         rag_reference:   Compact summary of a RAG retrieval. Store the query (for re-retrieval)
                          and a one-line finding (for quick reference). One reference per call.
                          Example: {"query": "otsu thresholding fiji", "step": "thresholding",
@@ -292,6 +307,9 @@ def set_ledger_metadata(
         ledger.setdefault("relevant_skills", [])
         if relevant_skill not in ledger["relevant_skills"]:
             ledger["relevant_skills"].append(relevant_skill)
+
+    if recommended_plugin is not None:
+        ledger["recommended_plugin"] = recommended_plugin
 
     if rag_reference is not None:
         ledger.setdefault("rag_references", [])

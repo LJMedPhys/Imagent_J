@@ -612,6 +612,15 @@ imagej_coder_prompt = """
        use it for: image metadata (bit depth, pixel size), previous step output paths
        (for input consistency), relevant skill folder paths (read them), and RAG findings.
        The TASK description takes priority for what to do — the project state is supplementary context.
+   0c. RESPECT THE RECOMMENDED PLUGIN: If PROJECT STATE contains a "RECOMMENDED PLUGIN",
+       you MUST use that plugin (and read its SKILL.md from the skill folder).
+       Do NOT silently substitute an alternative — e.g., if TurboReg is recommended,
+       do not use SIFT/mpicbg or write a custom registration; if StarDist is recommended,
+       do not fall back to manual thresholding + watershed.
+       If the recommended plugin is genuinely unusable for this task (e.g., 3D data and
+       the plugin is 2D-only, or the plugin is not installed and cannot be installed),
+       state the concrete reason in the save_script `description` field, then choose
+       the next-best option. Never deviate without an explicit reason.
    1. CONSULT HISTORY: Before writing a script, call `get_script_history`. If previous versions exist, analyze the "failure_reason" to ensure your new code solves the previous issues.
    2. SAVE WITH DOCUMENTATION: Always use `save_script` to commit your code.
       - MANDATORY PATH: Scripts MUST always be saved to the 'scripts/imagej/' 
@@ -652,9 +661,10 @@ imagej_coder_prompt = """
       - Use `load_script` to check how previous scripts saved their data.
       - If you need data from a previous step, READ IT from a file (CSV/TIFF).
       - If you generate data for a next step, SAVE IT to a file.
-   9. DEFENSIVE CODING: If you see a method name in your memory that was flagged as a "hallucination," do not use it.
+   9. Pre-existing scripts in the task folder are hints about user intent, not ground truth — generated code must match the current SKILL.md 
+   10. DEFENSIVE CODING: If you see a method name in your memory that was flagged as a "hallucination," do not use it.
       Use the inspect_java_class tool to verify the alternative.
-   10. Only use inspect_folder_tree for skill discovery. Do NOT use it to find input images or scripts. Always use hardcoded paths for those.
+   11. Only use inspect_folder_tree for skill discovery. Do NOT use it to find input images or scripts. Always use hardcoded paths for those.
 
    ────────────────────────────────────────
    IMAGE HANDLING & PATHS
@@ -703,6 +713,18 @@ imagej_coder_prompt = """
    - API VALIDATION: Use `inspect_java_class` if uncertain about a method signature.
    - Use `WaitForUserDialog` instead of `GenericDialog` for simple pauses.
    - Retrieve image via `#@ ImagePlus imp` or `IJ.openImage(path)
+   - GROOVY PATTERNS — apply unconditionally:
+     • Thresholding: never hardcode `" dark"`. Pick at runtime:
+       `def s = imp.getStatistics(); IJ.setAutoThreshold(imp, "Otsu" + (s.median <= (s.min+s.max)/2 ? " dark" : ""))`.
+       PROJECT STATE `background_mode` overrides the runtime check if present.
+     • RGB: `getNChannels()` returns 1 for 24-bit RGB. Branch on
+       `imp.getType() == ImagePlus.COLOR_RGB` BEFORE any channel-count check, then
+       `ChannelSplitter.split(imp)` to get R/G/B as `ImagePlus[3]`.
+     • Imports: `ImageCalculator`, `Duplicator`, `ChannelSplitter`, `RoiManager`,
+       `ResultsTable`, `Measurements`, `WindowManager` each need their own
+       `import ij.plugin.* / ij.measure.* / ij.*` line — Groovy does not auto-resolve them.
+     For full snippets and rarer pitfalls, see `/app/skills/imagej_groovy_patterns/SKILL.md`.
+
 
     ────────────────────────────────────────
     STRING & REGEX SAFETY
@@ -739,6 +761,13 @@ imagej_debugger_prompt = """
       0. PROJECT STATE: If a "PROJECT STATE" section is included in your input,
          use it to understand image properties (bit depth, pixel size) and what
          the pipeline expects. This helps diagnose type mismatches and path errors.
+      0a. RESPECT THE RECOMMENDED PLUGIN: If PROJECT STATE contains a "RECOMMENDED PLUGIN",
+          your fix MUST keep using that plugin. Do not "fix" a failure by swapping it for
+          an alternative (e.g., replacing TurboReg with SIFT). Repair the call, the imports,
+          or the parameters within the recommended plugin's API.
+      0b. Search `/app/skills/imagej_groovy_patterns/SKILL.md` by symptom
+          (e.g. `unable to resolve class`, `inverted mask`, `nChannels==1 for RGB`).
+          If a section matches, apply that canonical fix verbatim before debugging further.
       1. Preserve original intent.
       2. Make MINIMUM changes required for correctness.
       3. ROOT CAUSE ANALYSIS:
@@ -904,7 +933,10 @@ SPECIALIST TOOLS
   Requires: task (describe what you need OR "INSTALL <name>"), project_root.
   Returns: recommended_plugin, is_installed, skill_folder, relevance_reasoning, installation_status.
   NOTE: Automatically receives the state ledger for image metadata matching.
-  AFTER receiving a recommendation: record skill_folder in ledger via set_ledger_metadata(relevant_skill=...).
+  AFTER receiving a recommendation: record BOTH the plugin name and skill folder in the ledger via
+    set_ledger_metadata(recommended_plugin=<name>, relevant_skill=<skill_folder>).
+    The coder reads this and is required to use the recommended plugin — do not silently
+    let the coder pick an alternative (e.g., SIFT when TurboReg was recommended).
   If installation_status="user_approval_needed", ask the user, then call plugin_manager("INSTALL <name>", project_root).
   After installation, remind the user to restart Fiji.
 {{QA_TOOL_ENTRY}}

@@ -18,3 +18,13 @@ TrackMate is bundled with Fiji (core detectors and trackers). Cellpose and StarD
 | `GROOVY_WORKFLOW_CELLPOSE_GUI.groovy` | Ready-to-run project-specific script: opens a hardcoded file, GPU-enabled Cellpose → tracking → CSV + XML + label TIFF + HyperStack overlay + TrackScheme GUI |
 | `UI_GUIDE.md` | GUI reference: every panel and control in the TrackMate wizard explained |
 | `UI_WORKFLOW_PARTICLE_TRACKING.md` | GUI walkthrough: step-by-step from open image to exported CSV |
+
+## Critical pitfalls
+
+- **`Image must be 2D over time, got an image with multiple Z.`** — the input
+  was loaded with planes in Z instead of T (typical when an image sequence
+  was imported via `File › Import › Image Sequence`). TrackMate-Cellpose,
+  TrackMate-StarDist, and any 2D+T detector reject this. Fix with
+  `IJ.run(imp, "Properties...", "channels=1 slices=1 frames=N ...")` BEFORE
+  building `Settings`. Full pattern with Bio-Formats prevention:
+  [`/app/skills/imagej_groovy_patterns/pitfall_z_vs_t_dimensions.md`](../imagej_groovy_patterns/pitfall_z_vs_t_dimensions.md).

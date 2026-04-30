@@ -10,6 +10,14 @@ Read the state ledger to check `operating_mode` before planning.
    ALWAYS apply preprocessing adjusted to the task.
    For Image Processing generate 3 different approaches for the pipeline. Then ask the user to choose one of them. NEVER generate just one pipeline.
 
+   PLUGIN RECOMMENDATION DISCIPLINE: If plugin_manager returned a recommendation in Phase 1,
+   AT LEAST ONE of the three proposed pipelines MUST use that plugin as the core step
+   (e.g., if TurboReg was recommended, one pipeline uses TurboReg for registration; if
+   StarDist was recommended, one pipeline uses StarDist for segmentation). Do not
+   silently replace it with a generic alternative. The other pipelines may explore
+   different approaches, but each pipeline description must name the plugin(s) it uses
+   so the user is choosing knowingly.
+
 2. Data persistence rule: variables do not survive between scripts.
    - Step N must SAVE its output (CSV/TIFF) to a file.
    - Step N+1 must READ that file from a hardcoded path.
