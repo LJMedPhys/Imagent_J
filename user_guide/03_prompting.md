@@ -44,7 +44,7 @@ The more context you give at the start, the fewer back-and-forth rounds are need
 - **Mention the channel** for multi-channel images ("segment objects in channel 2").
 - **Ask for the script** if you want to reuse it: "Save the final working script so I can run it again."
 - **Iterate step by step** for complex pipelines rather than asking for the full workflow at once. Get segmentation right first, then add measurement, then batch.
-
+- **If it fails** ask the agent to try again. Sometimes it just gets confused, while other times the error is too severe.
 ---
 
 ## What to avoid
