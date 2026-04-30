@@ -1,5 +1,25 @@
 # Container Snapshot — 2026-04-30
 
+## System / runtime
+
+| Component | Version / detail |
+|-----------|-----------------|
+| **Java** | OpenJDK 21.0.10-internal (conda-forge build, mixed mode) |
+| **JAVA\_HOME** | `/opt/conda/envs/local_imagent_J` |
+| **ImageJ 1.x** | 1.54p (2025-02-18) |
+| **Fiji / imagej2** | 2.17.1-SNAPSHOT (fiji jar), imagej2 2.16.0 |
+| **Groovy** | 4.0.23 (in Fiji jars) |
+| **conda** | 26.1.1 |
+| **CUDA** | None (CPU-only container) |
+| **Xvfb** | 2:21.1.16 |
+| **x11vnc** | 0.9.17 |
+| **noVNC** | 1.6.0 |
+| **websockify** | 0.12.0 |
+| **fluxbox** | 1.3.7 |
+| **Mesa / OpenGL** | 25.0.7 |
+| **wget** | 1.25.0 |
+| **curl** | 8.14.1 |
+
 ## Python environments
 
 
