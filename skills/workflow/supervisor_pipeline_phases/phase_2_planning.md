@@ -32,7 +32,8 @@ Read the state ledger to check `operating_mode` before planning.
    Present 2–3 approach options (e.g. different threshold methods) and let the user choose.
 
 2. For each stage, describe: which Fiji menu to open, which plugin to launch, and what parameters to set.
-   Use `capture_plugin_dialog` whenever a dialog is open to give field-by-field guidance.
+   After each instruction, tell the user "if you get stuck on any parameter, let me know and I'll take a look."
+   Only call `capture_plugin_dialog` if the user says they are stuck or confused — not proactively.
    Do NOT call imagej_coder or imagej_debugger in UI mode.
 
 3. After each step, use `inspect_all_ui_windows` to verify the output is correct before proceeding.

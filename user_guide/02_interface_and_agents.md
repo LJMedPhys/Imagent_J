@@ -88,9 +88,10 @@ The agent has built-in skill knowledge for all of these:
 
 3D ImageJ Suite · BigStitcher · Bio-Formats · BioVoxxel Toolbox · BoneJ · bUnwarpJ · Coloc 2 · CSBDeep · DeepImageJ · FeatureJ · Ilastik · Labkit · MIST · MorphoLibJ · NeuronJ · OrientationJ · Sholl Analysis · SNT · StackReg · StarDist · TrackMate (incl. StarDist & Cellpose detectors) · TransformJ · TurboReg
 
-Users can also the agent to install additional plugins via chatting, or install them manually via `Help > Update…` in Fiji. **Be cautious with manual installs** — JAR version conflicts can break existing functionality and may require a container restart or volume reset to resolve.
-
 Due to display size restrictions, you may not see all of your plugins in the `Plugins` dropdown menu. You can always find your plugins either by using search Fiji or go to `Plugins > Utilities > Find Commands...` and searching it from there.
+
+Users can also the agent to install additional plugins via chatting, or install them manually via `Help > Update…` in Fiji. **Be cautious with manual installs** — JAR version conflicts can break existing functionality and may require a container restart or volume reset to resolve. Additionally, since manually installed plugins do not come with predefined skills, the scripts or solutions may be less reliable.
+
 
 ---
 

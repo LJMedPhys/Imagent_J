@@ -44,14 +44,14 @@ intro_message = """Hello I am ImageJ agent, some call me ImagentJ :)
 I can design a step-by-step protocol and, if useful, generate a runnable Groovy macro (and execute/test it if you want).
 
 To get started, please share:
-- **Goal:** what you want measured/segmented/processed.
-- **Example data:** 1-2 sample images (file type), single image or batch?
-- **Targets:** what objects/features to detect; which channel(s) matter.
-- **Preprocessing:** background/flat-field correction, denoising needs?
-- **Outputs:** tables/measurements, labeled masks/overlays, ROIs, saved images.
-- **Constraints:** plugins available (e.g., Fiji with Bio-Formats, MorpholibJ, TrackMate, StarDist), OS, any runtime limits.
+- **Goal:** what you want measured/segmented/processed/counted etc.
+- **Image details:** 1-2 sample images (file type), single image or batch?
+- **File location:** file/folder path or is the image open in the window.
+- **Outputs:** tables/measurements, labeled masks/overlays, ROIs, saved images, what format.
+- **Solving approach (UI/script):** do you want to go click-by-click via user interface or do you want scripts to run in the background for you?
+- **Plugin preference:** are there specific plugin/models you want to use.
 
-If you're unsure, tell me the biological question and show one representative image."""
+If you're unsure, tell me what task do you want to solve and provide one representative image."""
 
 os.environ["LANGCHAIN_CALLBACKS_BACKGROUND"] = "true"
 
