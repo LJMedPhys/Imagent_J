@@ -36,3 +36,5 @@ checkpoints*
 conversation_history.json
 
 extra_packages/
+
+models/

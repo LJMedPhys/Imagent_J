@@ -98,8 +98,10 @@ dependencies:
       - markdown-it-py
       - marko
       - markupsafe
+      - fastmcp<3
       - marshmallow
       - mistune
+      - mcp
       - mpire
       - multipart
       - multiprocess

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "napari-mcp": {
+      "url": "http://host.docker.internal:9999/mcp",
+      "transport": "http",
+      "description": "Host-side NapariMCP bridge"
+    }
+  }
+}

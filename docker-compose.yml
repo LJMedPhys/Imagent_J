@@ -11,6 +11,9 @@ services:
       # Bind to localhost only by default for security
       # Change to "0.0.0.0:6080:6080" if you need network access (not recommended)
       - "0.0.0.0:6080:6080"
+    extra_hosts:
+      # Makes the host-side NapariMCP bridge reachable from Linux Docker too.
+      - "host.docker.internal:host-gateway"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPEN_ROUTER_API_KEY=${OPEN_ROUTER_API_KEY:-}
@@ -21,6 +24,15 @@ services:
       - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-}
       - LANGCHAIN_CALLBACKS_BACKGROUND=${LANGCHAIN_CALLBACKS_BACKGROUND:-true}
       - FIJI_PATH=/opt/Fiji.app
+      # Optional generic MCP host config. Example:
+      # IMAGENTJ_MCP_CONFIG_JSON='{"mcpServers":{"napari-mcp":{"url":"http://host.docker.internal:9999/mcp","transport":"http"}}}'
+      - IMAGENTJ_MCP_CONFIG_JSON=${IMAGENTJ_MCP_CONFIG_JSON:-}
+      - IMAGENTJ_MCP_CONFIG=${IMAGENTJ_MCP_CONFIG:-/app/.imagentj/mcp.json}
+      - IMAGENTJ_MCP_HOST_DATA_DIR=${IMAGENTJ_MCP_HOST_DATA_DIR:-${PWD}/data}
+      - IMAGENTJ_MCP_PATH_MAP=${IMAGENTJ_MCP_PATH_MAP:-}
+      - IMAGENTJ_MCP_DISCOVERY_TIMEOUT_SECONDS=${IMAGENTJ_MCP_DISCOVERY_TIMEOUT_SECONDS:-5}
+      - IMAGENTJ_MCP_TOOL_TIMEOUT_SECONDS=${IMAGENTJ_MCP_TOOL_TIMEOUT_SECONDS:-30}
+      - IMAGENTJ_MCP_KEEP_ALIVE=${IMAGENTJ_MCP_KEEP_ALIVE:-true}
       - QDRANT_DATA_PATH=/app/qdrant_data
       - DISPLAY=:1
       # Optional: Set a VNC password (recommended if exposing to network)
@@ -46,6 +58,8 @@ services:
       - ${IMAGE_DATA_DIR:-./data}:/data
       # Source code mount for development (remove in production image)
       - ./src:/app/src:ro
+      # MCP host configuration, analogous to Claude Code's mcpServers config
+      - ./.imagentj:/app/.imagentj:ro
       - ./gui_runner.py:/app/gui_runner.py:ro
       - ./setup_wizard.py:/app/setup_wizard.py:ro
       # Folder to save data
