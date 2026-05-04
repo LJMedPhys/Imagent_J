@@ -22,14 +22,11 @@ from typing import Optional
 
 from PIL import Image, ImageDraw, ImageFont
 from langchain_core.tools import tool
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-_OPENAI_KEY   = os.getenv("OPENAI_API_KEY", "")
-_VISION_MODEL = "gpt-4o"
-_MAX_PX       = 1024   # longest side cap applied to the final compilation
+_MAX_PX          = 1024   # longest side cap applied to the final compilation
 
 _CAPTURE_DIR = Path(os.environ.get("CHAT_DATA_PATH", "/app/data/chats")) / "vlm_captures"
 _CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
@@ -43,8 +40,16 @@ _LABEL_HEIGHT = 24   # px reserved above each panel for the text label
 _LABEL_COLOR  = (255, 255, 255)
 _BG_COLOR     = (30, 30, 30)
 
+_llm = None  # injected by agents.py
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+
+def set_vision_llm(llm):
+    global _llm
+    _llm = llm
 
 def _get_ij_classes():
     try:
@@ -80,18 +85,16 @@ def _dim_note(orig: tuple[int, int], sent: tuple[int, int]) -> str:
 
 
 def _call_vision_api(image_b64: str, question: str) -> str:
-    if not _OPENAI_KEY:
-        return "ERROR: OPENAI_API_KEY not set."
+    if _llm is None:
+        return "ERROR: vision LLM not initialised. Call set_vision_llm() first."
+    msg = HumanMessage(content=[
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
+        {"type": "text", "text": question},
+    ])
     try:
-        llm = ChatOpenAI(model=_VISION_MODEL, api_key=_OPENAI_KEY, max_tokens=1024)
-        msg = HumanMessage(content=[
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
-            {"type": "text", "text": question},
-        ])
-        return llm.invoke([msg]).content
+        return _llm.invoke([msg]).content
     except Exception as e:
         return f"ERROR: {type(e).__name__}: {e}"
-
 
 def _load_image(path: Path) -> Image.Image:
     """Load and normalise to RGB regardless of bit depth."""

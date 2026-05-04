@@ -196,7 +196,7 @@ def smart_file_reader(file_path: str):
     rag_available = vec_store_docs is not None
 
     # --- CATEGORY 1: Plain Text & Code ---
-    if ext in [".txt", ".py", ".md", ".js", ".groovy"]:
+    if ext in [".txt", ".py", ".md", ".js", ".groovy", ".log"]:
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
 

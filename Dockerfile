@@ -1,6 +1,7 @@
 FROM continuumio/miniconda3:latest AS base-cpu
 ENV DEBIAN_FRONTEND=noninteractive
 FROM base-cpu AS cpu
+ARG TARGETARCH
 
 # ── Core system dependencies (rarely change) ─────────────────────────────────
 # Split from fonts to preserve cache when adding new fonts
@@ -26,7 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     #                       JOCL needs for dlopen("libOpenCL.so") to succeed
     pocl-opencl-icd ocl-icd-libopencl1 ocl-icd-opencl-dev \
     # Utilities
-    wget unzip procps curl \
+    wget unzip procps curl build-essential cmake ninja-build \
     # Locale support — ilastik4ij sets LC_ALL=en_US.UTF-8 in the subprocess
     # environment; without this the locale warning is printed to every log line
     locales \
@@ -34,13 +35,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Install Fiji ──────────────────────────────────────────────────────────────
-RUN wget -q https://downloads.imagej.net/fiji/latest/fiji-latest-linux64-jdk.zip -O /tmp/fiji.zip \
+RUN set -e; \
+    if [ "$TARGETARCH" = "arm64" ]; then \
+        FIJI_ZIP=fiji-latest-linux-arm64-jdk.zip; \
+        FIJI_BINARY=fiji-linux-arm64; \
+    else \
+        FIJI_ZIP=fiji-latest-linux64-jdk.zip; \
+        FIJI_BINARY=fiji-linux-x64; \
+    fi; \
+    wget -q "https://downloads.imagej.net/fiji/latest/${FIJI_ZIP}" -O /tmp/fiji.zip \
     && unzip -q /tmp/fiji.zip -d /opt \
     && rm /tmp/fiji.zip \
     # Rename to .app to match standard ENV variables if you have them
     && mv /opt/Fiji /opt/Fiji.app \
-    # The actual binary name is fiji-linux-x64
-    && chmod +x /opt/Fiji.app/fiji-linux-x64
+    && chmod +x "/opt/Fiji.app/${FIJI_BINARY}" /opt/Fiji.app/fiji
 
 # ── Install plugins via update sites ─────────────────────────────────────────
 # Order matters: TensorFlow → CSBDeep → StarDist (dependency chain).
@@ -52,7 +60,6 @@ RUN printf '%s\n' \
     'StarDist https://sites.imagej.net/StarDist/' \
     'DeepImageJ https://sites.imagej.net/DeepImageJ/' \
     'Neuroanatomy https://sites.imagej.net/Neuroanatomy/' \
-    'ilastik https://sites.imagej.net/Ilastik/' \
     'TrackMate-StarDist https://sites.imagej.net/TrackMate-StarDist/' \
     'TrackMate-MorphoLibJ https://sites.imagej.net/TrackMate-MorphoLibJ/' \
     'TrackMate-Ilastik https://sites.imagej.net/TrackMate-Ilastik/' \
@@ -70,10 +77,10 @@ RUN printf '%s\n' \
     'BioVoxxel-3D-Box http://sites.imagej.net/bv3dbox/'\
     > /tmp/sites.txt \
     && while read -r name url; do \
-        DISPLAY="" /opt/Fiji.app/fiji-linux-x64 --headless --update add-update-site "$name" "$url" || true; \
+        DISPLAY="" /opt/Fiji.app/fiji --headless --update add-update-site "$name" "$url" || true; \
     done < /tmp/sites.txt \
     && rm /tmp/sites.txt \
-    && /opt/Fiji.app/fiji-linux-x64 --headless --update update
+    && /opt/Fiji.app/fiji --headless --update update
 
 # ── Apply staged updates into jars/ and plugins/ ─────────────────────────────
 # --update update only STAGES files into update/ — it does not apply them.
@@ -85,15 +92,42 @@ RUN cp -a /opt/Fiji.app/update/plugins/. /opt/Fiji.app/plugins/ 2>/dev/null || t
     && cp -a /opt/Fiji.app/update/lib/.     /opt/Fiji.app/lib/     2>/dev/null || true \
     && rm -rf /opt/Fiji.app/update/*
 
-# ── Pin TrackMate-StarDist to 1.2.0 ──────────────────────────────────────────
-# 2.0.0 has a ClassCastException in setSettings: TARGET_CHANNEL is deserialized
-# as String by TrackMate's default XML marshal/unmarshal (factory doesn't override
-# them), then cast to Integer — crash. 1.2.0 uses SCIJAVA_PYTHON directly
-# (set to /opt/conda/envs/stardist/bin/python) and avoids the issue entirely.
-# RUN rm -f /opt/Fiji.app/jars/TrackMate-StarDist-2.0.0.jar \
-#     && wget -q "https://sites.imagej.net/TrackMate-StarDist/jars/TrackMate-StarDist-1.2.0.jar" \
-#          -O /opt/Fiji.app/jars/TrackMate-StarDist-1.2.0.jar \
-#     && echo "TrackMate-StarDist pinned to 1.2.0"
+# ── Patch TrackMate-StarDist 2.0.0 ClassCastException ────────────────────────
+# 2.0.0 has the correct TrackMate 8.x API (4-arg getDetector) but no
+# marshal/unmarshal overrides: TARGET_CHANNEL is saved as String in XML, then
+# cast to Integer in setSettings() and getDetector() → ClassCastException.
+# Fix: use javassist to insertBefore in both methods, converting String→Integer.
+# 1.2.0 (wrong API for TM 8.x) is left absent so AbstractMethodError doesn't recur.
+COPY patch_stardist/PatchStarDist.java /tmp/PatchStarDist.java
+RUN set -e \
+    && FIJI=/opt/Fiji.app \
+    # Locate the JDK bundled with Fiji
+    && JAVA_BIN=$(find "$FIJI/java" -type f -name 'java' 2>/dev/null | head -1) \
+    && JAVAC_BIN=$(find "$FIJI/java" -type f -name 'javac' 2>/dev/null | head -1) \
+    && [ -n "$JAVA_BIN"  ] || JAVA_BIN=java \
+    && [ -n "$JAVAC_BIN" ] || JAVAC_BIN=javac \
+    && echo "[patch] Using java: $JAVA_BIN  javac: $JAVAC_BIN" \
+    # Locate javassist — already in Fiji after plugins are installed; fall back to Maven Central
+    && JAVASSIST=$(find "$FIJI" -name 'javassist*.jar' 2>/dev/null | head -1) \
+    && if [ -z "$JAVASSIST" ]; then \
+         echo "[patch] javassist not found in Fiji — downloading from Maven Central"; \
+         wget -q -O /tmp/javassist.jar \
+             "https://repo1.maven.org/maven2/org/javassist/javassist/3.29.2-GA/javassist-3.29.2-GA.jar"; \
+         JAVASSIST=/tmp/javassist.jar; \
+       fi \
+    && echo "[patch] javassist: $JAVASSIST" \
+    # Compile PatchStarDist.java (also updates the JAR via java.util.zip — no 'zip' CLI needed)
+    && mkdir -p /tmp/patch-classes \
+    && $JAVAC_BIN -cp "$JAVASSIST" /tmp/PatchStarDist.java -d /tmp/patch-classes \
+    && $JAVA_BIN  -cp "/tmp/patch-classes:$JAVASSIST" PatchStarDist \
+    && rm -rf /tmp/patch-classes /tmp/stardist-patched-classes /tmp/PatchStarDist.java \
+              /tmp/javassist.jar 2>/dev/null || true \
+    && echo "[patch] TrackMate-StarDist 2.0.0 ClassCastException fix applied" \
+    # Save a copy of the patched JAR outside the fiji_jars volume mount point.
+    # The entrypoint uses this to re-apply the patch after volume seeding, because
+    # _seed_volume skips existing files so the unpatched JAR persists across rebuilds.
+    && mkdir -p /opt/fiji-patches \
+    && cp /opt/Fiji.app/jars/TrackMate-StarDist-2.0.0.jar /opt/fiji-patches/TrackMate-StarDist-2.0.0.jar.patched
 
 # ── Remove SPIM_Registration.jar (superseded by BigStitcher's multiview-reconstruction) ──
 # BigStitcher installs multiview-reconstruction.jar which registers the same menu
@@ -115,62 +149,86 @@ RUN find /opt/Fiji.app/plugins -name 'mcib3d-core*.jar' \
     && echo "=== imagescience JARs ===" \
     && find /opt/Fiji.app -name 'imagescience*' 2>/dev/null | sort
 
-# ── Bundled JARs for CSBDeep and StarDist ────────────────────────────────────
-# These are only on maven.scijava.org (not Maven Central), which is frequently
-# unavailable. Bundled here to make builds fully offline-capable.
-# Source versions: csbdeep-0.6.0, StarDist_-0.3.0-scijava, Clipper-6.4.2
-COPY bundled_jars/csbdeep-0.6.0.jar           /opt/Fiji.app/jars/
-COPY bundled_jars/StarDist_-0.3.0-scijava.jar /opt/Fiji.app/plugins/
-COPY bundled_jars/Clipper-6.4.2.jar           /opt/Fiji.app/jars/
+# ── Direct Maven download for CSBDeep and StarDist JARs ──────────────────────
+# The Fiji update sites for these two plugins have stale file links (all 404s).
+# URLs verified from maven.scijava.org (2026-04).
+#   csbdeep-0.6.0.jar         → jars/   (SciJava @Plugin library, not a menu plugin)
+#   StarDist_-0.3.0-scijava.jar → plugins/
+#   Clipper-6.4.2.jar         → jars/   (required runtime dep of StarDist)
+RUN python3 - <<'PYEOF'
+import urllib.request, ssl, sys
+from pathlib import Path
 
-# ── Alternative: download from maven.scijava.org (use if bundled_jars/ is stale) ──
-# Uncomment the block below and comment out the COPY lines above to re-download.
-# Note: maven.scijava.org is frequently unavailable; prefer the bundled approach.
-# RUN python3 - <<'PYEOF'
-# import urllib.request, ssl, sys
-# from pathlib import Path
-#
-# plugins_dir = Path('/opt/Fiji.app/plugins')
-# jars_dir    = Path('/opt/Fiji.app/jars')
-#
-# ctx = ssl.create_default_context()
-# ctx.check_hostname = False
-# ctx.verify_mode    = ssl.CERT_NONE
-#
-# MAVEN = 'https://maven.scijava.org/content/repositories'
-#
-# DOWNLOADS = [
-#     (jars_dir,    'csbdeep-0.6.0.jar',
-#      f'{MAVEN}/releases/de/csbdresden/csbdeep/0.6.0/csbdeep-0.6.0.jar'),
-#     (plugins_dir, 'StarDist_-0.3.0-scijava.jar',
-#      f'{MAVEN}/releases/de/csbdresden/StarDist_/0.3.0-scijava/StarDist_-0.3.0-scijava.jar'),
-#     (jars_dir,    'Clipper-6.4.2.jar',
-#      f'{MAVEN}/public/de/lighti/Clipper/6.4.2/Clipper-6.4.2.jar'),
-# ]
-#
-# all_ok = True
-# for dest_dir, fname, url in DOWNLOADS:
-#     dest = dest_dir / fname
-#     if dest.exists():
-#         print(f'[maven-dl] already present: {fname}')
-#         continue
-#     print(f'[maven-dl] GET {url}')
-#     try:
-#         req  = urllib.request.Request(url, headers={'User-Agent': 'Fiji-Docker/2.0'})
-#         data = urllib.request.urlopen(req, timeout=120, context=ctx).read()
-#         dest.write_bytes(data)
-#         print(f'[maven-dl] saved {fname} ({len(data):,} bytes)')
-#     except Exception as e:
-#         print(f'[maven-dl] ERROR: {fname}: {e}', file=sys.stderr)
-#         all_ok = False
-#
-# sys.exit(0 if all_ok else 1)
-# PYEOF
-#
-# RUN ls /opt/Fiji.app/jars/csbdeep-*.jar \
-#     && ls /opt/Fiji.app/plugins/StarDist_*.jar \
-#     && echo "OK: csbdeep and StarDist_ JARs verified" \
-#     || { echo "ERROR: CSBDeep or StarDist JARs missing — Maven download failed"; exit 1; }
+plugins_dir = Path('/opt/Fiji.app/plugins')
+jars_dir    = Path('/opt/Fiji.app/jars')
+
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode    = ssl.CERT_NONE
+
+MAVEN = 'https://maven.scijava.org/content/repositories'
+
+DOWNLOADS = [
+    (jars_dir,    'csbdeep-0.6.0.jar',
+     f'{MAVEN}/releases/de/csbdresden/csbdeep/0.6.0/csbdeep-0.6.0.jar'),
+    (plugins_dir, 'StarDist_-0.3.0-scijava.jar',
+     f'{MAVEN}/releases/de/csbdresden/StarDist_/0.3.0-scijava/StarDist_-0.3.0-scijava.jar'),
+    (jars_dir,    'Clipper-6.4.2.jar',
+     f'{MAVEN}/public/de/lighti/Clipper/6.4.2/Clipper-6.4.2.jar'),
+]
+
+all_ok = True
+for dest_dir, fname, url in DOWNLOADS:
+    dest = dest_dir / fname
+    if dest.exists():
+        print(f'[maven-dl] already present: {fname}')
+        continue
+    print(f'[maven-dl] GET {url}')
+    try:
+        req  = urllib.request.Request(url, headers={'User-Agent': 'Fiji-Docker/2.0'})
+        data = urllib.request.urlopen(req, timeout=120, context=ctx).read()
+        dest.write_bytes(data)
+        print(f'[maven-dl] saved {fname} ({len(data):,} bytes)')
+    except Exception as e:
+        print(f'[maven-dl] ERROR: {fname}: {e}', file=sys.stderr)
+        all_ok = False
+
+sys.exit(0 if all_ok else 1)
+PYEOF
+
+# Verify JARs are present (CSBDeep lives in jars/, not plugins/)
+RUN ls /opt/Fiji.app/jars/csbdeep-*.jar \
+    && ls /opt/Fiji.app/plugins/StarDist_*.jar \
+    && echo "OK: csbdeep and StarDist_ JARs verified" \
+    || { echo "ERROR: CSBDeep or StarDist JARs missing — Maven download failed"; exit 1; }
+
+# ── For aarch64, install CSBDeep linux/arm64 TensorFlow Java single-JAR patch ────────────
+# The upstream CSBDeep Fiji JAR depends on TensorFlow Java 1.x JNI artifacts
+# that do not ship linux/aarch64 native libraries. Use the prebuilt single JAR
+# with an isolated TensorFlow Java 1.1.0 runtime (TensorFlow core 2.18.0)
+# bundled inside.
+ARG TARGETARCH
+ARG CSBDEEP_TFJAVA_JAR_URL="https://github.com/audreyeternal/CSBDeep/releases/download/csbdeep-tfjava-arm64-v0.6.0/csbdeep-0.6.0-tfjava-linux-arm64.jar"
+ARG CSBDEEP_TFJAVA_JAR_SHA256="065702602843af513ebcff8f423903d33755e6d2285456360f6a286444d8704e"
+RUN set -e; \
+    arch="${TARGETARCH:-$(uname -m)}"; \
+    case "$arch" in \
+        arm64|aarch64) \
+            echo "[csbdeep] Installing TensorFlow Java linux/arm64 single-JAR patch"; \
+            wget -q -O /tmp/csbdeep-0.6.0-tfjava-linux-arm64.jar "$CSBDEEP_TFJAVA_JAR_URL"; \
+            echo "$CSBDEEP_TFJAVA_JAR_SHA256  /tmp/csbdeep-0.6.0-tfjava-linux-arm64.jar" | sha256sum -c -; \
+            cp /tmp/csbdeep-0.6.0-tfjava-linux-arm64.jar /opt/Fiji.app/jars/csbdeep-0.6.0.jar; \
+            mkdir -p /opt/fiji-patches; \
+            cp /tmp/csbdeep-0.6.0-tfjava-linux-arm64.jar /opt/fiji-patches/csbdeep-0.6.0-tfjava-linux-arm64.jar; \
+            rm -f /tmp/csbdeep-0.6.0-tfjava-linux-arm64.jar; \
+            ;; \
+        amd64|x86_64) \
+            echo "[csbdeep] Skipping linux/arm64 CSBDeep patch on $arch"; \
+            ;; \
+        *) \
+            echo "[csbdeep] Skipping linux/arm64 CSBDeep patch on unsupported architecture: $arch"; \
+            ;; \
+    esac
 
 ENV FIJI_PATH=/opt/Fiji.app
 
@@ -184,12 +242,35 @@ RUN conda env create -f /tmp/environment.yml \
 ENV PATH=/opt/conda/envs/local_imagent_J/bin:$PATH
 ENV CONDA_DEFAULT_ENV=local_imagent_J
 
-# ── Conda env: cellpose  (PyTorch + Cellpose, served by TrackMate-Cellpose) ───
+# ── Conda env: cellpose  (PyTorch + Cellpose + Omnipose, served by TrackMate-Cellpose and TrackMate-Omnipose) ───
+# Omnipose 1.x is built on cellpose 3.x, so they share one env.
+# The micromamba shim routes both '-n cellpose' and '-n omnipose' here.
 RUN /opt/conda/bin/conda create -n cellpose python=3.10 -y \
-    && /opt/conda/envs/cellpose/bin/pip install --no-cache-dir \
-        torch torchvision --index-url https://download.pytorch.org/whl/cu124 \
+    && if [ "$TARGETARCH" = "arm64" ]; then \
+        /opt/conda/envs/cellpose/bin/pip install --no-cache-dir torch torchvision; \
+    else \
+        /opt/conda/envs/cellpose/bin/pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu; \
+    fi \
     && /opt/conda/envs/cellpose/bin/pip install --no-cache-dir 'cellpose[gui]==3.1.1.2' \
+    && /opt/conda/envs/cellpose/bin/pip install --no-cache-dir 'omnipose==1.1.4' \
     && /opt/conda/envs/cellpose/bin/cellpose --version \
+    && /opt/conda/bin/conda clean -afy \
+    && printf '#!/bin/bash\nexec /opt/conda/envs/cellpose/bin/cellpose "$@"\n' > /opt/conda/bin/cellpose \
+    && chmod +x /opt/conda/bin/cellpose
+
+# ── Conda env: cellpose4  (Cellpose 4.x + SAM, served by TrackMate Cellpose-SAM) ──
+# Separate env so cellpose 3.x (regular detection) and 4.x (SAM) can coexist.
+# TrackMate's CondaCLIConfigurator lists all conda envs in a dropdown — the user
+# selects 'cellpose4' in the Cellpose-SAM detector panel.
+# The micromamba shim routes '-n cellpose4' → /opt/conda/envs/cellpose4.
+RUN /opt/conda/bin/conda create -n cellpose4 python=3.11 -y \
+    && if [ "$TARGETARCH" = "arm64" ]; then \
+        /opt/conda/envs/cellpose4/bin/pip install --no-cache-dir torch torchvision; \
+    else \
+        /opt/conda/envs/cellpose4/bin/pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu; \
+    fi \
+    && /opt/conda/envs/cellpose4/bin/pip install --no-cache-dir 'cellpose[gui]>=4.0' \
+    && /opt/conda/envs/cellpose4/bin/cellpose --version \
     && /opt/conda/bin/conda clean -afy
 
 # ── Conda env: stardist  (TensorFlow + CSBDeep + StarDist inference) ─────────
@@ -197,10 +278,16 @@ RUN /opt/conda/bin/conda create -n cellpose python=3.10 -y \
 # Python 3.11 + TF 2.15 is the most stable combo for CSBDeep
 # (uses tf.compat.v1 graph APIs, which became fragile in TF 2.17+).
 # numpy<2 required — NumPy 2.0 breaks csbdeep's C-extension assumptions.
-# tensorflow-cpu used here (CPU image); swap for tensorflow==2.15.* on GPU.
-RUN /opt/conda/bin/conda create -n stardist python=3.11 -y \
+# BuildKit provides TARGETARCH; arm64 uses the linux/aarch64 TensorFlow package
+# path, while amd64 keeps tensorflow-cpu for native x86_64 hosts.
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
+        TF_PACKAGE='tensorflow==2.15.*'; \
+    else \
+        TF_PACKAGE='tensorflow-cpu==2.15.*'; \
+    fi \
+    && /opt/conda/bin/conda create -n stardist python=3.11 -y \
     && /opt/conda/envs/stardist/bin/pip install --no-cache-dir \
-        "tensorflow-cpu==2.15.*" \
+        "$TF_PACKAGE" \
         "csbdeep>=0.7.4" \
         "stardist>=0.9" \
         "numpy<2" \
@@ -212,26 +299,6 @@ RUN /opt/conda/envs/stardist/bin/python -c \
 
 # TrackMate-StarDist looks for a Python executable via this env var
 ENV SCIJAVA_PYTHON=/opt/conda/envs/stardist/bin/python
-
-# ── Conda env: ilastik  (headless ilastik, served by TrackMate-Ilastik) ──────
-# ilastik-forge ships a self-contained ilastik-core build including
-# run_ilastik.sh, which the Fiji plugin invokes for headless prediction.
-# Python 3.10 matches the version ilastik-forge was built against.
-# this is ilastik-core ver 1.4.2rc1
-RUN /opt/conda/bin/conda create -n ilastik \
-        -c ilastik-forge -c conda-forge \
-        ilastik-core python=3.11 -y \
-    && /opt/conda/bin/conda clean -afy
-
-# ilastik-core has no console_scripts entry point — create run_ilastik.sh wrapper.
-# ilastik4ij calls this script directly for all headless prediction workflows.
-RUN printf '#!/bin/bash\n# ilastik headless wrapper — invoked by ilastik4ij for all prediction workflows.\n# Logs the full command so mismatched args are visible in docker compose logs.\necho "[ilastik-wrapper] args: $*" >&2\nexec "%s" -m ilastik "$@"\n' \
-        "/opt/conda/envs/ilastik/bin/python" \
-        > /opt/conda/envs/ilastik/bin/run_ilastik.sh \
-    && chmod +x /opt/conda/envs/ilastik/bin/run_ilastik.sh \
-    && echo "[OK] ilastik headless wrapper created"
-
-ENV ILASTIK_EXECUTABLE=/opt/conda/envs/ilastik/bin/run_ilastik.sh
 
 # ── DeepImageJ / APPOSE environment configuration ────────────────────────────
 # DeepImageJ 3.x uses APPOSE (via dl-modelrunner) to run Python inference.
@@ -254,12 +321,10 @@ RUN mkdir -p /opt/appose \
 # TrackMate-Cellpose hardcodes the micromamba path. Older versions use
 # /usr/local/opt/micromamba/bin/micromamba; newer versions use /opt/micromamba/bin/micromamba.
 # Install the shim at both locations so either version works.
-COPY micromamba_shim.sh /usr/local/opt/micromamba/bin/micromamba
-RUN chmod +x /usr/local/opt/micromamba/bin/micromamba \
-    && ln -sf micromamba /usr/local/opt/micromamba/bin/conda \
+COPY --chmod=755 micromamba_shim.sh /usr/local/opt/micromamba/bin/micromamba
+RUN ln -sf micromamba /usr/local/opt/micromamba/bin/conda \
     && mkdir -p /opt/micromamba/bin \
     && cp /usr/local/opt/micromamba/bin/micromamba /opt/micromamba/bin/micromamba \
-    && chmod +x /opt/micromamba/bin/micromamba \
     && ln -sf micromamba /opt/micromamba/bin/conda
 
 # ── Fonts (separate layer - changes here won't invalidate conda cache) ───────
@@ -292,63 +357,17 @@ RUN mkdir -p /home/imagentj/.imagej \
         > /home/imagentj/.imagej/trackmate-conda.prefs \
     && chown -R imagentj:imagentj /home/imagentj/.imagej
 
-# ── ilastik plugin preferences ────────────────────────────────────────────────
-# ilastik4ij reads the executable path from ImageJ's SciJava prefs system.
-# The key org.ilastik.ilastik4ij.ui.IlastikOptions.executableFile must be set
-# in IJ_prefs.txt so the plugin can launch ilastik headless without the user
-# having to configure it manually via Plugins → ilastik → Configure.
-# The JSON file mirrors the path for any app-level code that reads it directly.
-# Two persistence backends exist in Fiji depending on which PrefService is active:
-#
-#   LegacyIJPrefService  → ij.Prefs → ~/IJ_prefs.txt  (legacy ImageJ1 path)
-#   DefaultPrefService   → java.util.prefs.Preferences → ~/.java/.userPrefs/ (Java NIO path)
-#
-# We write both so the executable is found regardless of which backend Fiji loads.
-RUN mkdir -p /home/imagentj/.ilastik \
-    # ── Backend 1: LegacyIJPrefService (~/IJ_prefs.txt) ──
-    && printf '%s\n' \
-        "org.ilastik.ilastik4ij.ui.IlastikOptions.executableFile=${ILASTIK_EXECUTABLE}" \
-        "org.ilastik.ilastik4ij.ui.IlastikOptions.numThreads=-1" \
-        "org.ilastik.ilastik4ij.ui.IlastikOptions.maxRamMb=4096" \
-        >> /home/imagentj/IJ_prefs.txt \
-    # ── Backend 2: DefaultPrefService (~/.java/.userPrefs/ XML) ──
-    # Node path: Preferences.userNodeForPackage(IlastikOptions.class).node("IlastikOptions")
-    # → /org/ilastik/ilastik4ij/ui/IlastikOptions on disk
-    && mkdir -p /home/imagentj/.java/.userPrefs/org/ilastik/ilastik4ij/ui/IlastikOptions \
-    && printf '%s\n' \
-        '<?xml version="1.0" encoding="UTF-8" standalone="no"?>' \
-        '<!DOCTYPE map SYSTEM "http://java.sun.com/dtd/preferences.dtd">' \
-        '<map MAP_XML_VERSION="1.0">' \
-        "  <entry key=\"executableFile\" value=\"${ILASTIK_EXECUTABLE}\"/>" \
-        '  <entry key="numThreads" value="-1"/>' \
-        '  <entry key="maxRamMb" value="4096"/>' \
-        '</map>' \
-        > /home/imagentj/.java/.userPrefs/org/ilastik/ilastik4ij/ui/IlastikOptions/prefs.xml \
-    # ── JSON mirror (for any app-level code that reads it directly) ──
-    && printf '{"executablePath":"%s"}\n' "${ILASTIK_EXECUTABLE}" \
-        > /home/imagentj/.ilastik/fiji_plugin_prefs.json \
-    && chown -R imagentj:imagentj \
-        /home/imagentj/IJ_prefs.txt \
-        /home/imagentj/.java \
-        /home/imagentj/.ilastik
-
-RUN mkdir -p /app/qdrant_data /home/imagentj/.cellpose \
+RUN mkdir -p /app/qdrant_data /home/imagentj/.cellpose /home/imagentj/.cache \
     && chown -R imagentj:imagentj /app /home/imagentj /app/qdrant_data \
     && chown -R imagentj:imagentj /opt/Fiji.app \
     && chown -R imagentj:imagentj /opt/appose
 
 # ── Cellpose models ───────────────────────────────────────────────────────────
-# Classic models (cyto, cyto2, cyto3, nuclei, bact, etc.) are baked in from the
-# local models/ folder — no network required. cpsam (Cellpose-SAM) is not yet
-# in the archive; attempt a non-fatal download so it installs once the server
-# recovers, without blocking the build.
-RUN mkdir -p /home/imagentj/.cellpose/models
-COPY models/ /home/imagentj/.cellpose/models/
-# Uncomment once cellpose.org/models/cpsam is back up:
-RUN HOME=/home/imagentj /opt/conda/envs/cellpose/bin/python -c \
-        "from cellpose import models; models.Cellpose(model_type='cpsam')" \
-    || echo "[cellpose] WARNING: cpsam unavailable — will download at first use"
-RUN chown -R imagentj:imagentj /home/imagentj/.cellpose
+# Models are NOT baked into the image — docker-compose bind-mounts ./models to
+# /home/imagentj/.cellpose/models at runtime 
+# Create the directory so the seed has the correct structure and ownership.
+RUN mkdir -p /home/imagentj/.cellpose/models \
+    && chown -R imagentj:imagentj /home/imagentj/.cellpose
 
 # ── Seed home dir for named-volume persistence ────────────────────────────────
 # imagentj_home is a named volume mounted at /home/imagentj. It starts empty,
@@ -358,12 +377,22 @@ RUN cp -a /home/imagentj /home/imagentj.seed
 # ── Environment defaults ─────────────────────────────────────────────────────
 ENV DISPLAY=:1
 ENV QT_QPA_PLATFORM=xcb
-ENV JAVA_HOME=/opt/conda/envs/local_imagent_J/lib/jvm
+ENV JAVA_HOME=/opt/conda/envs/local_imagent_J
 ENV HOME=/home/imagentj
 
+# ── noVNC: default scaling mode → Local Scaling ──────────────────────────────
+# noVNC stores the resize/scaling preference in the browser's localStorage.
+# Patching the default in ui.js sets it for every fresh browser session without
+# the user needing to open the settings panel.
+RUN NOVNC_UI=/usr/share/novnc/app/ui.js; \
+    if [ -f "$NOVNC_UI" ]; then \
+        sed -i "s/initSetting('resize', 'off')/initSetting('resize', 'scale')/g" "$NOVNC_UI" \
+        && echo "[novnc] Default scaling mode set to 'scale' (Local Scaling)"; \
+    else \
+        echo "[novnc] WARNING: ui.js not found at $NOVNC_UI — scaling default not patched"; \
+    fi
 
-COPY docker-entrypoint.sh /docker-entrypoint.sh
-RUN chmod +x /docker-entrypoint.sh
+COPY --chmod=755 docker-entrypoint.sh /docker-entrypoint.sh
 
 EXPOSE 6080
 

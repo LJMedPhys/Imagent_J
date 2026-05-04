@@ -9,27 +9,41 @@ from langchain_core.output_parsers import StrOutputParser
 
 __all__ = ['rag_retrieve_docs', 'rag_retrieve_mistakes', 'save_coding_experience']
 
-gpt_key = os.getenv("OPENAI_API_KEY")
+openrouter_key = os.getenv("OPEN_ROUTER_API_KEY")
+openai_key     = os.getenv("OPENAI_API_KEY")
+
+if openrouter_key:
+    _api_key  = openrouter_key
+    _base_url = "https://openrouter.ai/api/v1"
+    _model    = "openai/gpt-4o-mini"
+elif openai_key:
+    _api_key  = openai_key
+    _base_url = None
+    _model    = "gpt-4o-mini"
+else:
+    raise RuntimeError("No API key found. Set OPEN_ROUTER_API_KEY or OPENAI_API_KEY.")
 
 
 def get_expanded_queries(query: str) -> list[str]:
     """Generates 3-4 variations of the query to improve retrieval."""
-    # Lazy import to avoid circular dependency (agents imports tools)
     from ..agents import shared_tracker
-    llm = ChatOpenAI(
-        model="gpt-4o-mini",
-        api_key=gpt_key,
-        temperature=0,
+
+    llm_nano = ChatOpenAI(
+        model=_model,
+        api_key=_api_key,
+        base_url=_base_url,
+        temperature=0.,
+        verbose=True,
         callbacks=[shared_tracker],
     )
+
     prompt = ChatPromptTemplate.from_template(
         "You are an ImageJ/Fiji expert. Generate 3 search query variations for: {question}\n"
         "Focus on technical API terms, alternative function names, and common library methods.\n"
         "Output only the queries, one per line."
     )
-    chain = prompt | llm | StrOutputParser()
+    chain = prompt | llm_nano | StrOutputParser()
     variants = chain.invoke({"question": query}).strip().split("\n")
-    # Clean and return unique queries including the original
     return list(set([query] + [v.strip("- ").strip() for v in variants]))
 
 

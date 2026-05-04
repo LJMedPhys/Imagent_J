@@ -27,7 +27,7 @@ import fiji.plugin.trackmate.Settings
 import fiji.plugin.trackmate.TrackMate
 import fiji.plugin.trackmate.Logger
 import fiji.plugin.trackmate.detection.LogDetectorFactory
-import fiji.plugin.trackmate.tracking.sparselap.SimpleSparseLAPTrackerFactory
+import fiji.plugin.trackmate.tracking.jaqaman.SimpleSparseLAPTrackerFactory
 import fiji.plugin.trackmate.features.FeatureFilter
 import ij.IJ
 
@@ -42,28 +42,31 @@ model.setLogger(Logger.IJ_LOGGER)
 def settings = new Settings(imp)
 
 // 4. Configure detector
+//    NOTE: Groovy double literals MUST use the `d` suffix. Bare `2.5` is
+//    java.math.BigDecimal and TrackMate's checkInput() rejects it with
+//    "Expected java.lang.Double, got java.math.BigDecimal".
 settings.detectorFactory = new LogDetectorFactory()
 settings.detectorSettings = [
     'DO_SUBPIXEL_LOCALIZATION' : true,
-    'RADIUS'                   : 2.5,     // physical units (µm if calibrated)
-    'TARGET_CHANNEL'           : 1,
-    'THRESHOLD'                : 0.0,     // 0 = keep all; filter below
+    'RADIUS'                   : 2.5d,    // physical units (µm if calibrated)
+    'TARGET_CHANNEL'           : (Integer) 1,
+    'THRESHOLD'                : 0.0d,    // 0 = keep all; filter below
     'DO_MEDIAN_FILTERING'      : false,
 ]
 
 // 5. Configure tracker
 settings.trackerFactory = new SimpleSparseLAPTrackerFactory()
 settings.trackerSettings = settings.trackerFactory.getDefaultSettings()
-settings.trackerSettings['LINKING_MAX_DISTANCE'] = 10.0
+settings.trackerSettings['LINKING_MAX_DISTANCE'] = 10.0d
 
 // 6. Optional: add a quality filter before feature computation
-settings.initialSpotFilterValue = 1.0   // discard spots with quality < 1
+settings.initialSpotFilterValue = 1.0d  // discard spots with quality < 1
 
 // 7. Add spot feature analyzers (needed for MEAN_INTENSITY, SNR, etc.)
 settings.addAllAnalyzers()              // adds all known analyzers (simplest approach)
 
 // 8. Add a spot filter (post-detection)
-settings.addSpotFilter(new FeatureFilter('QUALITY', 30.0, true))  // above 30
+settings.addSpotFilter(new FeatureFilter('QUALITY', 30.0d, true))  // above 30
 
 // 9. Run TrackMate
 def trackmate = new TrackMate(model, settings)
@@ -99,11 +102,11 @@ import fiji.plugin.trackmate.detection.MaskDetectorFactory
 import fiji.plugin.trackmate.detection.ThresholdDetectorFactory
 import fiji.plugin.trackmate.detection.LabelImageDetectorFactory
 
-// Trackers (core Fiji)
-import fiji.plugin.trackmate.tracking.sparselap.SimpleSparseLAPTrackerFactory
-import fiji.plugin.trackmate.tracking.sparselap.SparseLAPTrackerFactory
+// Trackers (core Fiji) — jaqaman package required in v8+ (sparselap package removed)
+import fiji.plugin.trackmate.tracking.jaqaman.SimpleSparseLAPTrackerFactory
+import fiji.plugin.trackmate.tracking.jaqaman.SparseLAPTrackerFactory
+import fiji.plugin.trackmate.tracking.jaqaman.LAPUtils
 import fiji.plugin.trackmate.tracking.kalman.KalmanTrackerFactory
-import fiji.plugin.trackmate.tracking.LAPUtils
 
 // Feature filters
 import fiji.plugin.trackmate.features.FeatureFilter
@@ -171,9 +174,9 @@ Both detectors use the same keys:
 ```groovy
 settings.detectorFactory = new LogDetectorFactory()
 settings.detectorSettings = [
-    'TARGET_CHANNEL'           : 1,
-    'RADIUS'                   : 2.5,
-    'THRESHOLD'                : 0.0,
+    'TARGET_CHANNEL'           : (Integer) 1,
+    'RADIUS'                   : 2.5d,
+    'THRESHOLD'                : 0.0d,
     'DO_SUBPIXEL_LOCALIZATION' : true,
     'DO_MEDIAN_FILTERING'      : false,
 ]
@@ -192,8 +195,8 @@ settings.detectorSettings = [
 ```groovy
 settings.detectorFactory = new ThresholdDetectorFactory()
 settings.detectorSettings = [
-    'TARGET_CHANNEL'      : 1,
-    'INTENSITY_THRESHOLD' : 500.0,
+    'TARGET_CHANNEL'      : (Integer) 1,
+    'INTENSITY_THRESHOLD' : 500.0d,
     'SIMPLIFY_CONTOURS'   : true,
 ]
 ```
@@ -221,11 +224,13 @@ settings.detectorSettings = [
 Suitable for Brownian motion without splits or merges. Fewest parameters.
 
 ```groovy
+import fiji.plugin.trackmate.tracking.jaqaman.SimpleSparseLAPTrackerFactory
+
 settings.trackerFactory = new SimpleSparseLAPTrackerFactory()
 settings.trackerSettings = settings.trackerFactory.getDefaultSettings()
-settings.trackerSettings['LINKING_MAX_DISTANCE']     = 10.0   // µm
-settings.trackerSettings['GAP_CLOSING_MAX_DISTANCE'] = 10.0   // µm
-settings.trackerSettings['MAX_FRAME_GAP']            = 2      // frames
+settings.trackerSettings['LINKING_MAX_DISTANCE']     = 10.0d         // µm
+settings.trackerSettings['GAP_CLOSING_MAX_DISTANCE'] = 10.0d         // µm
+settings.trackerSettings['MAX_FRAME_GAP']            = (Integer) 2   // frames
 ```
 
 | Key | Type | Description |
@@ -239,17 +244,17 @@ settings.trackerSettings['MAX_FRAME_GAP']            = 2      // frames
 Extends the Simple LAP tracker with splits and merges.
 
 ```groovy
-import fiji.plugin.trackmate.tracking.LAPUtils
+import fiji.plugin.trackmate.tracking.jaqaman.SparseLAPTrackerFactory
 
 settings.trackerFactory = new SparseLAPTrackerFactory()
-settings.trackerSettings = LAPUtils.getDefaultLAPSettingsMap()
-settings.trackerSettings['LINKING_MAX_DISTANCE']     = 10.0
-settings.trackerSettings['GAP_CLOSING_MAX_DISTANCE'] = 10.0
-settings.trackerSettings['MAX_FRAME_GAP']            = 2
+settings.trackerSettings = settings.trackerFactory.getDefaultSettings()  // preferred over LAPUtils.getDefaultLAPSettingsMap()
+settings.trackerSettings['LINKING_MAX_DISTANCE']     = 10.0d
+settings.trackerSettings['GAP_CLOSING_MAX_DISTANCE'] = 10.0d
+settings.trackerSettings['MAX_FRAME_GAP']            = (Integer) 2
 settings.trackerSettings['ALLOW_TRACK_SPLITTING']    = true
-settings.trackerSettings['SPLITTING_MAX_DISTANCE']   = 10.0
+settings.trackerSettings['SPLITTING_MAX_DISTANCE']   = 10.0d
 settings.trackerSettings['ALLOW_TRACK_MERGING']      = false
-settings.trackerSettings['MERGING_MAX_DISTANCE']     = 10.0
+settings.trackerSettings['MERGING_MAX_DISTANCE']     = 10.0d
 ```
 
 | Key | Type | Description |
@@ -269,9 +274,9 @@ For objects with linear/directed motion.
 ```groovy
 settings.trackerFactory = new KalmanTrackerFactory()
 settings.trackerSettings = settings.trackerFactory.getDefaultSettings()
-settings.trackerSettings['KALMAN_SEARCH_RADIUS'] = 10.0   // search radius (µm)
-settings.trackerSettings['MAX_FRAME_GAP']        = 2      // frames
-settings.trackerSettings['INITIAL_SEARCH_RADIUS']= 10.0   // radius to start new tracks
+settings.trackerSettings['KALMAN_SEARCH_RADIUS'] = 10.0d        // search radius (µm)
+settings.trackerSettings['MAX_FRAME_GAP']        = (Integer) 2  // frames
+settings.trackerSettings['INITIAL_SEARCH_RADIUS']= 10.0d        // radius to start new tracks
 ```
 
 ---
@@ -321,13 +326,13 @@ import fiji.plugin.trackmate.features.FeatureFilter
 //   isAbove = false → keep spots where feature < threshold
 
 // Spot filter: keep spots with quality above 30
-settings.addSpotFilter(new FeatureFilter('QUALITY', 30.0, true))
+settings.addSpotFilter(new FeatureFilter('QUALITY', 30.0d, true))
 
 // Track filter: keep tracks with more than 5 spots
-settings.addTrackFilter(new FeatureFilter('NUMBER_SPOTS', 5.0, true))
+settings.addTrackFilter(new FeatureFilter('NUMBER_SPOTS', 5.0d, true))
 
 // Track filter: remove immobile tracks (displacement < 10 µm)
-settings.addTrackFilter(new FeatureFilter('TRACK_DISPLACEMENT', 10.0, true))
+settings.addTrackFilter(new FeatureFilter('TRACK_DISPLACEMENT', 10.0d, true))
 ```
 
 ---
@@ -429,9 +434,11 @@ for (def id in trackIDs) {
 ```groovy
 import fiji.plugin.trackmate.SelectionModel
 import fiji.plugin.trackmate.visualization.hyperstack.HyperStackDisplayer
+import fiji.plugin.trackmate.gui.displaysettings.DisplaySettings
 
 def selectionModel = new SelectionModel(model)
-def displayer = new HyperStackDisplayer(model, selectionModel, imp)
+def ds = DisplaySettings.defaultStyle()   // NOT new DisplaySettings()
+def displayer = new HyperStackDisplayer(model, selectionModel, imp, ds)  // 4-arg constructor in v8+
 displayer.render()
 displayer.refresh()
 ```
@@ -489,7 +496,7 @@ import fiji.plugin.trackmate.visualization.table.TrackTableView
 import fiji.plugin.trackmate.gui.displaysettings.DisplaySettings
 
 def sm = new SelectionModel(model)
-def ds = new DisplaySettings()
+def ds = DisplaySettings.defaultStyle()   // NOT new DisplaySettings()
 def tableView = new TrackTableView(model, sm, ds)
 tableView.getSpotTable().exportToCsv(new File("/path/to/spots.csv"))
 tableView.getTrackTable().exportToCsv(new File("/path/to/tracks.csv"))
@@ -520,10 +527,28 @@ tableView.getTrackTable().exportToCsv(new File("/path/to/tracks.csv"))
    are swapped, use `imp.setDimensions(nChannels, nSlices, nFrames)` to fix it.
 
 6. **SparseLAPTracker default settings map.** When using `SparseLAPTrackerFactory`,
-   always start with `LAPUtils.getDefaultLAPSettingsMap()` and override only the keys you
-   need. Do not build the settings map from scratch — it requires many internal keys
-   (penalty structures, etc.) that the default map already contains correctly.
+   always start with `settings.trackerFactory.getDefaultSettings()` and override only the
+   keys you need. Do not build the settings map from scratch — it requires many internal
+   keys (penalty structures, etc.) that the default map already contains correctly.
 
-7. **`trackIDs(true)` vs `trackIDs(false)`.** The `true` argument returns only **filtered**
+7. **Tracker package changed in v8+.** All tracker classes moved from
+   `fiji.plugin.trackmate.tracking.sparselap` to `fiji.plugin.trackmate.tracking.jaqaman`.
+   `SimpleSparseLAPTrackerFactory` still exists — it was moved, not removed.
+
+8. **Groovy `BigDecimal` literals fail `checkInput()`.** In Groovy, the literal
+   `30.0` is `java.math.BigDecimal`, not `Double`. TrackMate's `checkInput()`
+   validates value types and rejects `BigDecimal` for `Double`-typed keys with:
+   ```
+   Value for parameter LINKING_MAX_DISTANCE is not of the right class.
+   Expected java.lang.Double, got java.math.BigDecimal.
+   ```
+   Always suffix double literals with `d` and Integer keys with `(Integer)`:
+   ```groovy
+   settings.trackerSettings['LINKING_MAX_DISTANCE'] = 30.0d
+   settings.trackerSettings['MAX_FRAME_GAP']        = (Integer) 1
+   settings.detectorSettings['RADIUS']              = 2.5d
+   ```
+
+9. **`trackIDs(true)` vs `trackIDs(false)`.** The `true` argument returns only **filtered**
    (visible) tracks — the ones that passed the track filters. `false` returns all tracks
    including hidden ones. Use `true` for analysis results.
