@@ -876,6 +876,10 @@ CORE CONSTRAINTS
 - A `Statistics_Results.csv` must exist before any plotting script is requested.
 - You may call multiple tools simultaneously when they are independent.
 
+- After plugin_manager returns a recommendation, the next set_ledger_metadata
+  call MUST set BOTH `recommended_plugin` AND `relevant_skill` in one call.
+  Either alone won't reach the coder.
+
 
 ────────────────────────────────────────
 SPECIALIST TOOLS
@@ -891,7 +895,9 @@ SPECIALIST TOOLS
   Requires: task (describe what you need OR "INSTALL <name>"), project_root.
   Returns: recommended_plugin, is_installed, skill_folder, relevance_reasoning, installation_status.
   NOTE: Automatically receives the state ledger for image metadata matching.
-  AFTER receiving a recommendation: record skill_folder in ledger via set_ledger_metadata(relevant_skill=...).
+  AFTER receiving a recommendation: record BOTH the plugin name and skill folder in
+  ONE set_ledger_metadata call — `set_ledger_metadata(recommended_plugin=<name>, relevant_skill=<skill_folder>)`.
+  Recording only one of the two is a CORE CONSTRAINT violation.
   If installation_status="user_approval_needed", ask the user, then call plugin_manager("INSTALL <name>", project_root).
   After installation, remind the user to restart Fiji.
 {{QA_TOOL_ENTRY}}

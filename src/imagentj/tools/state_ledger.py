@@ -13,6 +13,7 @@ Design principles:
 
 import json
 import os
+import tempfile
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -36,9 +37,38 @@ def _load_ledger(project_root: str) -> dict:
 
 
 def _save_ledger(project_root: str, ledger: dict) -> None:
+    # Enforce that project_root is under /app/data/projects/. The /app/data/tasks/
+    # tree is read-only input data; saving a ledger there fails silently and
+    # then mkstemp raises a confusing ENOENT. Catch it here with a clear message
+    # the supervisor can act on.
+    norm = os.path.normpath(project_root)
+    if not norm.startswith("/app/data/projects/"):
+        raise ValueError(
+            f"project_root '{project_root}' is not under /app/data/projects/. "
+            "Call setup_analysis_workspace(project_name) first — it creates "
+            "the project directory at /app/data/projects/<name> and is the only "
+            "valid parent for state_ledger.json."
+        )
+    if not os.path.isdir(norm):
+        raise FileNotFoundError(
+            f"Project directory '{norm}' does not exist. "
+            "Call setup_analysis_workspace(project_name) BEFORE any ledger tool."
+        )
+    # Atomic write: serialise to a temp file in the same directory, then
+    # replace the target. os.replace() is atomic on POSIX, so concurrent
+    # writers (the supervisor often issues set_ledger_metadata and
+    # update_state_ledger in the same parallel-tool turn) never produce a
+    # half-written or two-objects-concatenated file.
     path = _ledger_path(project_root)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(ledger, f, indent=2, ensure_ascii=False)
+    fd, tmp = tempfile.mkstemp(dir=norm, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(ledger, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, path)
+    except Exception:
+        try: os.unlink(tmp)
+        except OSError: pass
+        raise
 
 
 def _now_iso() -> str:
@@ -177,7 +207,10 @@ def update_state_ledger(
         entry["parameters"] = parameters
 
     ledger["completed_steps"].append(entry)
-    _save_ledger(project_root, ledger)
+    try:
+        _save_ledger(project_root, ledger)
+    except (ValueError, FileNotFoundError) as e:
+        return f"LEDGER_SAVE_ERROR: {e}"
 
     return _format_ledger(ledger)
 
@@ -273,5 +306,11 @@ def set_ledger_metadata(
                 "finding": rag_reference.get("finding", ""),
             })
 
-    _save_ledger(project_root, ledger)
+    try:
+        _save_ledger(project_root, ledger)
+    except (ValueError, FileNotFoundError) as e:
+        # Return as a clear tool-result string so the supervisor can self-correct
+        # (e.g. realise it forgot setup_analysis_workspace) instead of the
+        # exception propagating up and killing the streaming loop.
+        return f"LEDGER_SAVE_ERROR: {e}"
     return _format_ledger(ledger)
