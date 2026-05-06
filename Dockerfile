@@ -149,12 +149,20 @@ RUN find /opt/Fiji.app/plugins -name 'mcib3d-core*.jar' \
     && echo "=== imagescience JARs ===" \
     && find /opt/Fiji.app -name 'imagescience*' 2>/dev/null | sort
 
+# ── Bundled JAR fallbacks (offline-build) ────────────────────────────────────
+# StarDist_ and Clipper are vendored under bundled_jars/ in case
+# maven.scijava.org is unreachable. Copied to their target paths first; the
+# maven-dl step below then sees them as 'already present' and skips the network.
+# csbdeep-0.6.0.jar is NOT bundled — it still requires maven on a clean build.
+COPY bundled_jars/StarDist_-0.3.0-scijava.jar /opt/Fiji.app/plugins/StarDist_-0.3.0-scijava.jar
+COPY bundled_jars/Clipper-6.4.2.jar           /opt/Fiji.app/jars/Clipper-6.4.2.jar
+
 # ── Direct Maven download for CSBDeep and StarDist JARs ──────────────────────
 # The Fiji update sites for these two plugins have stale file links (all 404s).
 # URLs verified from maven.scijava.org (2026-04).
 #   csbdeep-0.6.0.jar         → jars/   (SciJava @Plugin library, not a menu plugin)
-#   StarDist_-0.3.0-scijava.jar → plugins/
-#   Clipper-6.4.2.jar         → jars/   (required runtime dep of StarDist)
+#   StarDist_-0.3.0-scijava.jar → plugins/   (bundled above; maven is fallback)
+#   Clipper-6.4.2.jar         → jars/   (bundled above; maven is fallback)
 RUN python3 - <<'PYEOF'
 import urllib.request, ssl, sys
 from pathlib import Path
