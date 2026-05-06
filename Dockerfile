@@ -418,6 +418,19 @@ RUN NOVNC_UI=/usr/share/novnc/app/ui.js; \
 
 COPY --chmod=755 docker-entrypoint.sh /docker-entrypoint.sh
 
+# ── Pre-warm jgo/Maven dependency cache ──────────────────────────────────────
+# pyimagej resolves imglib2-imglyb and other bridge JARs via jgo/Maven at
+# first startup. maven.scijava.org is frequently unreliable so we resolve
+# everything during the build (when network is available) and store the result
+# in /opt/imagentj-seed/. The entrypoint seeds ~/.jgo and ~/.m2 from there
+# on first container start, before the imagentj_home volume can shadow them.
+COPY bundled_cache/imagentj-seed-cache.tar.gz /tmp/imagentj-seed-cache.tar.gz
+RUN mkdir -p /opt/imagentj-seed \
+    && tar xzf /tmp/imagentj-seed-cache.tar.gz -C /opt/imagentj-seed \
+    && rm /tmp/imagentj-seed-cache.tar.gz \
+    && chmod -R a+rX /opt/imagentj-seed \
+    && echo "[pre-warm] jgo/Maven cache extracted to /opt/imagentj-seed"
+
 EXPOSE 6080
 
 USER imagentj

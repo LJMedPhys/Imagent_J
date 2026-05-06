@@ -334,6 +334,19 @@ python3 -c "import langgraph.checkpoint.sqlite" 2>/dev/null || {
     echo "[entrypoint] langgraph-checkpoint-sqlite installed"
 }
 
+# ── Seed jgo/Maven caches from pre-warmed image data ─────────────────────────
+# /opt/imagentj-seed is populated during the Docker build. The imagentj_home
+# named volume shadows ~/.jgo and ~/.m2 at runtime, so we copy missing files
+# from the seed into the home directory before the app starts.
+if [ -d /opt/imagentj-seed/.jgo ]; then
+    mkdir -p /home/imagentj/.jgo
+    cp -rn /opt/imagentj-seed/.jgo/. /home/imagentj/.jgo/
+fi
+if [ -d /opt/imagentj-seed/.m2 ]; then
+    mkdir -p /home/imagentj/.m2
+    cp -rn /opt/imagentj-seed/.m2/. /home/imagentj/.m2/
+fi
+
 # ── Load persisted API keys (if any) ────────────────────────────────────────
 API_KEYS_FILE=/home/imagentj/api_keys.env
 if [ -f "$API_KEYS_FILE" ]; then
