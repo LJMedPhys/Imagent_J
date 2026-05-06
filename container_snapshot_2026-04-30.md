@@ -137,7 +137,7 @@ Generated from `pip list --format=freeze | sed 's/ @ .*//'` on 2026-04-30.
 | langchain-anthropic | 1.4.1 |
 | langchain-classic | 1.0.4 |
 | langchain-community | 0.4.1 |
-| langchain-core | 1.2.16 |
+| langchain-core | - |
 | langchain-docling | 2.0.0 |
 | langchain-google-genai | 4.2.2 |
 | langchain-openai | 1.2.1 |

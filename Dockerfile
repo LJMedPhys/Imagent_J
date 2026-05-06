@@ -27,7 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     #                       JOCL needs for dlopen("libOpenCL.so") to succeed
     pocl-opencl-icd ocl-icd-libopencl1 ocl-icd-opencl-dev \
     # Utilities
-    wget unzip procps curl \
+    wget unzip procps curl build-essential cmake ninja-build\
     # Locale support — ilastik4ij sets LC_ALL=en_US.UTF-8 in the subprocess
     # environment; without this the locale warning is printed to every log line
     locales \
@@ -149,66 +149,61 @@ RUN find /opt/Fiji.app/plugins -name 'mcib3d-core*.jar' \
     && echo "=== imagescience JARs ===" \
     && find /opt/Fiji.app -name 'imagescience*' 2>/dev/null | sort
 
-# ── Bundled JAR fallbacks (offline-build) ────────────────────────────────────
-# StarDist_ and Clipper are vendored under bundled_jars/ in case
-# maven.scijava.org is unreachable. Copied to their target paths first; the
-# maven-dl step below then sees them as 'already present' and skips the network.
-# csbdeep-0.6.0.jar is NOT bundled — it still requires maven on a clean build.
-COPY bundled_jars/StarDist_-0.3.0-scijava.jar /opt/Fiji.app/plugins/StarDist_-0.3.0-scijava.jar
-COPY bundled_jars/Clipper-6.4.2.jar           /opt/Fiji.app/jars/Clipper-6.4.2.jar
+# ── Bundled JARs for CSBDeep and StarDist ────────────────────────────────────
+# These are only on maven.scijava.org (not Maven Central), which is frequently
+# unavailable. Bundled here to make builds fully offline-capable.
+# Source versions: csbdeep-0.6.0, StarDist_-0.3.0-scijava, Clipper-6.4.2
+COPY bundled_jars/csbdeep-0.6.0.jar           /opt/Fiji.app/jars/
+COPY bundled_jars/StarDist_-0.3.0-scijava.jar /opt/Fiji.app/plugins/
+COPY bundled_jars/Clipper-6.4.2.jar           /opt/Fiji.app/jars/
 
-# ── Direct Maven download for CSBDeep and StarDist JARs ──────────────────────
-# The Fiji update sites for these two plugins have stale file links (all 404s).
-# URLs verified from maven.scijava.org (2026-04).
-#   csbdeep-0.6.0.jar         → jars/   (SciJava @Plugin library, not a menu plugin)
-#   StarDist_-0.3.0-scijava.jar → plugins/   (bundled above; maven is fallback)
-#   Clipper-6.4.2.jar         → jars/   (bundled above; maven is fallback)
-RUN python3 - <<'PYEOF'
-import urllib.request, ssl, sys
-from pathlib import Path
-
-plugins_dir = Path('/opt/Fiji.app/plugins')
-jars_dir    = Path('/opt/Fiji.app/jars')
-
-ctx = ssl.create_default_context()
-ctx.check_hostname = False
-ctx.verify_mode    = ssl.CERT_NONE
-
-MAVEN = 'https://maven.scijava.org/content/repositories'
-
-DOWNLOADS = [
-    (jars_dir,    'csbdeep-0.6.0.jar',
-     f'{MAVEN}/releases/de/csbdresden/csbdeep/0.6.0/csbdeep-0.6.0.jar'),
-    (plugins_dir, 'StarDist_-0.3.0-scijava.jar',
-     f'{MAVEN}/releases/de/csbdresden/StarDist_/0.3.0-scijava/StarDist_-0.3.0-scijava.jar'),
-    (jars_dir,    'Clipper-6.4.2.jar',
-     f'{MAVEN}/public/de/lighti/Clipper/6.4.2/Clipper-6.4.2.jar'),
-]
-
-all_ok = True
-for dest_dir, fname, url in DOWNLOADS:
-    dest = dest_dir / fname
-    if dest.exists():
-        print(f'[maven-dl] already present: {fname}')
-        continue
-    print(f'[maven-dl] GET {url}')
-    try:
-        req  = urllib.request.Request(url, headers={'User-Agent': 'Fiji-Docker/2.0'})
-        data = urllib.request.urlopen(req, timeout=120, context=ctx).read()
-        dest.write_bytes(data)
-        print(f'[maven-dl] saved {fname} ({len(data):,} bytes)')
-    except Exception as e:
-        print(f'[maven-dl] ERROR: {fname}: {e}', file=sys.stderr)
-        all_ok = False
-
-sys.exit(0 if all_ok else 1)
-PYEOF
-
-# Verify JARs are present (CSBDeep lives in jars/, not plugins/)
-RUN ls /opt/Fiji.app/jars/csbdeep-*.jar \
-    && ls /opt/Fiji.app/plugins/StarDist_*.jar \
-    && echo "OK: csbdeep and StarDist_ JARs verified" \
-    || { echo "ERROR: CSBDeep or StarDist JARs missing — Maven download failed"; exit 1; }
+# ── Alternative: download from maven.scijava.org (use if bundled_jars/ is stale) ──
+# Uncomment the block below and comment out the COPY lines above to re-download.
+# RUN python3 - <<'PYEOF'
+# import urllib.request, ssl, sys
+# from pathlib import Path
+#
+# plugins_dir = Path('/opt/Fiji.app/plugins')
+# jars_dir    = Path('/opt/Fiji.app/jars')
+#
+# ctx = ssl.create_default_context()
+# ctx.check_hostname = False
+# ctx.verify_mode    = ssl.CERT_NONE
+#
+# MAVEN = 'https://maven.scijava.org/content/repositories'
+#
+# DOWNLOADS = [
+#     (jars_dir,    'csbdeep-0.6.0.jar',
+#      f'{MAVEN}/releases/de/csbdresden/csbdeep/0.6.0/csbdeep-0.6.0.jar'),
+#     (plugins_dir, 'StarDist_-0.3.0-scijava.jar',
+#      f'{MAVEN}/releases/de/csbdresden/StarDist_/0.3.0-scijava/StarDist_-0.3.0-scijava.jar'),
+#     (jars_dir,    'Clipper-6.4.2.jar',
+#      f'{MAVEN}/public/de/lighti/Clipper/6.4.2/Clipper-6.4.2.jar'),
+# ]
+#
+# all_ok = True
+# for dest_dir, fname, url in DOWNLOADS:
+#     dest = dest_dir / fname
+#     if dest.exists():
+#         print(f'[maven-dl] already present: {fname}')
+#         continue
+#     print(f'[maven-dl] GET {url}')
+#     try:
+#         req  = urllib.request.Request(url, headers={'User-Agent': 'Fiji-Docker/2.0'})
+#         data = urllib.request.urlopen(req, timeout=120, context=ctx).read()
+#         dest.write_bytes(data)
+#         print(f'[maven-dl] saved {fname} ({len(data):,} bytes)')
+#     except Exception as e:
+#         print(f'[maven-dl] ERROR: {fname}: {e}', file=sys.stderr)
+#         all_ok = False
+#
+# sys.exit(0 if all_ok else 1)
+# PYEOF
+#
+# RUN ls /opt/Fiji.app/jars/csbdeep-*.jar \
+#     && ls /opt/Fiji.app/plugins/StarDist_*.jar \
+#     && echo "OK: csbdeep and StarDist_ JARs verified" \
+#     || { echo "ERROR: CSBDeep or StarDist JARs missing — Maven download failed"; exit 1; }
 
 # ── For aarch64, install CSBDeep linux/arm64 TensorFlow Java single-JAR patch ────────────
 # The upstream CSBDeep Fiji JAR depends on TensorFlow Java 1.x JNI artifacts
@@ -295,8 +290,7 @@ RUN /opt/conda/bin/conda create -n cellpose4 python=3.11 -y \
         'langchain-core==1.2.16' \
         'langgraph-checkpoint-sqlite==3.0.3' \
         'pydantic==2.12.5' \
-    && /opt/conda/envs/cellpose4/bin/python -c \
-        "import cellpose; print('[OK] cellpose', cellpose.version)" \
+    && /opt/conda/envs/cellpose4/bin/cellpose --version \
     && /opt/conda/bin/conda clean -afy
 
 # ── Conda env: stardist  (TensorFlow + CSBDeep + StarDist inference) ─────────
@@ -407,7 +401,7 @@ RUN cp -a /home/imagentj /home/imagentj.seed
 # ── Environment defaults ─────────────────────────────────────────────────────
 ENV DISPLAY=:1
 ENV QT_QPA_PLATFORM=xcb
-ENV JAVA_HOME=/opt/conda/envs/local_imagent_J
+ENV JAVA_HOME=/opt/conda/envs/local_imagent_J/lib/jvm
 ENV HOME=/home/imagentj
 
 # ── noVNC: default scaling mode → Local Scaling ──────────────────────────────
@@ -423,6 +417,19 @@ RUN NOVNC_UI=/usr/share/novnc/app/ui.js; \
     fi
 
 COPY --chmod=755 docker-entrypoint.sh /docker-entrypoint.sh
+
+# ── Pre-warm jgo/Maven dependency cache ──────────────────────────────────────
+# pyimagej resolves imglib2-imglyb and other bridge JARs via jgo/Maven at
+# first startup. maven.scijava.org is frequently unreliable so we resolve
+# everything during the build (when network is available) and store the result
+# in /opt/imagentj-seed/. The entrypoint seeds ~/.jgo and ~/.m2 from there
+# on first container start, before the imagentj_home volume can shadow them.
+COPY bundled_cache/imagentj-seed-cache.tar.gz /tmp/imagentj-seed-cache.tar.gz
+RUN mkdir -p /opt/imagentj-seed \
+    && tar xzf /tmp/imagentj-seed-cache.tar.gz -C /opt/imagentj-seed \
+    && rm /tmp/imagentj-seed-cache.tar.gz \
+    && chmod -R a+rX /opt/imagentj-seed \
+    && echo "[pre-warm] jgo/Maven cache extracted to /opt/imagentj-seed"
 
 EXPOSE 6080
 
