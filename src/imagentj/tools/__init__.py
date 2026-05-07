@@ -13,6 +13,7 @@ from .plugin_tools import search_fiji_plugins, install_fiji_plugin, check_plugin
 from .middleware import SafeToolLoggerMiddleware, TodoDisplayMiddleware, NarrationReminderMiddleware, PhaseGuardMiddleware
 # from .vision_tools import capture_ij_window, build_compilation, analyze_image, set_vision_llm  # VLM disabled
 from .state_ledger import update_state_ledger, read_state_ledger, set_ledger_metadata, get_ledger_context
+from .environment_tools import check_environment
 
 # Lazy accessors for vector stores (RAG is optional)
 from .vector_stores import get_vec_store_docs, get_vec_store_mistakes, is_rag_available, is_plugin_db_available
@@ -29,5 +30,6 @@ __all__ = [
     'run_python_code', 'inspect_csv_header', 'mkdir_copy','save_script', 'execute_script', 'get_script_info', 'load_script', 'get_script_history',
     'setup_analysis_workspace', 'save_markdown',
     'set_vision_llm', 'capture_ij_window', 'build_compilation', 'analyze_image',
-    'update_state_ledger', 'read_state_ledger', 'set_ledger_metadata', 'get_ledger_context'
+    'update_state_ledger', 'read_state_ledger', 'set_ledger_metadata', 'get_ledger_context',
+    'check_environment'
 ]

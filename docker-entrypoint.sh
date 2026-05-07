@@ -47,6 +47,18 @@ _seed_volume "fiji_jars"    "$FIJI_HOME/jars.seed"    "$FIJI_HOME/jars"    "$FIJ
 _seed_volume "fiji_plugins" "$FIJI_HOME/plugins.seed" "$FIJI_HOME/plugins" "$FIJI_HOME/plugins/.seeded"
 _seed_volume "imagentj_home" "/home/imagentj.seed" "/home/imagentj" "/home/imagentj/.seeded"
 
+# ── Lock environment snapshot read-only ──────────────────────────────────────
+# The agent reads this file via check_environment() to know what's installed.
+# It must never be edited at runtime — frozen artifact of the image build.
+_ENV_SNAPSHOT=/app/data/environment/container_snapshot.md
+if [ -f "$_ENV_SNAPSHOT" ]; then
+    chmod 0444 "$_ENV_SNAPSHOT" 2>/dev/null \
+        && echo "[entrypoint] Locked $_ENV_SNAPSHOT read-only (0444)" \
+        || echo "[entrypoint] WARNING: could not chmod $_ENV_SNAPSHOT"
+else
+    echo "[entrypoint] WARNING: $_ENV_SNAPSHOT not found — check_environment will be unavailable"
+fi
+
 # ── Enforce TrackMate-StarDist ClassCastException patch ───────────────────────
 # _seed_volume skips files that already exist, so a stale unpatched JAR in the
 # fiji_jars volume survives image rebuilds. Compare checksums and overwrite if needed.

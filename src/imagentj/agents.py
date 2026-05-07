@@ -40,6 +40,7 @@ from .tools import (
     setup_analysis_workspace, save_markdown,
     NarrationReminderMiddleware, PhaseGuardMiddleware,
     update_state_ledger, read_state_ledger, set_ledger_metadata, get_ledger_context,
+    check_environment,
     set_dialog_vision_llm,
     # capture_ij_window, build_compilation, analyze_image,  # VLM disabled
 )
@@ -657,6 +658,7 @@ def init_agent(enable_qa: bool = False):
             get_script_info,
             setup_analysis_workspace,
             save_markdown,
+            check_environment,
             # ── state ledger (persistent project memory) ─────────────────────
             update_state_ledger,
             read_state_ledger,
