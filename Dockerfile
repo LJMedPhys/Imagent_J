@@ -1,7 +1,16 @@
-FROM continuumio/miniconda3:latest AS base-cpu
+ARG MINICONDA_TAG=24.11.1-0
+FROM continuumio/miniconda3:${MINICONDA_TAG} AS base-cpu
 ENV DEBIAN_FRONTEND=noninteractive
 FROM base-cpu AS cpu
 ARG TARGETARCH
+
+# OCI image metadata — populates the Docker Hub page and `docker inspect`.
+LABEL org.opencontainers.image.title="ImagentJ" \
+      org.opencontainers.image.description="Agentic Fiji/ImageJ environment with Cellpose, StarDist, TrackMate v8, DeepImageJ, and noVNC desktop." \
+      org.opencontainers.image.source="https://github.com/LJMedPhys/Imagent_J" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.vendor="MMV Lab" \
+      org.opencontainers.image.documentation="https://github.com/LJMedPhys/Imagent_J/blob/main/README.md"
 
 # ── Core system dependencies (rarely change) ─────────────────────────────────
 # Split from fonts to preserve cache when adding new fonts
@@ -35,15 +44,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Install Fiji ──────────────────────────────────────────────────────────────
+# FIJI_RELEASE=latest pulls the most recent build (good for dev / quick rebuilds).
+# Override at build time for reproducible images:
+#   docker build --build-arg FIJI_RELEASE=2.16.0 ...
+ARG FIJI_RELEASE=latest
 RUN set -e; \
     if [ "$TARGETARCH" = "arm64" ]; then \
-        FIJI_ZIP=fiji-latest-linux-arm64-jdk.zip; \
         FIJI_BINARY=fiji-linux-arm64; \
+        ARCH_TAG=linux-arm64; \
     else \
-        FIJI_ZIP=fiji-latest-linux64-jdk.zip; \
         FIJI_BINARY=fiji-linux-x64; \
+        ARCH_TAG=linux64; \
     fi; \
-    wget -q "https://downloads.imagej.net/fiji/latest/${FIJI_ZIP}" -O /tmp/fiji.zip \
+    if [ "$FIJI_RELEASE" = "latest" ]; then \
+        FIJI_URL="https://downloads.imagej.net/fiji/latest/fiji-latest-${ARCH_TAG}-jdk.zip"; \
+    else \
+        FIJI_URL="https://downloads.imagej.net/fiji/releases/${FIJI_RELEASE}/fiji-${FIJI_RELEASE}-${ARCH_TAG}-jdk.zip"; \
+    fi; \
+    echo "[fiji] Downloading $FIJI_URL"; \
+    wget -q "$FIJI_URL" -O /tmp/fiji.zip \
     && unzip -q /tmp/fiji.zip -d /opt \
     && rm /tmp/fiji.zip \
     # Rename to .app to match standard ENV variables if you have them
@@ -210,7 +229,6 @@ COPY bundled_jars/Clipper-6.4.2.jar           /opt/Fiji.app/jars/
 # that do not ship linux/aarch64 native libraries. Use the prebuilt single JAR
 # with an isolated TensorFlow Java 1.1.0 runtime (TensorFlow core 2.18.0)
 # bundled inside.
-ARG TARGETARCH
 ARG CSBDEEP_TFJAVA_JAR_URL="https://github.com/audreyeternal/CSBDeep/releases/download/csbdeep-tfjava-arm64-v0.6.0/csbdeep-0.6.0-tfjava-linux-arm64.jar"
 ARG CSBDEEP_TFJAVA_JAR_SHA256="065702602843af513ebcff8f423903d33755e6d2285456360f6a286444d8704e"
 RUN set -e; \
@@ -387,10 +405,14 @@ RUN mkdir -p /app/qdrant_data /home/imagentj/.cellpose /home/imagentj/.cache \
     && chown -R imagentj:imagentj /opt/appose
 
 # ── Cellpose models ───────────────────────────────────────────────────────────
-# Models are NOT baked into the image — docker-compose bind-mounts ./models to
-# /home/imagentj/.cellpose/models at runtime 
-# Create the directory so the seed has the correct structure and ownership.
+# Models bundled in ./models are baked into /home/imagentj/.cellpose/models so a
+# pulled image works out-of-the-box. The docker-compose named volume auto-seeds
+# from this path on first start; cellpose downloads any missing model on demand.
 RUN mkdir -p /home/imagentj/.cellpose/models \
+    && if [ -d /app/models ] && [ -n "$(ls -A /app/models 2>/dev/null)" ]; then \
+        cp -a /app/models/. /home/imagentj/.cellpose/models/; \
+        echo "[cellpose] Seeded $(ls /home/imagentj/.cellpose/models | wc -l) entries from /app/models"; \
+    fi \
     && chown -R imagentj:imagentj /home/imagentj/.cellpose
 
 # ── Seed home dir for named-volume persistence ────────────────────────────────
@@ -432,6 +454,11 @@ RUN mkdir -p /opt/imagentj-seed \
     && echo "[pre-warm] jgo/Maven cache extracted to /opt/imagentj-seed"
 
 EXPOSE 6080
+
+# noVNC HTTP endpoint as readiness probe — websockify serves the static UI on :6080
+# once the X stack and VNC bridge are up. start-period covers the first-run seeding.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:6080/ >/dev/null || exit 1
 
 USER imagentj
 

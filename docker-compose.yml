@@ -7,6 +7,7 @@ services:
       context: .
       dockerfile: ${IMAGENTJ_DOCKERFILE:-Dockerfile}
       target: cpu
+    pull_policy: missing
     ports:
       # Bind to localhost only by default for security
       # Change to "0.0.0.0:6080:6080" if you need network access (not recommended)
@@ -19,6 +20,8 @@ services:
       - LANGSMITH_ENDPOINT=${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
       - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-}
       - LANGCHAIN_CALLBACKS_BACKGROUND=${LANGCHAIN_CALLBACKS_BACKGROUND:-true}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GMAIL_APP_PASSWORD=${GMAIL_APP_PASSWORD:-}
       - FIJI_PATH=/opt/Fiji.app
       - QDRANT_DATA_PATH=/app/qdrant_data
       - DISPLAY=:1
@@ -35,29 +38,18 @@ services:
       # Saved scripts persistence
       - saved_scripts:/app/scripts/saved_scripts
       # Qdrant vector database for plugin search and RAG.
-      # Bind-mount the host folder directly: qdrant_data/ is in .dockerignore and therefore
-      # never reaches the image, so a named volume would always seed empty. The host folder
-      # is the source of truth for ingested data.
-      - ./qdrant_data:/app/qdrant_data
-      # Image data directory (place images in ./data on host, access as /mnt/data in container)
+      # Named volume auto-seeded from the image's baked-in /app/qdrant_data on
+      # first start; persists user-ingested data across container restarts.
+      - qdrant_data:/app/qdrant_data
+      # Image data directory — place images in $IMAGE_DATA_DIR on host (default ./data),
+      # access them in the container at /data and /app/data.
       - ${IMAGE_DATA_DIR:-./data}:/data
-      # Source code mount for development (remove in production image)
-      - ./src:/app/src:ro
-      - ./gui_runner.py:/app/gui_runner.py:ro
-      - ./setup_wizard.py:/app/setup_wizard.py:ro
-      # Folder to save data
-      - ./data:/app/data
+      - ${IMAGE_DATA_DIR:-./data}:/app/data
       # User home — persists api_keys.env (outside /app/data so agent can't read it)
       - imagentj_home:/home/imagentj
-      # Cellpose models — bind-mount so models are available without rebuilding
-      - ./models:/home/imagentj/.cellpose/models
-      # Folder for skills
-      - ./skills:/app/skills:ro
-      # Entrypoint bind-mount so changes take effect without rebuilding
-      - ./docker-entrypoint.sh:/docker-entrypoint.sh:ro
-      # Shim bind-mounts — host file is executable; avoids needing root chmod after cp
-      - ./micromamba_shim.sh:/usr/local/opt/micromamba/bin/micromamba:ro
-      - ./micromamba_shim.sh:/opt/micromamba/bin/micromamba:ro
+      # Cellpose models — named volume auto-seeded from baked-in models at
+      # /home/imagentj/.cellpose/models. Cellpose downloads missing models on demand.
+      - cellpose_models:/home/imagentj/.cellpose/models
     env_file:
       - path: .env
         required: false
@@ -91,6 +83,8 @@ volumes:
   saved_scripts:
   appose_envs:
   imagentj_home:
+  qdrant_data:
+  cellpose_models:
 
 networks:
   imagent_net:
