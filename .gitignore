@@ -30,6 +30,8 @@ src/scripts/saved_scripts/
 checkpoints*
 
 /data/
+!/data/environment/
+!/data/environment/container_snapshot.md
 
 .env
 
