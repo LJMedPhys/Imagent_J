@@ -20,8 +20,6 @@ services:
       - FIJI_PATH=/opt/Fiji.app
       - QDRANT_DATA_PATH=/app/qdrant_data
       - DISPLAY=:1
-      # Optional: Set a VNC password (recommended if exposing to network)
-      - VNC_PASSWORD=${VNC_PASSWORD:-}
       - PYTHONPATH=/app:/app/src:/app/extra_packages
       - PYTHONUNBUFFERED=1
 
