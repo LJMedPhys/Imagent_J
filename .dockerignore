@@ -1,5 +1,6 @@
 .git
 .gitignore
+.gitattributes
 .DS_Store
 __pycache__/
 **/__pycache__
@@ -10,15 +11,17 @@ __pycache__/
 .ruff_cache/
 .venv/
 data/
-qdrant_data/
 src/config/keys.py
 .env
+.env.template
 *.log
 .idea/
 .vscode/
+.claude/
 *.swp
 *.swo
 *~
-# Models are bind-mounted at runtime — do not send to build context
-models/
+# Repo-only documentation and snapshots — keep out of the image
+DOCKER_MANUAL.md
+container_snapshot_*.md
 models.zip
