@@ -8,7 +8,10 @@
  *
  * This script encodes ALL pitfalls C5-C9 from CELLPOSE_DETECTOR_API.md:
  *   C5  Tracker factory loaded via reflection (no hardcoded jaqaman/sparselap import).
- *   C7  Cellpose mask read from /tmp/TrackMate-cellpose_*/<basename>_cp_masks.{tif,png}
+ *   C7  Cellpose mask read from /tmp/TrackMate-cellpose_<RAND>/<BASE>_cp_masks.{tif,png}
+ *       (NOTE the literal `*` in the temp-dir name is omitted from this comment —
+ *       a `*` followed by `/` would close the JavaDoc block comment early and
+ *       break the script. The actual directory matches `TrackMate-cellpose_*`.)
  *       — never searched in WindowManager.
  *   C8  Spot.getRoi() / SpotRoi never sent to RoiManager. ROI extraction is skipped
  *       entirely; the mask file is the ground-truth output.
@@ -16,8 +19,16 @@
  *
  * Verified in this container against TrackMate v8 + Cellpose 3.x + cyto3 model.
  *
- * USAGE: open the input image as the active window, then run this script. Edit
- * the OUTPUT PATHS and CELLPOSE PARAMETERS blocks below for your project.
+ * USAGE — two equivalent modes:
+ *   (A) Headless / scripted: set `inputImagePath` below to an absolute path.
+ *       The script opens it with IJ.openImage and proceeds. Required when the
+ *       script is launched via `execute_script` / `run_script` / Fiji
+ *       `--headless --run` — there is no active window in those contexts.
+ *   (B) Interactive: leave `inputImagePath` as `''` and open your image as the
+ *       active window before running. The script falls back to
+ *       WindowManager.getCurrentImage().
+ *
+ * Edit OUTPUT PATHS, INPUT PATH, and CELLPOSE PARAMETERS below for your project.
  */
 
 import ij.IJ
@@ -33,6 +44,11 @@ import fiji.plugin.trackmate.TrackMate
 import fiji.plugin.trackmate.Logger
 import fiji.plugin.trackmate.cellpose.CellposeDetectorFactory
 import fiji.plugin.trackmate.features.FeatureFilter
+
+// ── INPUT PATH (mode A) ──────────────────────────────────────────────────────
+// Absolute path to the input image. Leave '' to use the currently active
+// window (mode B). When non-empty, this overrides whatever is active.
+final String inputImagePath  = ''
 
 // ── OUTPUT PATHS ─────────────────────────────────────────────────────────────
 final String outputMaskPath  = '/app/data/projects/<project>/processed_images/cellpose_binary_mask_preview.tif'
@@ -132,8 +148,22 @@ try {
     new File(outputMaskPath).parentFile.mkdirs()
     new File(outputCsvPath).parentFile.mkdirs()
 
-    ImagePlus imp = WindowManager.getCurrentImage()
-    if (imp == null) { IJ.log('[ERROR] No active image.'); println('FINAL STATUS: FAILURE'); return }
+    ImagePlus imp = null
+    if (inputImagePath != null && !inputImagePath.trim().isEmpty()) {
+        IJ.log('[INFO] Opening input image (mode A, path): ' + inputImagePath)
+        imp = IJ.openImage(inputImagePath)
+        if (imp == null) {
+            IJ.log('[ERROR] Could not open image: ' + inputImagePath)
+            println('FINAL STATUS: FAILURE'); return
+        }
+        // Ensure WindowManager-aware code paths still see the image (some
+        // analyzers query getCurrentImage internally).
+        imp.show()
+    } else {
+        IJ.log('[INFO] Using active window (mode B)')
+        imp = WindowManager.getCurrentImage()
+        if (imp == null) { IJ.log('[ERROR] No active image and inputImagePath is empty.'); println('FINAL STATUS: FAILURE'); return }
+    }
 
     def imp2 = imp.duplicate()
     imp2.setTitle(imp.getTitle() + '_cellpose_input_dup')
