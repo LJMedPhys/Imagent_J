@@ -160,6 +160,17 @@ def install_fiji_plugin(plugin_name: str) -> str:
     if executable is None:
         return f"Fiji executable not found in {fiji_path}. Check FIJI_JAVA_HOME in imagej_config.py."
 
+    # Clear stale Fiji updater lock files before proceeding.
+    # The running Fiji instance (interactive mode via pyimagej) can hold the
+    # updater lock, and any previously interrupted install leaves it behind.
+    for lock_name in [".lock", "db.xml.gz.lock", "update/.lock"]:
+        lock_path = fiji_path / lock_name
+        if lock_path.exists():
+            try:
+                lock_path.unlink()
+            except OSError:
+                pass
+
     # Step 1: Add update site
     try:
         result_add = subprocess.run(
