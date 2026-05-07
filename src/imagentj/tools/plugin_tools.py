@@ -163,13 +163,13 @@ def install_fiji_plugin(plugin_name: str) -> str:
     # Clear stale Fiji updater lock files before proceeding.
     # The running Fiji instance (interactive mode via pyimagej) can hold the
     # updater lock, and any previously interrupted install leaves it behind.
-    for lock_name in [".lock", "db.xml.gz.lock", "update/.lock"]:
-        lock_path = fiji_path / lock_name
-        if lock_path.exists():
-            try:
-                lock_path.unlink()
-            except OSError:
-                pass
+    # for lock_name in [".lock", "db.xml.gz.lock", "update/.lock"]:
+    #     lock_path = fiji_path / lock_name
+    #     if lock_path.exists():
+    #         try:
+    #             lock_path.unlink()
+    #         except OSError:
+    #             pass
 
     # Step 1: Add update site
     try:
