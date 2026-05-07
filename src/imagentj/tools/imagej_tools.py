@@ -261,6 +261,11 @@ _SKIP_TITLES = {"ImageJ", "Fiji", "Log", "Results", "ROI Manager", "Recorder",
 _IMAGE_EXTENSIONS = {".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp", ".gif",
                      ".fits", ".hdf5", ".h5", ".czi", ".lif", ".nd2", ".ims"}
 
+_IMAGE_EXT_RE = re.compile(
+    r'\.(' + '|'.join(e.lstrip('.') for e in _IMAGE_EXTENSIONS) + r')(\s|$|\[|\()',
+    re.IGNORECASE,
+)
+
 def _is_non_dialog_window(title: str) -> bool:
     """Return True for windows that are definitely not plugin parameter dialogs."""
     if title in _SKIP_TITLES:
@@ -269,10 +274,9 @@ def _is_non_dialog_window(title: str) -> bool:
     tl = title.lower()
     if "imagej" in tl or tl == "fiji":
         return True
-    # Image display windows — title ends with a known image extension
-    import os as _os
-    ext = _os.path.splitext(title)[1].lower()
-    if ext in _IMAGE_EXTENSIONS:
+    # Image display windows — title contains a known image extension followed by
+    # end-of-string, whitespace, or bracket (handles "img.tif (50%)", "stack.tif [1/10]")
+    if _IMAGE_EXT_RE.search(title):
         return True
     return False
 
