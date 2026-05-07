@@ -430,16 +430,21 @@ class MetricsPanelWidget(QWidget):
         agent_layout.setSpacing(4)
         self._qa_checkbox = QCheckBox("QA Agent")
         self._qa_checkbox.setChecked(False)
-        self._qa_checkbox.setToolTip(
-            "Enable the QA Reporter agent.\n"
-            "Runs a full audit at project end, checks for publication readiness, and generates\n"
-            "QA_Checklist_Report.md. Off by default, \n"
-            "as it adds significant cost per workflow."
-        )
         self._qa_checkbox.stateChanged.connect(
             lambda _: self.qa_toggled.emit(self._qa_checkbox.isChecked())
         )
         agent_layout.addWidget(self._qa_checkbox)
+
+        qa_desc = QLabel(
+            "Audits the finished project against publication-readiness "
+            "checks and writes <i>QA_Checklist_Report.md</i>.<br>"
+            "<span style='color:#c0392b;'>Expensive — adds significant "
+            "token cost per workflow.</span>"
+        )
+        qa_desc.setTextFormat(Qt.RichText)
+        qa_desc.setWordWrap(True)
+        qa_desc.setStyleSheet("color:#555; font-size:10px; padding-left:18px;")
+        agent_layout.addWidget(qa_desc)
         root.addWidget(agent_box)
 
         root.addStretch()
