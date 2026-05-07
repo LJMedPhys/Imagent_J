@@ -1,77 +1,62 @@
-"# ImageJ Agent (ImagentJ)
+# ImageJ Agent (ImagentJ)
 
-An AI-powered agent for ImageJ/Fiji scripting and bioimage analysis.
+An AI-powered agent for ImageJ/Fiji scripting and bioimage analysis. ImagentJ runs Fiji inside a container together with an LLM-driven chat panel that can plan analyses, write and execute Groovy macros, install plugins, and report results.
 
-## Prerequisites
+## Quick start (Docker)
 
-- **Fiji/ImageJ**: Download and install Fiji from https://imagej.net/software/fiji/
-- **Conda**: For environment management
+Prerequisites:
 
-## Setup
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or Docker Engine + Compose on Linux)
+- ~8 GB RAM and ~25 GB free disk
+- An OpenAI **or** OpenRouter API key
 
-1. **Install Fiji**:
-   - Download Fiji from the official website
-   - Note the path to the Fiji installation
+Steps:
 
-2. **Configure Fiji path**:
-   - Edit `src/config/imagej_config.py`
-   - Update `FIJI_JAVA_HOME` to point to your Fiji's Java home (e.g., `C:\path\to\fiji\java\win64`)
+```bash
+# 1. Configure credentials
+cp .env.template .env
+# edit .env and fill in OPENAI_API_KEY or OPEN_ROUTER_API_KEY
 
-3. **Install the conda environment**:
-   ```bash
-   conda env create -f environment.yml
-   conda activate local_imagent_J
-   ```
+# 2. Start the container
+docker compose up
+```
 
-4. **Configure your API keys**:
-   - Copy `src/config/keys_template.py` to `src/config/keys.py`
-   - Fill in your API keys (OpenAI, LangSmith, etc.)
+Then open <http://localhost:6080/vnc.html> in your browser. Fiji and the ImagentJ chat panel run inside the virtual desktop.
 
-5. **Configure RAG system**:
-   - Rename `src/config/rag_config_template.py` to  `src/config/rag_config.py` configure document ingestion folders
-   - Add paths to folders containing documentation, manuals, or knowledge base files
-   - Supported formats: PDF, DOCX, TXT, MD, HTML, and more
+If no API key is set in `.env`, a setup wizard appears in the browser before Fiji launches.
 
-6. **Initialize the RAG databases**:
-   - Run the RAG initialization script: `python src/imagentj/rag/RAG.py`
-   - This will create vector stores and ingest documents from configured folders
-   - The system creates two vector stores: one for general bioimage analysis docs and one for coding errors/solutions
+Place images you want to analyse in [`./data/`](data/) — the agent sees them at `/app/data` inside the container.
 
-## RAG System Configuration
+## Documentation
 
-The RAG (Retrieval-Augmented Generation) system enables the agent to search through your documentation and knowledge base for relevant information when answering questions or generating scripts.
+The full user guide lives in [`user_guide/`](user_guide/):
 
-### Configuration
+| Guide | Contents |
+|-------|----------|
+| [01 Getting Started](user_guide/01_getting_started.md) | Prerequisites, `.env` setup, API keys, starting the container |
+| [02 Interface & Agents](user_guide/02_interface_and_agents.md) | noVNC interface, agent architecture, supported plugins |
+| [03 Prompting](user_guide/03_prompting.md) | How to write effective prompts |
+| [04 Data, History & Reports](user_guide/04_data_history_and_reports.md) | File layout, chat history, issue reports |
+| [05 Security](user_guide/05_security.md) | Security model, network exposure, key handling |
 
-Edit `src/config/rag_config.py` to configure:
+For Docker-specific operations (logs, volumes, troubleshooting) see [DOCKER_MANUAL.md](DOCKER_MANUAL.md).
 
-- **INGESTION_FOLDERS**: List of folder paths containing documents to index
-- **QDRANT_DATA_PATH**: Path where vector databases are stored
-- **CHUNK_SIZE** and **CHUNK_OVERLAP**: Text chunking parameters for document processing
+## Project layout
 
-### Initialization
+- [`src/imagentj/`](src/imagentj/) — main Python package (agents, tools, RAG)
+- [`skills/`](skills/) — per-plugin documentation packs the agent retrieves at runtime
+- [`bundled_jars/`](bundled_jars/), [`bundled_cache/`](bundled_cache/) — JARs and a pre-warmed jgo/Maven cache used to build the image offline
+- [`data/`](data/) — image data and per-run outputs (mounted into the container)
+- [`models/`](models/) — Cellpose models (bind-mounted at runtime)
 
-Run `python src/imagentj/rag/RAG.py` to:
-1. Create vector stores for bioimage analysis documentation and coding solutions
-2. Process and index all documents from configured folders
-3. Enable AI-powered document search capabilities
+## Development (without Docker)
 
-### Adding New Documents
+Running on the host is supported but not the recommended path. See [environment.yml](environment.yml) for the conda environment, set `FIJI_PATH` to your local Fiji install, and run `python gui_runner.py` (GUI) or `python run.py` (CLI).
 
-To add new documents to the knowledge base:
-1. Place documents in folders listed in `INGESTION_FOLDERS`
-2. Re-run `python src/imagentj/rag/RAG.py` to re-index
-3. Or call `ingest_documents()` function programmatically
+## Reporting issues
 
-## Running
+Use the **Report Issue** button in the chat panel, or email `agentj.help@gmail.com`.
 
-- CLI version: `python run.py`
-- GUI version: `python gui_runner.py`
+## License
 
-
-## Project Structure
-
-- `src/imagentj/`: Main package
-- `scripts/`: Saved scripts
-- `data/`: Data storage
-- `src/config/`: Configuration files" 
+MIT — see [LICENSE](LICENSE).
