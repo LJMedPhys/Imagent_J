@@ -59,7 +59,7 @@ Open the Terminal, and find your project folder. Inside the project folder, run 
 docker compose up
 ```
 
-During the first run, Docker will pull/build the image (this takes several minutes). On subsequent starts it reuses the cached image.
+During the first run, Docker will pull/build the image (this takes several minutes). On subsequent starts it reuses the cached image. In the terminal, a long log will be printed out, but do not fret, most of it is just informative. 
 
 Open your browser and go to:
 
@@ -67,7 +67,7 @@ Open your browser and go to:
 http://localhost:6080/vnc.html
 ```
 
-Fiji and the ImagentJ chat panel will appear in the browser window.
+Click on "Connect", Fiji and the ImagentJ chat panel should appear in the browser window.
 
 To stop:
 

@@ -92,6 +92,13 @@ Due to display size restrictions, you may not see all of your plugins in the `Pl
 
 Users can also the agent to install additional plugins via chatting, or install them manually via `Help > Update…` in Fiji. **Be cautious with manual installs** — JAR version conflicts can break existing functionality and may require a container restart or volume reset to resolve. Additionally, since manually installed plugins do not come with predefined skills, the scripts or solutions may be less reliable.
 
+If something breaks after installation, the safest recovery is to delete the affected named volumes and restart:
+  ```bash
+  docker compose down
+  docker volume rm imagent_j_fiji_plugins imagent_j_fiji_jars
+  docker compose up
+  ```
+  This re-seeds the volumes from the image, restoring the known-good state.
 
 ---
 
