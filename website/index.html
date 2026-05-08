@@ -85,54 +85,15 @@
       <div class="stat"><div class="num">0</div><div class="lbl">manual setup</div></div>
     </div>
 
-    <!-- Mockup window -->
+    <!-- Hero screenshot — chat + Fiji -->
     <div class="hero-visual reveal">
-      <div class="window">
+      <figure class="window window-shot">
         <div class="win-bar">
           <div class="dots"><i></i><i></i><i></i></div>
           <div class="url">localhost:6080/vnc.html — Agentic-J + Fiji</div>
         </div>
-        <div class="win-body">
-          <!-- Chat panel -->
-          <aside class="chat" aria-label="Agentic-J chat panel">
-            <div class="chat-head">
-              <span class="badge">SUPERVISOR</span>
-              <span class="ttl">Nuclei segmentation</span>
-            </div>
-            <div class="chat-msgs">
-              <div class="msg user">
-                <div class="who">YOU</div>
-                <div class="bubble">Segment DAPI nuclei in <code>/data/batch_01/</code> with StarDist and save area + intensity per nucleus.</div>
-              </div>
-              <div class="msg agent">
-                <div class="who">AGENTIC-J</div>
-                <div class="bubble">
-                  Plan: extract metadata → call <em>Plugin Manager</em> → confirm StarDist → run on 50 images → save CSVs &amp; masks.
-                  <div class="tool">↳ run_groovy("StarDist2D ▸ dsb2018_heavy_augment")</div>
-                  <div class="tool">↳ save_table("/data/results/batch_01.csv")  ✓</div>
-                </div>
-              </div>
-            </div>
-            <div class="chat-input">
-              <input type="text" placeholder="Ask the agent…" disabled />
-              <button class="send" aria-label="Send" disabled>↑</button>
-            </div>
-          </aside>
-
-          <!-- Fiji preview -->
-          <div class="fiji">
-            <div class="fiji-toolbar">
-              <span>Fiji 2.17 · Java 21</span>
-              <span class="pill">StarDist 2D</span>
-              <span class="pill">TrackMate</span>
-              <span style="margin-left:auto">/data/batch_01/img_007.tif</span>
-            </div>
-            <div class="fiji-canvas">
-              <span class="label">label_mask · 1024 × 1024 · 16-bit</span>
-            </div>
-          </div>
-        </div>
-      </div>
+        <img src="images/01_chat_and_fiji.png" alt="Agentic-J chat panel next to a live Fiji desktop in the browser" />
+      </figure>
     </div>
   </div>
 </section>
@@ -362,12 +323,7 @@ cp .env.template .env
     <div class="shots">
       <figure class="shot reveal">
         <!-- Replace src once images are dropped into website/images/ -->
-        <div class="placeholder">
-          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg>
-          <div><strong>Chat + Fiji desktop</strong></div>
-          <div style="font-size:13px; margin-top:6px">Drop your screenshot at:</div>
-          <code>website/images/01_chat_and_fiji.png</code>
-        </div>
+        <img src="images/01_chat_and_fiji.png" alt="The full Agentic-J workspace" />
         <figcaption class="caption">
           <span class="ttl">The full Agentic-J workspace</span>
           <span class="sub">Chat panel on the left, live Fiji desktop on the right — both in the browser.</span>
@@ -375,12 +331,7 @@ cp .env.template .env
       </figure>
 
       <figure class="shot reveal">
-        <div class="placeholder">
-          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M9 13h6M9 17h3"/></svg>
-          <div><strong>Generated Groovy script</strong></div>
-          <div style="font-size:13px; margin-top:6px">Drop your screenshot at:</div>
-          <code>website/images/02_generated_script.png</code>
-        </div>
+        <img src="images/02_generated_script.png" alt="A generated Groovy script" />
         <figcaption class="caption">
           <span class="ttl">A real, runnable Groovy script</span>
           <span class="sub">Saved under <code>scripts/imagej/</code> with version history — re-runnable outside the agent.</span>
@@ -388,12 +339,7 @@ cp .env.template .env
       </figure>
 
       <figure class="shot reveal">
-        <div class="placeholder">
-          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 3v18h18"/><path d="m7 14 4-4 4 4 5-5"/></svg>
-          <div><strong>Stats &amp; plots</strong></div>
-          <div style="font-size:13px; margin-top:6px">Drop your screenshot at:</div>
-          <code>website/images/03_results_plots.png</code>
-        </div>
+        <img src="images/03_results_plots.png" alt="Stats and plots" />
         <figcaption class="caption">
           <span class="ttl">Publication-quality figures</span>
           <span class="sub">The Python Analyst produces matplotlib / seaborn plots and CSV tables ready to share.</span>
@@ -401,12 +347,7 @@ cp .env.template .env
       </figure>
 
       <figure class="shot reveal">
-        <div class="placeholder">
-          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="10"/><path d="M9 12 11 14 15 10"/></svg>
-          <div><strong>Setup wizard</strong></div>
-          <div style="font-size:13px; margin-top:6px">Drop your screenshot at:</div>
-          <code>website/images/04_setup_wizard.png</code>
-        </div>
+        <img src="images/04_setup_wizard.png" alt="First-run setup wizard" />
         <figcaption class="caption">
           <span class="ttl">First-run setup wizard</span>
           <span class="sub">If no API key is found, Agentic-J guides you through key entry before Fiji launches.</span>
