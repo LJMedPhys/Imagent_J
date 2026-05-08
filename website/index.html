@@ -4,8 +4,8 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <meta name="color-scheme" content="dark" />
-<title>Agentic-J — AI-powered agent for microscopy image analysis</title>
-<meta name="description" content="Agentic-J is an AI-powered agent for microscopy image analysis. It runs ImageJ inside a container together with an LLM-driven chat panel that can plan analyses, write and execute Groovy macros, install plugins, and report results." />
+<title>Agentic-J — AI Agent for Microscopy Image Analysis from Exploration to Publication</title>
+<meta name="description" content="Agentic-J is an AI-powered agent running ImageJ inside a container together with an LLM-driven chat panel that can plan analyses, write and execute Groovy macros, install plugins, report results, and much more." />
 
 <!-- Open Graph -->
 <meta property="og:title" content="Agentic-J — AI-powered agent for microscopy image analysis" />
@@ -52,19 +52,19 @@
 <section class="hero">
   <div class="container">
     <div class="reveal">
-      <span class="eyebrow"><span class="dot"></span> An AI lab partner for Fiji / ImageJ</span>
+      <span class="eyebrow"><span class="dot"></span> An AI lab partner for microscopy image analysis</span>
     </div>
 
     <h1 class="reveal">
       Bioimage analysis,<br/>
       <span class="grad">written, run, and debugged</span><br/>
-      by an AI agent in Fiji.
+      by an AI agent.
     </h1>
 
     <p class="lead reveal">
       Agentic-J runs ImageJ inside a container next to a chat panel that plans your analysis,
       writes and executes Groovy macros, installs plugins on demand, and produces
-      publication-ready figures and reports — all from your browser.
+      publication-ready figures and reports, and much more — all from your browser.
     </p>
 
     <div class="hero-actions reveal">
@@ -144,8 +144,8 @@
       <span class="section-tag">// what it does</span>
       <h2 class="section-title">Everything you need to go from raw images to results.</h2>
       <p class="section-sub">
-        A multi-agent system that thinks like a research assistant: it plans, picks the right
-        plugin, writes the script, runs it inside Fiji, and explains the result.
+        A multi-agent system that thinks like a microscopy image analysis experts: it plans, picks the right
+        plugin, writes the script, runs it, and explains the result.
       </p>
     </div>
 
@@ -170,8 +170,8 @@
         <div class="ico">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7.5"/><path d="m22 4-9 9-3-3"/></svg>
         </div>
-        <h3>24 plugins, pre-installed</h3>
-        <p>StarDist, TrackMate, MorphoLibJ, BigStitcher, BoneJ, Cellpose, Ilastik, SNT and 16 more — with skill packs the agent retrieves at runtime via RAG.</p>
+        <h3>Curated plugins and more</h3>
+        <p>StarDist, TrackMate, MorphoLibJ, BigStitcher, BoneJ, Cellpose, Ilastik, SNT and 16 more (keep growing) — with skill packs the agent retrieves at runtime via RAG.</p>
       </div>
 
       <div class="feature reveal">
@@ -222,7 +222,7 @@
   <div class="container">
     <div class="section-head reveal">
       <span class="section-tag">// architecture</span>
-      <h2 class="section-title">Supervisor + specialists.</h2>
+      <h2 class="section-title">Supervisor + Specialists = An expert team for you</h2>
       <p class="section-sub">
         Agentic-J doesn't pretend one model can do everything. The supervisor plans and
         delegates; specialists are sharp tools you can swap and tune independently.
@@ -270,7 +270,7 @@
       </div>
 
       <div class="arch-text reveal">
-        <h3>A pipeline that mirrors how a human analyst works.</h3>
+        <h3>A pipeline that mirrors how a human analyst works</h3>
         <p>From "segment my cells" to a documented project folder, the supervisor follows a structured pipeline you can interrupt or redirect at any step.</p>
         <ul class="arch-list">
           <li>Persistent <code>state_ledger.json</code> shared between agents — every step is auditable.</li>
@@ -353,8 +353,8 @@ cp .env.template .env
   <div class="container">
     <div class="section-head reveal">
       <span class="section-tag">// in action</span>
-      <h2 class="section-title">From a sentence to a script to a result.</h2>
-      <p class="section-sub">A typical session: describe the task in plain English, watch the agent plan, write Groovy, execute it inside Fiji, and explain what it did.</p>
+      <h2 class="section-title">From a sentence to scripts to results</h2>
+      <p class="section-sub">A typical session: describe the task in plain English, watch the agent planning, writing Groovy, executing it, and explaining what it does.</p>
     </div>
 
     <div class="shots">
@@ -419,7 +419,7 @@ cp .env.template .env
   <div class="container">
     <div class="section-head reveal">
       <span class="section-tag">// plugin coverage</span>
-      <h2 class="section-title">24 plugins the agent already speaks fluently.</h2>
+      <h2 class="section-title">24 plugins the agent already speaks fluently and there will be more</h2>
       <p class="section-sub">Each plugin ships with a curated <em>skill pack</em> — descriptions, common patterns, parameter notes — that the agent retrieves at runtime via RAG.</p>
     </div>
     <div class="plugins reveal">
@@ -504,7 +504,7 @@ cp .env.template .env
 
     <div class="cta-band reveal">
       <h3>Try it on your own data.</h3>
-      <p>Drop a TIFF into <code>./data/</code>, write one sentence, and watch the agent take it to a labelled mask, a CSV and a plot.</p>
+      <p>Drop a TIFF into <code>./data/</code>, write your goal, and watch the agent take it to labelled masks, CSVs and plots. Bugs, suggestions, feature requests? Let us know!</p>
       <div class="actions">
         <a class="btn btn-primary" href="#quickstart">▶ Get started</a>
         <a class="btn btn-ghost" href="https://github.com/LJMedPhys/Imagent_J" target="_blank" rel="noopener">Star on GitHub ★</a>
@@ -525,7 +525,7 @@ cp .env.template .env
           <strong>Agentic-J</strong>
         </div>
         <p style="font-size:14px;max-width:360px">
-          An AI-powered agent for ImageJ / Fiji scripting and bioimage analysis.
+          An AI-powered agent for microscopy image analysis.
         </p>
 
         <div class="affiliations">
