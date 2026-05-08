@@ -713,37 +713,48 @@ def _suggest_filter_from_stats(stats: Dict[str, Any]) -> Dict[str, Any]:
         return {**base, 'noise_level': 'low',      'recommended_filter': 'mild gaussian or none', 'gaussian_sigma': 0.5}
 
 
+def _estimate_first_frame_bytes(file_path: str, suffix: str) -> int:
+    """Estimate uncompressed size of a single frame without reading pixel data."""
+    try:
+        if suffix in ['.tif', '.tiff']:
+            with tifffile.TiffFile(file_path) as tif:
+                page = tif.pages[0]
+                return int(np.prod(page.shape)) * np.dtype(page.dtype).itemsize
+    except Exception:
+        pass
+    return _file_size_bytes(file_path)
+
+
 def _compute_standalone_stats(file_path: str, suffix: str) -> Dict[str, Any]:
     """
-    Compute pixel statistics for small files only.
+    Compute pixel statistics from the **first frame only**.
 
-    For TIFFs the guard uses the *uncompressed* size estimated from IFD
-    headers — a heavily-compressed TIFF can expand 10–20× on load and would
-    otherwise sail past an os.stat-based size check.
-    For other formats the on-disk size is used as a conservative lower bound.
-    Returns an error dict without touching pixel data if the file is too large.
+    For multi-frame files (movies, Z-stacks, time-lapses) only frame 0 is
+    read — this prevents memory exhaustion and hangs on large datasets.
+    The size gate is applied against the single-frame uncompressed size.
     """
-    # --- format-aware size gate (no pixel data read) ---
-    if suffix in ['.tif', '.tiff']:
-        estimated = _estimate_tiff_uncompressed_bytes(file_path)
-        guard_size = estimated if estimated > 0 else _file_size_bytes(file_path)
-    else:
-        guard_size = _file_size_bytes(file_path)
-
-    if guard_size == 0 or guard_size > LARGE_FILE_THRESHOLD_BYTES:
-        gb_str = f"{guard_size / 1024**3:.2f} GB" if guard_size else "unknown size"
+    # Gate on first-frame size only so multi-frame files aren't rejected
+    frame_size = _estimate_first_frame_bytes(file_path, suffix)
+    if frame_size == 0 or frame_size > LARGE_FILE_THRESHOLD_BYTES:
+        gb_str = f"{frame_size / 1024**3:.2f} GB" if frame_size else "unknown size"
         return {
-            'error':   'file_too_large',
+            'error':   'frame_too_large',
             'message': (
-                f"File '{Path(file_path).name}' is too large for pixel statistics "
-                f"(estimated uncompressed {gb_str}; "
-                f"limit is {LARGE_FILE_THRESHOLD_BYTES / 1024**3:.1f} GB). "
+                f"First frame of '{Path(file_path).name}' is too large for pixel "
+                f"statistics (estimated {gb_str}; limit is "
+                f"{LARGE_FILE_THRESHOLD_BYTES / 1024**3:.1f} GB). "
                 f"Metadata and calibration were extracted successfully."
             ),
         }
 
+    first_frame_note = None
+
     if suffix in ['.tif', '.tiff']:
-        data = tifffile.imread(file_path)
+        with tifffile.TiffFile(file_path) as tif:
+            n_pages = len(tif.pages)
+            data = tif.pages[0].asarray()
+            if n_pages > 1:
+                first_frame_note = f"Statistics computed from frame 1 of {n_pages}."
         flat = data.astype(np.float64).ravel()
         del data
 
@@ -759,24 +770,35 @@ def _compute_standalone_stats(file_path: str, suffix: str) -> Dict[str, Any]:
         if not frames:
             return {}
         flat = np.concatenate([f.ravel() for f in frames])
+        if img.info.get('dims', [0, 0, 0, 0])[3] > 1 or img.info.get('dims', [0, 0, 0, 0])[2] > 1:
+            first_frame_note = "Statistics computed from first z/t frame only."
 
     elif suffix in ['.dcm', '.dicom']:
         ds = pydicom.dcmread(file_path)
         if not hasattr(ds, 'pixel_array'):
             return {}
-        flat = ds.pixel_array.astype(np.float64).ravel()
+        arr = ds.pixel_array
+        if arr.ndim > 2:
+            arr = arr[0]
+            first_frame_note = "Statistics computed from frame 1 of multi-frame DICOM."
+        flat = arr.astype(np.float64).ravel()
 
     else:
-        # PIL fallback: handles JPEG, PNG, BMP, and any other PIL-readable format
+        # PIL fallback: handles JPEG, PNG, BMP, GIF, and other PIL-readable formats.
+        # seek(0) selects the first frame for animated formats (GIF, WebP, TIFF via PIL).
         try:
             from PIL import Image
             with Image.open(file_path) as img:
+                n_frames = getattr(img, 'n_frames', 1)
+                img.seek(0)
                 arr = np.array(img, dtype=np.float64)
+                if n_frames > 1:
+                    first_frame_note = f"Statistics computed from frame 1 of {n_frames}."
             flat = arr.ravel()
         except Exception:
             return {}
 
-    return {
+    result = {
         'min':           float(np.min(flat)),
         'max':           float(np.max(flat)),
         'mean':          float(np.mean(flat)),
@@ -788,6 +810,9 @@ def _compute_standalone_stats(file_path: str, suffix: str) -> Dict[str, Any]:
         'q99':           float(np.percentile(flat, 99)),
         'dynamic_range': float(np.max(flat) - np.min(flat)),
     }
+    if first_frame_note:
+        result['note'] = first_frame_note
+    return result
 
 
 def extract_file_metadata(file_path: str) -> Dict[str, Any]:
@@ -815,22 +840,8 @@ def extract_file_metadata(file_path: str) -> Dict[str, Any]:
     name_lower = p.name.lower()
     is_ome     = '.ome.' in name_lower
 
-    # ---- Hard size gate — fires before ANY file reading ----
-    size = _file_size_bytes(file_path)
-    if size == 0 or size > LARGE_FILE_THRESHOLD_BYTES:
-        gb_str = f"{size / 1024**3:.2f} GB" if size else "unknown size"
-        return {
-            'file_path':   str(p),
-            'file_format': suffix.lstrip('.'),
-            'error':       'file_too_large',
-            'message': (
-                f"File '{p.name}' is too large to analyse safely "
-                f"({gb_str}; limit is {LARGE_FILE_THRESHOLD_BYTES / 1024**3:.1f} GB). "
-                f"Pixel statistics were not computed. "
-                f"To open this file in ImageJ without crashing, use "
-                f"File > Import > TIFF Virtual Stack."
-            ),
-        }
+    # No blanket file-size gate here — header/calibration reads are safe for
+    # any file size. The pixel-stats function gates on single-frame size instead.
 
     result: Dict[str, Any] = {
         'file_path':   str(p),
