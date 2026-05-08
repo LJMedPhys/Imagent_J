@@ -4,12 +4,12 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <meta name="color-scheme" content="dark" />
-<title>ImagentJ — AI agent for Fiji & bioimage analysis</title>
-<meta name="description" content="ImagentJ is an AI-powered agent that runs Fiji inside a container and writes, executes and debugs Groovy macros for bioimage analysis. Plan, code, run, report — all from a chat panel in your browser." />
+<title>Agentic-J — AI-powered agent for microscopy image analysis</title>
+<meta name="description" content="Agentic-J is an AI-powered agent for microscopy image analysis. It runs ImageJ inside a container together with an LLM-driven chat panel that can plan analyses, write and execute Groovy macros, install plugins, and report results." />
 
 <!-- Open Graph -->
-<meta property="og:title" content="ImagentJ — AI agent for Fiji & bioimage analysis" />
-<meta property="og:description" content="Plan analyses, write & run Groovy macros, install plugins, report results — from a chat panel running next to a real Fiji desktop in your browser." />
+<meta property="og:title" content="Agentic-J — AI-powered agent for microscopy image analysis" />
+<meta property="og:description" content="Plan analyses, write & run Groovy macros, install plugins, report results — from a chat panel running next to a real ImageJ/Fiji desktop in your browser." />
 <meta property="og:type" content="website" />
 <meta name="twitter:card" content="summary_large_image" />
 
@@ -31,9 +31,9 @@
 <!-- Navbar -->
 <header class="nav">
   <div class="container nav-inner">
-    <a href="#" class="brand" aria-label="ImagentJ home">
+    <a href="#" class="brand" aria-label="Agentic-J home">
       <img src="assets/logo.svg" alt="" class="brand-logo" />
-      <span class="brand-name">Imagent<span>J</span></span>
+      <span class="brand-name">Agentic-<span>J</span></span>
     </a>
     <nav class="nav-links" aria-label="primary">
       <a href="#features">Features</a>
@@ -41,7 +41,7 @@
       <a href="#quickstart">Quick start</a>
       <a href="#plugins">Plugins</a>
       <a href="#docs">Docs</a>
-      <a href="https://github.com/" target="_blank" rel="noopener" class="nav-cta">GitHub ↗</a>
+      <a href="https://github.com/LJMedPhys/Imagent_J" target="_blank" rel="noopener" class="nav-cta">GitHub ↗</a>
     </nav>
   </div>
 </header>
@@ -62,15 +62,21 @@
     </h1>
 
     <p class="lead reveal">
-      ImagentJ runs Fiji inside a container next to a chat panel that plans your analysis,
+      Agentic-J runs ImageJ inside a container next to a chat panel that plans your analysis,
       writes and executes Groovy macros, installs plugins on demand, and produces
       publication-ready figures and reports — all from your browser.
     </p>
 
     <div class="hero-actions reveal">
       <a class="btn btn-primary" href="#quickstart">▶ Get started</a>
-      <a class="btn btn-ghost" href="https://github.com/" target="_blank" rel="noopener">View on GitHub →</a>
+      <a class="btn btn-ghost" href="https://github.com/LJMedPhys/Imagent_J" target="_blank" rel="noopener">View on GitHub →</a>
     </div>
+
+    <p class="trust reveal" aria-label="Privacy and security highlights">
+      <span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 6v6c0 5 3.5 9 8 10 4.5-1 8-5 8-10V6z"/></svg> Runs locally on your machine</span>
+      <span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M4 12h16"/></svg> Image pixels never leave your computer</span>
+      <span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 12 2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg> Apache 2.0 · open source</span>
+    </p>
 
     <div class="hero-stats reveal">
       <div class="stat"><div class="num">24</div><div class="lbl">supported plugins</div></div>
@@ -84,11 +90,11 @@
       <div class="window">
         <div class="win-bar">
           <div class="dots"><i></i><i></i><i></i></div>
-          <div class="url">localhost:6080/vnc.html — ImagentJ + Fiji</div>
+          <div class="url">localhost:6080/vnc.html — Agentic-J + Fiji</div>
         </div>
         <div class="win-body">
           <!-- Chat panel -->
-          <aside class="chat" aria-label="ImagentJ chat panel">
+          <aside class="chat" aria-label="Agentic-J chat panel">
             <div class="chat-head">
               <span class="badge">SUPERVISOR</span>
               <span class="ttl">Nuclei segmentation</span>
@@ -99,7 +105,7 @@
                 <div class="bubble">Segment DAPI nuclei in <code>/data/batch_01/</code> with StarDist and save area + intensity per nucleus.</div>
               </div>
               <div class="msg agent">
-                <div class="who">IMAGENTJ</div>
+                <div class="who">AGENTIC-J</div>
                 <div class="bubble">
                   Plan: extract metadata → call <em>Plugin Manager</em> → confirm StarDist → run on 50 images → save CSVs &amp; masks.
                   <div class="tool">↳ run_groovy("StarDist2D ▸ dsb2018_heavy_augment")</div>
@@ -191,6 +197,22 @@
         <h3>Reproducible projects</h3>
         <p>Every run gets a folder with raw images, scripts, results, figures, logs and a state ledger. Optional QA agent generates a checklist report.</p>
       </div>
+
+      <div class="feature reveal">
+        <div class="ico">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/><path d="M3 4h18"/><path d="M3 20h18"/></svg>
+        </div>
+        <h3>UI clicks <em>or</em> Groovy scripts</h3>
+        <p>You choose. Tell the agent <em>"do this through the UI"</em> and it walks Fiji menus for you, or ask for a script and it writes a re-runnable Groovy macro. Both are first-class.</p>
+      </div>
+
+      <div class="feature reveal">
+        <div class="ico">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 6v6c0 5 3.5 9 8 10 4.5-1 8-5 8-10V6z"/><path d="m9 12 2 2 4-4"/></svg>
+        </div>
+        <h3>Secure by design</h3>
+        <p>Bound to <code>localhost</code>, non-root container, all Linux capabilities dropped, <code>no-new-privileges</code>. The agent only sees <code>./data/</code> — your image <strong>pixels never leave your machine</strong>; only metadata and chat are sent to the LLM.</p>
+      </div>
     </div>
   </div>
 </section>
@@ -202,7 +224,7 @@
       <span class="section-tag">// architecture</span>
       <h2 class="section-title">Supervisor + specialists.</h2>
       <p class="section-sub">
-        ImagentJ doesn't pretend one model can do everything. The supervisor plans and
+        Agentic-J doesn't pretend one model can do everything. The supervisor plans and
         delegates; specialists are sharp tools you can swap and tune independently.
       </p>
     </div>
@@ -285,6 +307,14 @@
     <div class="qs-grid">
       <div class="qs-step reveal">
         <span class="num">step 01</span>
+        <h4>Clone the repo</h4>
+        <p>Get the project onto your computer with <a href="https://git-scm.com/downloads" target="_blank" rel="noopener" style="color:var(--accent-2)">Git</a>. Then move into the folder.</p>
+        <pre class="code"><button class="copy" data-copy>copy</button>git clone https://github.com/LJMedPhys/Imagent_J.git
+cd Imagent_J</pre>
+      </div>
+
+      <div class="qs-step reveal">
+        <span class="num">step 02</span>
         <h4>Configure credentials</h4>
         <p>Copy the template and add your API key.</p>
         <pre class="code"><button class="copy" data-copy>copy</button><span class="tok-c"># pick OpenAI <em>or</em> OpenRouter</span>
@@ -294,10 +324,10 @@ cp .env.template .env
       </div>
 
       <div class="qs-step reveal">
-        <span class="num">step 02</span>
+        <span class="num">step 03</span>
         <h4>Add your images</h4>
         <p>Drop image files into <code>./data/</code>; the agent sees them at <code>/app/data</code>.</p>
-        <pre class="code"><button class="copy" data-copy>copy</button>project-root/
+        <pre class="code"><button class="copy" data-copy>copy</button>Imagent_J/
 ├── data/
 │   └── my_image.tif
 ├── .env
@@ -305,7 +335,7 @@ cp .env.template .env
       </div>
 
       <div class="qs-step reveal">
-        <span class="num">step 03</span>
+        <span class="num">step 04</span>
         <h4>Launch</h4>
         <p>Open <code>localhost:6080/vnc.html</code> when the build finishes.</p>
         <pre class="code"><button class="copy" data-copy>copy</button>docker compose up
@@ -335,7 +365,7 @@ cp .env.template .env
           <code>website/images/01_chat_and_fiji.png</code>
         </div>
         <figcaption class="caption">
-          <span class="ttl">The full ImagentJ workspace</span>
+          <span class="ttl">The full Agentic-J workspace</span>
           <span class="sub">Chat panel on the left, live Fiji desktop on the right — both in the browser.</span>
         </figcaption>
       </figure>
@@ -375,7 +405,7 @@ cp .env.template .env
         </div>
         <figcaption class="caption">
           <span class="ttl">First-run setup wizard</span>
-          <span class="sub">If no API key is found, ImagentJ guides you through key entry before Fiji launches.</span>
+          <span class="sub">If no API key is found, Agentic-J guides you through key entry before Fiji launches.</span>
         </figcaption>
       </figure>
     </div>
@@ -432,37 +462,37 @@ cp .env.template .env
     </div>
 
     <div class="doc-grid">
-      <a class="doc-card reveal" href="https://github.com/" target="_blank" rel="noopener">
+      <a class="doc-card reveal" href="https://github.com/LJMedPhys/Imagent_J/blob/main/user_guide/01_getting_started.md" target="_blank" rel="noopener">
         <span class="num">01</span>
         <h4>Getting Started</h4>
         <p>Prerequisites, <code>.env</code> setup, API keys, starting the container.</p>
         <span class="arrow">Read guide →</span>
       </a>
-      <a class="doc-card reveal" href="https://github.com/" target="_blank" rel="noopener">
+      <a class="doc-card reveal" href="https://github.com/LJMedPhys/Imagent_J/blob/main/user_guide/02_interface_and_agents.md" target="_blank" rel="noopener">
         <span class="num">02</span>
         <h4>Interface &amp; Agents</h4>
         <p>The noVNC interface, agent architecture, supported plugins.</p>
         <span class="arrow">Read guide →</span>
       </a>
-      <a class="doc-card reveal" href="https://github.com/" target="_blank" rel="noopener">
+      <a class="doc-card reveal" href="https://github.com/LJMedPhys/Imagent_J/blob/main/user_guide/03_prompting.md" target="_blank" rel="noopener">
         <span class="num">03</span>
         <h4>Prompting</h4>
         <p>How to write effective prompts, with concrete before/after examples.</p>
         <span class="arrow">Read guide →</span>
       </a>
-      <a class="doc-card reveal" href="https://github.com/" target="_blank" rel="noopener">
+      <a class="doc-card reveal" href="https://github.com/LJMedPhys/Imagent_J/blob/main/user_guide/04_data_history_and_reports.md" target="_blank" rel="noopener">
         <span class="num">04</span>
         <h4>Data &amp; Reports</h4>
         <p>Where files live, chat history, usage reports, issue reporting.</p>
         <span class="arrow">Read guide →</span>
       </a>
-      <a class="doc-card reveal" href="https://github.com/" target="_blank" rel="noopener">
+      <a class="doc-card reveal" href="https://github.com/LJMedPhys/Imagent_J/blob/main/user_guide/05_security.md" target="_blank" rel="noopener">
         <span class="num">05</span>
         <h4>Security</h4>
         <p>Local-only by default, container hardening, key handling.</p>
         <span class="arrow">Read guide →</span>
       </a>
-      <a class="doc-card reveal" href="https://github.com/" target="_blank" rel="noopener">
+      <a class="doc-card reveal" href="https://github.com/LJMedPhys/Imagent_J/blob/main/DOCKER_MANUAL.md" target="_blank" rel="noopener">
         <span class="num">06</span>
         <h4>Docker manual</h4>
         <p>Volumes, logs, troubleshooting, advanced configuration.</p>
@@ -475,7 +505,7 @@ cp .env.template .env
       <p>Drop a TIFF into <code>./data/</code>, write one sentence, and watch the agent take it to a labelled mask, a CSV and a plot.</p>
       <div class="actions">
         <a class="btn btn-primary" href="#quickstart">▶ Get started</a>
-        <a class="btn btn-ghost" href="https://github.com/" target="_blank" rel="noopener">Star on GitHub ★</a>
+        <a class="btn btn-ghost" href="https://github.com/LJMedPhys/Imagent_J" target="_blank" rel="noopener">Star on GitHub ★</a>
       </div>
     </div>
   </div>
@@ -487,16 +517,23 @@ cp .env.template .env
 <footer>
   <div class="container">
     <div class="foot-grid">
-      <div>
-        <div class="brand-row" style="margin-bottom:10px">
+      <div class="foot-brand">
+        <div class="brand-row" style="margin-bottom:12px">
           <img src="assets/logo.svg" alt="" />
-          <strong>ImagentJ</strong>
+          <strong>Agentic-J</strong>
         </div>
-        <p style="font-size:14px;max-width:340px">
+        <p style="font-size:14px;max-width:360px">
           An AI-powered agent for ImageJ / Fiji scripting and bioimage analysis.
-          Built at <a style="color:var(--accent-2)" href="https://www.isas.de/" target="_blank" rel="noopener">ISAS e.V.</a>
         </p>
+
+        <div class="affiliations">
+          <h5>Built at</h5>
+          <a href="https://www.isas.de/" target="_blank" rel="noopener">ISAS e.V. — Leibniz-Institut für Analytische Wissenschaften</a>
+          <h5 style="margin-top:14px">In collaboration with</h5>
+          <a href="https://cs.ut.ee/en" target="_blank" rel="noopener">University of Tartu · Institute of Computer Science</a>
+        </div>
       </div>
+
       <div>
         <h5>Project</h5>
         <a href="#features">Features</a>
@@ -504,23 +541,27 @@ cp .env.template .env
         <a href="#plugins">Plugins</a>
         <a href="#quickstart">Quick start</a>
       </div>
+
       <div>
         <h5>Docs</h5>
-        <a href="https://github.com/" target="_blank" rel="noopener">Getting started</a>
-        <a href="https://github.com/" target="_blank" rel="noopener">Prompting guide</a>
-        <a href="https://github.com/" target="_blank" rel="noopener">Docker manual</a>
-        <a href="https://github.com/" target="_blank" rel="noopener">Security</a>
+        <a href="https://github.com/LJMedPhys/Imagent_J/blob/main/user_guide/01_getting_started.md" target="_blank" rel="noopener">Getting started</a>
+        <a href="https://github.com/LJMedPhys/Imagent_J/blob/main/user_guide/03_prompting.md" target="_blank" rel="noopener">Prompting guide</a>
+        <a href="https://github.com/LJMedPhys/Imagent_J/blob/main/DOCKER_MANUAL.md" target="_blank" rel="noopener">Docker manual</a>
+        <a href="https://github.com/LJMedPhys/Imagent_J/blob/main/user_guide/05_security.md" target="_blank" rel="noopener">Security</a>
       </div>
+
       <div>
-        <h5>Community</h5>
-        <a href="https://github.com/" target="_blank" rel="noopener">GitHub</a>
+        <h5>Contributors</h5>
+        <a href="https://github.com/LJMedPhys" target="_blank" rel="noopener">@LJMedPhys — Lukas Johanns</a>
+        <a href="https://github.com/marilin99" target="_blank" rel="noopener">@marilin99 — Marilin Moor</a>
+        <h5 style="margin-top:14px">Community</h5>
+        <a href="https://github.com/LJMedPhys/Imagent_J" target="_blank" rel="noopener">GitHub repository</a>
         <a href="mailto:agentj.help@gmail.com">Report an issue</a>
-        <a href="https://www.isas.de/" target="_blank" rel="noopener">ISAS e.V.</a>
       </div>
     </div>
     <div class="foot-bottom">
-      <span>© 2026 ISAS e.V. — Apache License 2.0</span>
-      <span>Built with ❤ for the bioimage community.</span>
+      <span>© 2026 ISAS e.V. · Apache License 2.0</span>
+      <span>Built with care for the bioimage community.</span>
     </div>
   </div>
 </footer>

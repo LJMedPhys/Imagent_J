@@ -1,5 +1,5 @@
 /* =========================================================
-   ImagentJ — Landing page
+   Agentic-J — Landing page
    Modern scientific dark theme
    ========================================================= */
 
@@ -201,6 +201,14 @@ main, header, footer { position: relative; z-index: 1; }
 }
 .hero-actions { margin-top: 32px; display: flex; gap: 12px; flex-wrap: wrap; }
 
+.trust {
+  margin-top: 22px;
+  display: flex; flex-wrap: wrap; gap: 18px 22px;
+  font-size: 13.5px; color: var(--text-faint);
+}
+.trust span { display: inline-flex; align-items: center; gap: 8px; }
+.trust svg { color: var(--accent); flex-shrink: 0; }
+
 .hero-stats {
   margin-top: 56px;
   display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px;
@@ -387,10 +395,11 @@ h2.section-title {
 /* ---------- Features grid ---------- */
 .features {
   display: grid; gap: 16px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
-@media (max-width: 920px) { .features { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 620px) { .features { grid-template-columns: 1fr; } }
+@media (max-width: 1100px) { .features { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 820px)  { .features { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 520px)  { .features { grid-template-columns: 1fr; } }
 
 .feature {
   position: relative;
@@ -514,9 +523,10 @@ h2.section-title {
 /* ---------- Quick start ---------- */
 .qs-grid {
   display: grid; gap: 16px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
-@media (max-width: 880px) { .qs-grid { grid-template-columns: 1fr; } }
+@media (max-width: 1100px) { .qs-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 600px)  { .qs-grid { grid-template-columns: 1fr; } }
 .qs-step {
   padding: 22px;
   border-radius: var(--radius);
@@ -672,9 +682,10 @@ footer {
   color: var(--text-faint);
 }
 .foot-grid {
-  display: grid; grid-template-columns: 1.5fr 1fr 1fr 1fr; gap: 28px;
+  display: grid; grid-template-columns: 2fr 1fr 1fr 1.4fr; gap: 32px;
 }
-@media (max-width: 720px) { .foot-grid { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 880px) { .foot-grid { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 520px) { .foot-grid { grid-template-columns: 1fr; } }
 .foot-grid h5 {
   font-size: 12.5px; text-transform: uppercase; letter-spacing: .08em;
   color: var(--text-muted); font-weight: 600;
@@ -682,6 +693,28 @@ footer {
 }
 .foot-grid a { display: block; padding: 4px 0; color: var(--text-muted); font-size: 14px; }
 .foot-grid a:hover { color: var(--text); }
+
+/* Footer brand row — logo size fix */
+.foot-brand .brand-row {
+  display: inline-flex; align-items: center; gap: 10px;
+}
+.foot-brand .brand-row img {
+  width: 30px; height: 30px; border-radius: 8px; flex: 0 0 30px;
+}
+.foot-brand .brand-row strong { font-size: 16px; letter-spacing: -.01em; }
+
+/* Affiliations block */
+.affiliations { margin-top: 18px; }
+.affiliations h5 {
+  font-size: 11.5px; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--text-faint); font-weight: 600;
+  margin: 0 0 6px;
+}
+.affiliations a {
+  padding: 0; color: var(--text-muted); font-size: 13.5px;
+  border-bottom: 1px dotted transparent;
+}
+.affiliations a:hover { color: var(--accent-2); border-bottom-color: var(--accent-2); }
 .foot-bottom {
   margin-top: 36px; padding-top: 20px;
   border-top: 1px solid var(--border);

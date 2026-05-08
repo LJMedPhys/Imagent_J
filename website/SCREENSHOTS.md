@@ -33,7 +33,7 @@ placeholder blocks at once.
 
 ## Shot 1 — `01_chat_and_fiji.png`
 
-**What it shows:** the full ImagentJ workspace. Chat panel on the left,
+**What it shows:** the full Agentic-J workspace. Chat panel on the left,
 a real Fiji desktop on the right with an image open.
 
 **How to capture (recommended):**
@@ -146,7 +146,7 @@ python3 - <<'PY'
 import re, pathlib
 html = pathlib.Path("index.html").read_text()
 mapping = {
-  "01_chat_and_fiji.png":   "The full ImagentJ workspace",
+  "01_chat_and_fiji.png":   "The full Agentic-J workspace",
   "02_generated_script.png":"A generated Groovy script",
   "03_results_plots.png":   "Stats and plots",
   "04_setup_wizard.png":    "First-run setup wizard",

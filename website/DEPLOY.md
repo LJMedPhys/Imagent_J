@@ -20,7 +20,7 @@ git status
 git switch --orphan gh-pages
 git rm -rf .                          # clears the staged tree
 cp -r website/. .                     # move site files to repo root
-echo "imagentj.example.com" > CNAME   # OPTIONAL custom domain
+echo "agentic-j.example.com" > CNAME   # OPTIONAL custom domain
 touch .nojekyll                       # disable Jekyll processing
 git add -A
 git commit -m "Publish website"
@@ -110,11 +110,11 @@ push to `main` that touches `website/**` will auto-deploy.
 
 The HTML currently uses `https://github.com/` as a placeholder for every
 GitHub link. Replace these in `website/index.html` once you know your
-repo URL (e.g. `https://github.com/your-org/imagentj`):
+repo URL (e.g. `https://github.com/your-org/agentic-j`):
 
 ```bash
 # from repo root
-sed -i 's|https://github.com/|https://github.com/your-org/imagentj|g' website/index.html
+sed -i 's|https://github.com/|https://github.com/your-org/agentic-j|g' website/index.html
 ```
 
 The doc-card links currently all point to `https://github.com/`. If you
@@ -122,8 +122,8 @@ want each card to deep-link into the right markdown guide, replace them
 with paths like:
 
 ```
-https://github.com/your-org/imagentj/blob/main/user_guide/01_getting_started.md
-https://github.com/your-org/imagentj/blob/main/user_guide/02_interface_and_agents.md
+https://github.com/your-org/agentic-j/blob/main/user_guide/01_getting_started.md
+https://github.com/your-org/agentic-j/blob/main/user_guide/02_interface_and_agents.md
 …etc
 ```
 

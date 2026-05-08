@@ -1,6 +1,6 @@
-# ImagentJ — landing page
+# Agentic-J — landing page
 
-Static, dependency-free landing page for the ImagentJ project. Designed
+Static, dependency-free landing page for the Agentic-J project. Designed
 for GitHub Pages from a `gh-pages` branch.
 
 ## Files

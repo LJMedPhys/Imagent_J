@@ -1,4 +1,4 @@
-// ImagentJ landing — small, dependency-free progressive enhancement.
+// Agentic-J landing — small, dependency-free progressive enhancement.
 
 // 1) Reveal-on-scroll
 const io = new IntersectionObserver((entries) => {
