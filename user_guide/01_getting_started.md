@@ -67,7 +67,7 @@ Open your browser and go to:
 http://localhost:6080/vnc.html
 ```
 
-Click on "Connect", Fiji and the ImagentJ chat panel should appear in the browser window.
+Click on "Connect", Fiji and the Agentic-J chat panel should appear in the browser window.
 
 To stop:
 

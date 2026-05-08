@@ -98,7 +98,7 @@ def handle_event(event):
 
 
 intro_message ="""
-Hello I am ImageJ agent, some call me ImagentJ :) 
+Hello I am ImageJ agent, some call me Agentic-J :)
 I can design a step-by-step protocol and, if useful, generate a runnable Groovy macro (and execute/test it if you want).
 
 To get started, please share:

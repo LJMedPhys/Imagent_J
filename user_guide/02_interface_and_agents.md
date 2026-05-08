@@ -4,7 +4,7 @@
 
 When you open `http://localhost:6080/vnc.html` you see a virtual desktop rendered via noVNC. It contains two main areas:
 
-- the ImagentJ chat interface (conversation history, new chat button, usage meter)
+- the Agentic-J chat interface (conversation history, new chat button, usage meter)
 - the full Fiji/ImageJ application running in the virtual desktop
 
 Scaling is set to "Local Scaling" by default so the desktop fits your browser window.
@@ -38,7 +38,7 @@ To copy text out of Fiji, select it in the virtual desktop, then open the clipbo
 
 ## Agent architecture
 
-ImagentJ uses a **supervisor + specialist** model. The supervisor receives your request, orchestrates the pipeline, and calls specialists as tools. You never address specialists directly.
+Agentic-J uses a **supervisor + specialist** model. The supervisor receives your request, orchestrates the pipeline, and calls specialists as tools. You never address specialists directly.
 
 | Agent | Model | Role |
 |-------|-------|------|
