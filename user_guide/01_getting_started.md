@@ -3,14 +3,14 @@
 ## Prerequisites
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or Docker Engine + Compose on Linux)
-- At least 8 GB RAM and 25 GB free disk space
+- At least 8 GB RAM and 30 GB free disk space
 - An API key — either OpenAI or OpenRouter (see below)
 
 ---
 
 ## 1. Create a `.env` file
 
-Copy `.env.template` and paste the file into the project root, rename this as `.env`. This files helps pass credentials into the container. The `GMAIL_APP_PASSWORD` is for sending the error report directly to the developers. A minimal example of the `.env` file content:
+Copy `.env.template` and paste the file into the project root (i.e. the cloned repo), rename this as `.env`. This files helps pass credentials into the container. The `GMAIL_APP_PASSWORD` (not an actual password, trust us) is for sending the error report directly to the developers. A minimal example of the `.env` file content:
 
 ```env
 # Required: pick one 
@@ -40,7 +40,7 @@ If neither key is set in the `.env` when the container starts, a **setup wizard*
 
 ## 3. Place your images
 
-Put your image files in the `data/` folder at the project root. Inside the container this folder is mounted at `/app/data`. The agent can read from and write to this path.
+Put your image files in the `data/` folder at the project root (i.e. the cloned repo). Inside the container this folder is mounted at `/app/data`. The agent can read from and write to this path.
 
 ```
 project-root/
