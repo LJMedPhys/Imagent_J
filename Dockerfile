@@ -339,10 +339,18 @@ RUN mkdir -p /app/qdrant_data /home/imagentj/.cellpose /home/imagentj/.cache \
     && chown -R imagentj:imagentj /opt/appose
 
 # ── Cellpose models ───────────────────────────────────────────────────────────
-# Models are NOT baked into the image — docker-compose bind-mounts ./models to
-# /home/imagentj/.cellpose/models at runtime 
-# Create the directory so the seed has the correct structure and ownership.
+# Download the model bundle from the project's cloud storage and extract it
+# directly into the cellpose models directory so a pulled image works offline.
+# The imagentj_home named volume seeds from /home/imagentj.seed (created below),
+# so models are available on first container start without any host files.
 RUN mkdir -p /home/imagentj/.cellpose/models \
+    && echo "[cellpose] Downloading model bundle..." \
+    && curl -fsSL "https://owncloud.ut.ee/owncloud/s/HyXebMNEPd7niMa/download" -o /tmp/models.zip \
+    && echo "[cellpose] Extracting models..." \
+    && unzip -q /tmp/models.zip -d /tmp/models_extracted \
+    && cp -a /tmp/models_extracted/models/. /home/imagentj/.cellpose/models/ \
+    && rm -rf /tmp/models.zip /tmp/models_extracted \
+    && echo "[cellpose] Baked in $(ls /home/imagentj/.cellpose/models | wc -l) model files" \
     && chown -R imagentj:imagentj /home/imagentj/.cellpose
 
 # ── Seed home dir for named-volume persistence ────────────────────────────────
