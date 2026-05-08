@@ -33,7 +33,7 @@ import imagentj.stop_signal as stop_signal
 from imagentj.benchmark_gui_hooks import is_benchmark_mode, setup_benchmark_gui
 
 logging.basicConfig(
-    filename="/app/data/imagentj_debug.log",
+    filename="/app/data/agentic-j_debug.log",
     level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(message)s",
     force=True,
@@ -42,7 +42,7 @@ log = logging.getLogger("imagentj")
 
 SCRIPTS_DIR = os.path.join(os.path.dirname(__file__), "scripts/saved_scripts")
 
-intro_message = """Hello I am ImageJ agent, some call me ImagentJ :)
+intro_message = """Hello I am ImageJ agent, some call me Agentic-J :)
 I can design a step-by-step protocol and, if useful, generate a runnable Groovy macro (and execute/test it if you want).
 
 To get started, please share:
@@ -430,16 +430,21 @@ class MetricsPanelWidget(QWidget):
         agent_layout.setSpacing(4)
         self._qa_checkbox = QCheckBox("QA Agent")
         self._qa_checkbox.setChecked(False)
-        self._qa_checkbox.setToolTip(
-            "Enable the QA Reporter agent.\n"
-            "Runs a full audit at project end, checks for publication readiness, and generates\n"
-            "QA_Checklist_Report.md. Off by default, \n"
-            "as it adds significant cost per workflow."
-        )
         self._qa_checkbox.stateChanged.connect(
             lambda _: self.qa_toggled.emit(self._qa_checkbox.isChecked())
         )
         agent_layout.addWidget(self._qa_checkbox)
+
+        qa_desc = QLabel(
+            "Audits the finished project against publication-readiness "
+            "checks and writes <i>QA_Checklist_Report.md</i>.<br>"
+            "<span style='color:#c0392b;'>Expensive — adds significant "
+            "token cost per workflow.</span>"
+        )
+        qa_desc.setTextFormat(Qt.RichText)
+        qa_desc.setWordWrap(True)
+        qa_desc.setStyleSheet("color:#555; font-size:10px; padding-left:18px;")
+        agent_layout.addWidget(qa_desc)
         root.addWidget(agent_box)
 
         root.addStretch()
@@ -664,10 +669,10 @@ class FeedbackDialog(QDialog):
                         )
                         zf.writestr(f"report_{thread_id[:8]}.json",
                                     json.dumps(report, indent=2, ensure_ascii=False))
-                fname = f"imagentj_issue_{timestamp}.zip"
+                fname = f"agentic-j_issue_{timestamp}.zip"
                 attachments = [(fname, buf.getvalue())]
 
-            subject = f"[ImagentJ] Issue Report — {timestamp}"
+            subject = f"[Agentic-J] Issue Report — {timestamp}"
             body = f"User feedback:\n{feedback_text or '(none provided)'}\n\nAttached: {len(selected)} conversation(s)."
             _send_report_email(subject, body, attachments)
             QMessageBox.information(self, "Report Sent",
@@ -684,7 +689,7 @@ class FeedbackDialog(QDialog):
             )
             if reply == QMessageBox.Yes:
                 default_name = os.path.expanduser(
-                    f"~/imagentj_issue_{time.strftime('%Y%m%d_%H%M%S')}"
+                    f"~/agentic-j_issue_{time.strftime('%Y%m%d_%H%M%S')}"
                     f"{'zip' if len(attachments) == 1 and attachments[0][0].endswith('.zip') else 'json'}"
                 )
                 path, _ = QFileDialog.getSaveFileName(
@@ -842,7 +847,7 @@ class ImageJAgentGUI(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("ImagentJ - AI Supervisor & Script Library")
+        self.setWindowTitle("Agentic-J - AI Supervisor & Script Library")
         self.resize(1100, 680)
         self.setAcceptDrops(True)
         self.attached_files: list[str] = []
@@ -1041,7 +1046,7 @@ class ImageJAgentGUI(QWidget):
         from PySide6.QtWidgets import QFileDialog
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Usage Report",
-            os.path.expanduser("~/imagentj_usage_report.json"),
+            os.path.expanduser("~/agentic-j_usage_report.json"),
             "JSON files (*.json);;All files (*)",
         )
         if not path:

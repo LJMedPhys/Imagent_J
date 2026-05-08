@@ -134,17 +134,63 @@ def load_image_ij(path: str)  -> object:
 
 
 @tool
+def show_in_imagej_gui(path: str) -> str:
+    """Open a file in the Fiji/ImageJ GUI so the user can see it.
+
+    Behaves like the Fiji "File → Open..." menu — supports image formats
+    (TIFF, PNG, JPG, BMP, CZI, LIF, ND2, etc.) as well as plain-text and
+    table files (.txt, .csv, .tsv), which are shown in a text window or
+    Results table.
+
+    Use this ONLY to display something to the user. It does not return the
+    file contents — for programmatic access use load_image_ij,
+    smart_file_reader, or inspect_csv_header instead.
+
+    Safe by design: empty, missing, non-file, or unreadable paths return a
+    clear error string and never raise.
+
+    Args:
+        path: Absolute path to the file to display.
+
+    Returns:
+        A short status string: success message or human-readable error.
+    """
+    if not isinstance(path, str) or not path.strip():
+        return "Could not open file: empty or invalid path."
+
+    abs_path = os.path.abspath(path.strip())
+
+    if not os.path.exists(abs_path):
+        return f"Could not open file: path does not exist -> {abs_path}"
+    if os.path.isdir(abs_path):
+        return f"Could not open file: path is a directory, not a file -> {abs_path}"
+    if not os.path.isfile(abs_path):
+        return f"Could not open file: not a regular file -> {abs_path}"
+
+    try:
+        get_ij()  # ensure JVM/Fiji is up
+        from scyjava import jimport
+        IJ = jimport('ij.IJ')
+        IJ.open(abs_path)
+    except Exception as e:
+        return f"Could not open file in ImageJ GUI ({abs_path}): {e!s}"
+
+    return f"Opened in ImageJ GUI: {abs_path}"
+
+
+@tool
 def inspect_all_ui_windows():
     """
     Inspect everything visible in the ImageJ UI:
     1. Image Windows (title, file path, dimensions, bit depth, min/max stats)
     2. Results Tables (row/column counts)
     3. ROI Manager (ROI count)
-    4. Log Window (full text content — use this when the user reports a console error)
-    5. Exception/Error Windows (full stack trace text)
+    4. Log Window (full text content)
+    5. Console / Script Editor console tab (stdout/stderr from running scripts)
+    6. Exception/Error Windows (full stack trace text)
 
-    Call this whenever the user mentions an error in the console or exception window,
-    or to verify what is currently open in Fiji.
+    Call this whenever the user mentions an error in the console, script editor,
+    or exception window, or to verify what is currently open in Fiji.
     """
     ij = get_ij()
 
@@ -201,11 +247,41 @@ def inspect_all_ui_windows():
                 all_inspections["images"].append({"title": imp.getTitle(), "file_path": None, "error": str(e)})
 
     # --- 2. Inspect Non-Image Windows ---
+    # Use Window.getWindows() (not Frame.getFrames()) to also catch Dialogs,
+    # which is what Fiji uses for many error/exception popups.
     IJ = jimport('ij.IJ')
-    all_frames = Frame.getFrames()
-    for frame in all_frames:
-        if frame.isVisible():
-            title = str(frame.getTitle())
+    Window = jimport('java.awt.Window')
+
+    def _collect_text_recursive(root):
+        """Return all non-empty getText() values from root and every descendant."""
+        parts = []
+        try:
+            t = str(root.getText())
+            if t.strip():
+                parts.append(t)
+        except Exception:
+            pass
+        try:
+            for child in root.getComponents():
+                parts.extend(_collect_text_recursive(child))
+        except Exception:
+            pass
+        return parts
+
+    def _get_window_title(win):
+        try:
+            return str(win.getTitle())
+        except Exception:
+            try:
+                return win.getClass().getSimpleName()
+            except Exception:
+                return ""
+
+    for win in Window.getWindows():
+        try:
+            if not win.isVisible():
+                continue
+            title = _get_window_title(win)
 
             if title == "Results":
                 rt = ResultsTable.getResultsTable()
@@ -230,25 +306,56 @@ def inspect_all_ui_windows():
                     "type": "Log Window",
                     "content": log_text[-4000:] if len(log_text) > 4000 else log_text
                 })
-            elif "exception" in title.lower() or "error" in title.lower():
-                # Capture text from exception/error dialog frames
+            elif "console" in title.lower() or "script editor" in title.lower():
+                # Script Editor has a JTabbedPane; find the "Console" tab first.
+                # Fall back to collecting all text if no tab is found.
+                console_text = ""
                 try:
-                    TextArea = jimport('java.awt.TextArea')
-                    text_content = ""
-                    for comp in frame.getComponents():
-                        if isinstance(comp, TextArea):
-                            text_content += str(comp.getText()) + "\n"
-                    all_inspections["tables_and_text"].append({
-                        "type": "Exception Window",
-                        "title": title,
-                        "content": text_content[-4000:] if len(text_content) > 4000 else text_content
-                    })
+                    JTabbedPane = jimport('javax.swing.JTabbedPane')
+
+                    def _find_console_tab(comp):
+                        try:
+                            if isinstance(comp, JTabbedPane):
+                                for i in range(comp.getTabCount()):
+                                    if "console" in str(comp.getTitleAt(i)).lower():
+                                        tab_comp = comp.getComponentAt(i)
+                                        parts = _collect_text_recursive(tab_comp)
+                                        return "\n".join(parts)
+                        except Exception:
+                            pass
+                        try:
+                            for child in comp.getComponents():
+                                result = _find_console_tab(child)
+                                if result:
+                                    return result
+                        except Exception:
+                            pass
+                        return ""
+
+                    console_text = _find_console_tab(win)
+                    if not console_text.strip():
+                        # No tabbed pane found — grab all text in the window
+                        console_text = "\n".join(_collect_text_recursive(win))
                 except Exception as e:
+                    console_text = f"(could not read console: {e})"
+
+                if console_text.strip():
                     all_inspections["tables_and_text"].append({
-                        "type": "Exception Window",
+                        "type": "Console",
                         "title": title,
-                        "content": f"(could not read content: {e})"
+                        "content": console_text[-4000:] if len(console_text) > 4000 else console_text
                     })
+            elif "exception" in title.lower() or "error" in title.lower():
+                parts = _collect_text_recursive(win)
+                text_content = "\n".join(parts)
+                print(f"[inspect_ui] Exception window '{title}': found {len(parts)} text parts, {len(text_content)} chars")
+                all_inspections["tables_and_text"].append({
+                    "type": "Exception Window",
+                    "title": title,
+                    "content": text_content[-4000:] if len(text_content) > 4000 else text_content
+                })
+        except Exception as e:
+            print(f"[inspect_ui] Skipped window: {e}")
 
     return str(all_inspections)
 
@@ -261,6 +368,11 @@ _SKIP_TITLES = {"ImageJ", "Fiji", "Log", "Results", "ROI Manager", "Recorder",
 _IMAGE_EXTENSIONS = {".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp", ".gif",
                      ".fits", ".hdf5", ".h5", ".czi", ".lif", ".nd2", ".ims"}
 
+_IMAGE_EXT_RE = re.compile(
+    r'\.(' + '|'.join(e.lstrip('.') for e in _IMAGE_EXTENSIONS) + r')(\s|$|\[|\()',
+    re.IGNORECASE,
+)
+
 def _is_non_dialog_window(title: str) -> bool:
     """Return True for windows that are definitely not plugin parameter dialogs."""
     if title in _SKIP_TITLES:
@@ -269,10 +381,9 @@ def _is_non_dialog_window(title: str) -> bool:
     tl = title.lower()
     if "imagej" in tl or tl == "fiji":
         return True
-    # Image display windows — title ends with a known image extension
-    import os as _os
-    ext = _os.path.splitext(title)[1].lower()
-    if ext in _IMAGE_EXTENSIONS:
+    # Image display windows — title contains a known image extension followed by
+    # end-of-string, whitespace, or bracket (handles "img.tif (50%)", "stack.tif [1/10]")
+    if _IMAGE_EXT_RE.search(title):
         return True
     return False
 

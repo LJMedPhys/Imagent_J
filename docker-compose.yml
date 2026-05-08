@@ -1,6 +1,6 @@
 services:
   imagentj:
-    image: ${IMAGENTJ_IMAGE:-imagentj:cpu-mac-test}
+    image: ${IMAGENTJ_IMAGE:-agenticj:cpu-local}
     # Do not pin platform here: Docker/BuildKit builds for the host architecture
     # by default, and the Dockerfile routes arch-specific steps via TARGETARCH.
     build:
@@ -25,7 +25,7 @@ services:
       - DISPLAY=:1
       # Optional: Set a VNC password (recommended if exposing to network)
       - VNC_PASSWORD=${VNC_PASSWORD:-}
-      - PYTHONPATH=/app:/app/src:/app/extra_packages
+      - PYTHONPATH=/app:/app/src
       - PYTHONUNBUFFERED=1
 
     volumes:
@@ -52,8 +52,11 @@ services:
       - ./data:/app/data
       # User home — persists api_keys.env (outside /app/data so agent can't read it)
       - imagentj_home:/home/imagentj
-      # Cellpose models — bind-mount so models are available without rebuilding
-      - ./models:/home/imagentj/.cellpose/models
+      # Cellpose models — named volume seeded from models baked into the image.
+      # Models are downloaded from cloud storage during docker build and stored
+      # in /home/imagentj/.cellpose/models inside the image; the named volume
+      # seeds from there on first start and persists downloaded models across restarts.
+      - cellpose_models:/home/imagentj/.cellpose/models
       # Folder for skills
       - ./skills:/app/skills:ro
       # Entrypoint bind-mount so changes take effect without rebuilding
@@ -94,6 +97,7 @@ volumes:
   saved_scripts:
   appose_envs:
   imagentj_home:
+  cellpose_models:
 
 networks:
   imagent_net:

@@ -3,7 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-
+models/*
 build/
 dist/
 *.egg-info/
@@ -30,6 +30,8 @@ src/scripts/saved_scripts/
 checkpoints*
 
 /data/
+!/data/environment/
+!/data/environment/container_snapshot.md
 
 .env
 

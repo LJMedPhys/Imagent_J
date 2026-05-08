@@ -33,7 +33,10 @@ Settings key names below are derived from the upstream source and documentation.
 ## Detector Imports
 
 ```groovy
-// Cellpose basic (cyto3, nuclei, cyto2, cyto models)
+// Cellpose basic (cyto3, cyto2, nuclei, and dataset-specific models — see table below)
+// NOTE: the legacy `cyto` (Cellpose 1) name is REJECTED by this build's
+// TrackMate-Cellpose plugin with `Unknown selection 'cyto' for parameter 'Pretrained model'`.
+// Use `cyto3` (default) or `cyto2` instead.
 import fiji.plugin.trackmate.cellpose.CellposeDetectorFactory
 
 // Cellpose advanced (adds flow/probability threshold controls)
@@ -130,8 +133,8 @@ docker exec -it <container> /opt/conda/envs/cellpose/bin/python -c \
 | Model string | Best used for |
 |---|---|
 | `cyto3` | **Default. Super-generalist cytoplasm model.** Trained on all 9 Cellpose3 datasets. Best first choice for mammalian cell cytoplasm in fluorescence or brightfield. |
-| `cyto2` | Cytoplasm model trained on user-submitted images (Cellpose 2). More diverse than `cyto` but less powerful than `cyto3`. Good fallback if `cyto3` over-segments. |
-| `cyto` | Original cytoplasm model (Cellpose 1), trained only on the original Cellpose dataset. Legacy option — prefer `cyto3`. |
+| `cyto2` | Cytoplasm model trained on user-submitted images (Cellpose 2). More diverse than the original Cellpose 1 cytoplasm model, but less powerful than `cyto3`. Good fallback if `cyto3` over-segments. |
+| `cyto` | **REJECTED in this build.** TrackMate-Cellpose raises `Unknown selection 'cyto' for parameter 'Pretrained model'` — the legacy Cellpose 1 cytoplasm model is not exposed by the installed Cellpose 3.x backend. Use `cyto3` (preferred) or `cyto2` (fallback). |
 | `nuclei` | Nuclear segmentation. Use when staining/channel targets the nucleus (DAPI, Hoechst, H2B-GFP). Set `OPTIONAL_CHANNEL_2 = 0`. |
 
 ### Dataset-specific models (Cellpose 3)
@@ -249,6 +252,21 @@ settings.detectorSettings = [
 ---
 
 ## Cellpose-Specific Pitfalls
+
+### Pitfall C0 — Legacy model name `cyto` is rejected
+
+The original Cellpose 1 model name `cyto` is **not** in the pretrained-model list
+exposed by this build's TrackMate-Cellpose plugin (Cellpose 3.x backend).
+Symptom (raised from `process()`):
+
+```
+Unknown selection 'cyto' for parameter 'Pretrained model'
+```
+
+Fix: use `cyto3` (preferred default) or `cyto2`. Only the model strings listed in
+the **Available Models** table above are accepted by `CELLPOSE_MODEL`. Custom
+weights still work via `PRETRAINED_OR_CUSTOM = 'CUSTOM_MODEL'` +
+`CELLPOSE_MODEL_FILEPATH`.
 
 ### Pitfall C1 — How conda actually gets called: the micromamba shim
 

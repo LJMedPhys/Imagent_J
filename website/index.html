@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<title>Agentic-J — AI Agent for Microscopy Image Analysis from Exploration to Publication</title>
+<meta name="description" content="Agentic-J is an AI-powered agent running ImageJ inside a container together with an LLM-driven chat panel that can plan analyses, write and execute Groovy macros, install plugins, report results, and much more." />
+
+<!-- Open Graph -->
+<meta property="og:title" content="Agentic-J — AI-powered agent for microscopy image analysis" />
+<meta property="og:description" content="Plan analyses, write & run Groovy macros, install plugins, report results — from a chat panel running next to a real ImageJ/Fiji desktop in your browser." />
+<meta property="og:type" content="website" />
+<meta name="twitter:card" content="summary_large_image" />
+
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
+
+<!-- Fonts (with safe fallbacks defined in CSS) -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+
+<!-- Backdrops -->
+<div class="bg-mesh" aria-hidden="true"></div>
+<div class="bg-grid" aria-hidden="true"></div>
+
+<!-- Navbar -->
+<header class="nav">
+  <div class="container nav-inner">
+    <a href="#" class="brand" aria-label="Agentic-J home">
+      <img src="assets/logo.svg" alt="" class="brand-logo" />
+      <span class="brand-name">Agentic-<span>J</span></span>
+    </a>
+    <nav class="nav-links" aria-label="primary">
+      <a href="#features">Features</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#quickstart">Quick start</a>
+      <a href="#plugins">Plugins</a>
+      <a href="#docs">Docs</a>
+      <a href="https://github.com/LJMedPhys/Imagent_J" target="_blank" rel="noopener" class="nav-cta">GitHub ↗</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<!-- =================== HERO =================== -->
+<section class="hero">
+  <div class="container">
+    <div class="reveal">
+      <span class="eyebrow"><span class="dot"></span> An AI lab partner for microscopy image analysis</span>
+    </div>
+
+    <h1 class="reveal">
+      Bioimage analysis,<br/>
+      <span class="grad">written, run, and debugged</span><br/>
+      by an AI agent.
+    </h1>
+
+    <p class="lead reveal">
+      Agentic-J runs ImageJ inside a container next to a chat panel that plans your analysis,
+      writes and executes Groovy macros, installs plugins on demand, and produces
+      publication-ready figures and reports, and much more — all from your browser.
+    </p>
+
+    <div class="hero-actions reveal">
+      <a class="btn btn-primary" href="#quickstart">▶ Get started</a>
+      <a class="btn btn-ghost" href="https://github.com/LJMedPhys/Imagent_J" target="_blank" rel="noopener">View on GitHub →</a>
+    </div>
+
+    <p class="trust reveal" aria-label="Privacy and security highlights">
+      <span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 6v6c0 5 3.5 9 8 10 4.5-1 8-5 8-10V6z"/></svg> Runs locally on your machine</span>
+      <span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M4 12h16"/></svg> Image pixels never leave your computer</span>
+      <span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 12 2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg> Apache 2.0 · open source</span>
+    </p>
+
+    <div class="hero-stats reveal">
+      <div class="stat"><div class="num">24</div><div class="lbl">supported plugins</div></div>
+      <div class="stat"><div class="num">6</div><div class="lbl">cooperating agents</div></div>
+      <div class="stat"><div class="num">1×</div><div class="lbl">command to launch</div></div>
+      <div class="stat"><div class="num">0</div><div class="lbl">manual setup</div></div>
+    </div>
+
+    <!-- Hero screenshot — chat + Fiji -->
+    <div class="hero-visual reveal">
+      <figure class="window window-shot">
+        <div class="win-bar">
+          <div class="dots"><i></i><i></i><i></i></div>
+          <div class="url">localhost:6080/vnc.html — Agentic-J + Fiji</div>
+        </div>
+        <img src="images/01_chat_and_fiji.png" alt="Agentic-J chat panel next to a live Fiji desktop in the browser" />
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- =================== FEATURES =================== -->
+<section id="features">
+  <div class="container">
+    <div class="section-head reveal">
+      <span class="section-tag">// what it does</span>
+      <h2 class="section-title">Everything you need to go from raw images to results.</h2>
+      <p class="section-sub">
+        A multi-agent system that thinks like a microscopy image analysis experts: it plans, picks the right
+        plugin, writes the script, runs it, and explains the result.
+      </p>
+    </div>
+
+    <div class="features">
+      <div class="feature reveal">
+        <div class="ico">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>
+        </div>
+        <h3>Multi-agent supervisor</h3>
+        <p>A supervisor coordinates specialists for plugin selection, Groovy coding, debugging, statistics, plotting and QA. You only ever talk to the supervisor.</p>
+      </div>
+
+      <div class="feature reveal">
+        <div class="ico">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        </div>
+        <h3>Production-ready Groovy</h3>
+        <p>The Coder agent writes idiomatic Fiji macros referencing real plugin APIs. The Debugger reads the ImageJ log, traces the exception, and fixes the script.</p>
+      </div>
+
+      <div class="feature reveal">
+        <div class="ico">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7.5"/><path d="m22 4-9 9-3-3"/></svg>
+        </div>
+        <h3>Curated plugins and more</h3>
+        <p>StarDist, TrackMate, MorphoLibJ, BigStitcher, BoneJ, Cellpose, Ilastik, SNT and 16 more (keep growing) — with skill packs the agent retrieves at runtime via RAG.</p>
+      </div>
+
+      <div class="feature reveal">
+        <div class="ico">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 0 20M12 2a15.3 15.3 0 0 0 0 20"/></svg>
+        </div>
+        <h3>Vision-aware dialog help</h3>
+        <p>Open any plugin dialog and ask "what does this window do?" — the agent screenshots it and explains every parameter in context with a vision model.</p>
+      </div>
+
+      <div class="feature reveal">
+        <div class="ico">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 22h8M12 18v4"/></svg>
+        </div>
+        <h3>Browser-native, no install</h3>
+        <p>Fiji runs in a virtual desktop served via noVNC at <code>localhost:6080</code>. No Java, no XQuartz, no plugin hunting — just <code>docker compose up</code>.</p>
+      </div>
+
+      <div class="feature reveal">
+        <div class="ico">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M9 13h6M9 17h6M9 9h1"/></svg>
+        </div>
+        <h3>Reproducible projects</h3>
+        <p>Every run gets a folder with raw images, scripts, results, figures, logs and a state ledger. Optional QA agent generates a checklist report.</p>
+      </div>
+
+      <div class="feature reveal">
+        <div class="ico">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/><path d="M3 4h18"/><path d="M3 20h18"/></svg>
+        </div>
+        <h3>UI clicks <em>or</em> Groovy scripts</h3>
+        <p>You choose. Tell the agent <em>"do this through the UI"</em> and it walks Fiji menus for you, or ask for a script and it writes a re-runnable Groovy macro. Both are first-class.</p>
+      </div>
+
+      <div class="feature reveal">
+        <div class="ico">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 6v6c0 5 3.5 9 8 10 4.5-1 8-5 8-10V6z"/><path d="m9 12 2 2 4-4"/></svg>
+        </div>
+        <h3>Secure by design</h3>
+        <p>Bound to <code>localhost</code>, non-root container, all Linux capabilities dropped, <code>no-new-privileges</code>. The agent only sees <code>./data/</code> — your image <strong>pixels never leave your machine</strong>; only metadata and chat are sent to the LLM.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =================== ARCHITECTURE =================== -->
+<section id="architecture" style="background: linear-gradient(180deg, transparent, rgba(56,189,248,.03), transparent);">
+  <div class="container">
+    <div class="section-head reveal">
+      <span class="section-tag">// architecture</span>
+      <h2 class="section-title">Supervisor + Specialists = An expert team for you</h2>
+      <p class="section-sub">
+        Agentic-J doesn't pretend one model can do everything. The supervisor plans and
+        delegates; specialists are sharp tools you can swap and tune independently.
+      </p>
+    </div>
+
+    <div class="arch">
+      <div class="arch-diagram reveal">
+        <div class="arch-supervisor">
+          Supervisor
+          <small>plans · delegates · synthesises</small>
+        </div>
+        <div class="arch-specialists">
+          <div class="spec">
+            <span class="name">Plugin Manager</span>
+            <span class="role">Picks the right Fiji plugin.</span>
+            <span class="model">GPT-5.2</span>
+          </div>
+          <div class="spec">
+            <span class="name">ImageJ Coder</span>
+            <span class="role">Writes Groovy / macro scripts.</span>
+            <span class="model">GPT-5.3-codex</span>
+          </div>
+          <div class="spec">
+            <span class="name">ImageJ Debugger</span>
+            <span class="role">Reads logs, fixes failures.</span>
+            <span class="model">GPT-5.3-codex</span>
+          </div>
+          <div class="spec">
+            <span class="name">Python Analyst</span>
+            <span class="role">Stats &amp; plots (scipy, matplotlib).</span>
+            <span class="model">GPT-5.2</span>
+          </div>
+          <div class="spec">
+            <span class="name">QA Reporter</span>
+            <span class="role">Audits the project, opt-in.</span>
+            <span class="model">GPT-4o-mini</span>
+          </div>
+          <div class="spec">
+            <span class="name">Dialog Vision</span>
+            <span class="role">Reads &amp; explains UI windows.</span>
+            <span class="model">GPT-4o-mini</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="arch-text reveal">
+        <h3>A pipeline that mirrors how a human analyst works</h3>
+        <p>From "segment my cells" to a documented project folder, the supervisor follows a structured pipeline you can interrupt or redirect at any step.</p>
+        <ul class="arch-list">
+          <li>Persistent <code>state_ledger.json</code> shared between agents — every step is auditable.</li>
+          <li>RAG over a curated knowledge base of plugin docs &amp; past scripting fixes.</li>
+          <li>Scripts saved with version history so you can re-run them outside the agent.</li>
+          <li>Optional QA agent produces a publication-standards checklist at the end.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div style="margin-top:48px" class="reveal">
+      <div class="pipeline">
+        <div class="step"><span class="n">1</span>Requirements</div>
+        <div class="step"><span class="n">2</span>Plugin select</div>
+        <div class="step"><span class="n">3</span>Plan</div>
+        <div class="step"><span class="n">4</span>Workspace</div>
+        <div class="step"><span class="n">5</span>Code · run · debug</div>
+        <div class="step"><span class="n">6</span>Stats · plots</div>
+        <div class="step"><span class="n">7</span>Summary · QA</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =================== QUICK START =================== -->
+<section id="quickstart">
+  <div class="container">
+    <div class="section-head reveal">
+      <span class="section-tag">// quick start</span>
+      <h2 class="section-title">Up and running in three commands.</h2>
+      <p class="section-sub">Requires Docker Desktop, ~8 GB RAM, ~25 GB free disk, and an OpenAI <em>or</em> OpenRouter API key.</p>
+    </div>
+
+    <div class="qs-grid">
+      <div class="qs-step reveal">
+        <span class="num">step 01</span>
+        <h4>Clone the repo</h4>
+        <p>Install <a href="https://git-scm.com/downloads" target="_blank" rel="noopener" style="color:var(--accent-2)">Git</a> + <a href="https://git-lfs.com/" target="_blank" rel="noopener" style="color:var(--accent-2)">Git LFS</a> (the RAG database is stored via LFS), then clone.</p>
+        <pre class="code"><button class="copy" data-copy>copy</button><span class="tok-c"># one-time: enable LFS for your user</span>
+git lfs install
+git clone https://github.com/LJMedPhys/Imagent_J.git
+cd Imagent_J</pre>
+      </div>
+
+      <div class="qs-step reveal">
+        <span class="num">step 02</span>
+        <h4>Configure credentials</h4>
+        <p>Copy the template and add your API key.</p>
+        <pre class="code"><button class="copy" data-copy>copy</button><span class="tok-c"># pick OpenAI <em>or</em> OpenRouter</span>
+cp .env.template .env
+<span class="tok-c"># edit .env →</span>
+<span class="tok-v">OPENAI_API_KEY</span>=<span class="tok-s">sk-...</span></pre>
+<span class="tok-v">OPEN_ROUTER_API_KEY</span>=<span class="tok-s">sk-...</span></pre>
+
+      </div>
+
+      <div class="qs-step reveal">
+        <span class="num">step 03</span>
+        <h4>Add your images</h4>
+        <p>Drop image files into <code>./data/</code>; the agent sees them at <code>/app/data</code>.</p>
+        <pre class="code"><button class="copy" data-copy>copy</button>Imagent_J/
+├── data/
+│   └── my_image.tif
+├── .env
+└── docker-compose.yml</pre>
+      </div>
+
+      <div class="qs-step reveal">
+        <span class="num">step 04</span>
+        <h4>Launch</h4>
+        <p>Open <code>localhost:6080/vnc.html</code> when the build finishes.</p>
+        <pre class="code"><button class="copy" data-copy>copy</button>docker compose up
+<span class="tok-c"># first run pulls / builds the image</span>
+<span class="tok-c"># subsequent runs reuse the cache</span></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =================== SCREENSHOTS =================== -->
+<section id="screenshots" style="background: linear-gradient(180deg, transparent, rgba(167,139,250,.03), transparent);">
+  <div class="container">
+    <div class="section-head reveal">
+      <span class="section-tag">// in action</span>
+      <h2 class="section-title">From a sentence to scripts to results</h2>
+      <p class="section-sub">A typical session: describe the task in plain English, watch the agent planning, writing Groovy, executing it, and explaining what it does.</p>
+    </div>
+
+    <div class="shots">
+      <figure class="shot reveal">
+        <!-- Replace src once images are dropped into website/images/ -->
+        <img src="images/01_chat_and_fiji.png" alt="The full Agentic-J workspace" />
+        <figcaption class="caption">
+          <span class="ttl">The full Agentic-J workspace</span>
+          <span class="sub">Chat panel on the left, live Fiji desktop on the right — both in the browser.</span>
+        </figcaption>
+      </figure>
+
+      <figure class="shot reveal">
+        <img src="images/02_generated_script.png" alt="A generated Groovy script" />
+        <figcaption class="caption">
+          <span class="ttl">A real, runnable Groovy script</span>
+          <span class="sub">Saved under <code>scripts/imagej/</code> with version history — re-runnable outside the agent.</span>
+        </figcaption>
+      </figure>
+
+      <figure class="shot reveal">
+        <img src="images/03_results_plots.png" alt="Stats and plots" />
+        <figcaption class="caption">
+          <span class="ttl">Publication-quality figures</span>
+          <span class="sub">The Python Analyst produces matplotlib / seaborn plots and CSV tables ready to share.</span>
+        </figcaption>
+      </figure>
+
+      <figure class="shot reveal">
+        <img src="images/04_setup_wizard.png" alt="First-run setup wizard" />
+        <figcaption class="caption">
+          <span class="ttl">First-run setup wizard</span>
+          <span class="sub">If no API key is found, Agentic-J guides you through key entry before Fiji launches.</span>
+        </figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- =================== PLUGINS =================== -->
+<section id="plugins">
+  <div class="container">
+    <div class="section-head reveal">
+      <span class="section-tag">// plugin coverage</span>
+      <h2 class="section-title">24 plugins the agent already speaks fluently and there will be more</h2>
+      <p class="section-sub">Each plugin ships with a curated <em>skill pack</em> — descriptions, common patterns, parameter notes — that the agent retrieves at runtime via RAG.</p>
+    </div>
+    <div class="plugins reveal">
+      <div class="plugin"><span class="dot"></span>3D ImageJ Suite</div>
+      <div class="plugin"><span class="dot"></span>BigStitcher</div>
+      <div class="plugin"><span class="dot"></span>Bio-Formats</div>
+      <div class="plugin"><span class="dot"></span>BioVoxxel Toolbox</div>
+      <div class="plugin"><span class="dot"></span>BoneJ</div>
+      <div class="plugin"><span class="dot"></span>bUnwarpJ</div>
+      <div class="plugin"><span class="dot"></span>Coloc 2</div>
+      <div class="plugin"><span class="dot"></span>CSBDeep</div>
+      <div class="plugin"><span class="dot"></span>DeepImageJ</div>
+      <div class="plugin"><span class="dot"></span>FeatureJ</div>
+      <div class="plugin"><span class="dot"></span>Ilastik</div>
+      <div class="plugin"><span class="dot"></span>Labkit</div>
+      <div class="plugin"><span class="dot"></span>MIST</div>
+      <div class="plugin"><span class="dot"></span>MorphoLibJ</div>
+      <div class="plugin"><span class="dot"></span>NeuronJ</div>
+      <div class="plugin"><span class="dot"></span>OrientationJ</div>
+      <div class="plugin"><span class="dot"></span>Sholl Analysis</div>
+      <div class="plugin"><span class="dot"></span>SNT</div>
+      <div class="plugin"><span class="dot"></span>StackReg</div>
+      <div class="plugin"><span class="dot"></span>StarDist</div>
+      <div class="plugin"><span class="dot"></span>TrackMate</div>
+      <div class="plugin"><span class="dot"></span>TrackMate-Cellpose</div>
+      <div class="plugin"><span class="dot"></span>TransformJ</div>
+      <div class="plugin"><span class="dot"></span>TurboReg</div>
+    </div>
+    <p class="reveal" style="margin-top:18px;color:var(--text-faint);font-size:14px">
+      Need something else? Ask the agent to install it, or use Fiji's <code>Help → Update…</code> menu.
+    </p>
+  </div>
+</section>
+
+<!-- =================== DOCS =================== -->
+<section id="docs" style="background: linear-gradient(180deg, transparent, rgba(45,212,191,.03), transparent);">
+  <div class="container">
+    <div class="section-head reveal">
+      <span class="section-tag">// documentation</span>
+      <h2 class="section-title">Five short guides to get fluent.</h2>
+      <p class="section-sub">Each guide is a single page; together they take ~15 minutes to read.</p>
+    </div>
+
+    <div class="doc-grid">
+      <a class="doc-card reveal" href="https://github.com/LJMedPhys/Imagent_J/blob/main/user_guide/01_getting_started.md" target="_blank" rel="noopener">
+        <span class="num">01</span>
+        <h4>Getting Started</h4>
+        <p>Prerequisites, <code>.env</code> setup, API keys, starting the container.</p>
+        <span class="arrow">Read guide →</span>
+      </a>
+      <a class="doc-card reveal" href="https://github.com/LJMedPhys/Imagent_J/blob/main/user_guide/02_interface_and_agents.md" target="_blank" rel="noopener">
+        <span class="num">02</span>
+        <h4>Interface &amp; Agents</h4>
+        <p>The noVNC interface, agent architecture, supported plugins.</p>
+        <span class="arrow">Read guide →</span>
+      </a>
+      <a class="doc-card reveal" href="https://github.com/LJMedPhys/Imagent_J/blob/main/user_guide/03_prompting.md" target="_blank" rel="noopener">
+        <span class="num">03</span>
+        <h4>Prompting</h4>
+        <p>How to write effective prompts, with concrete before/after examples.</p>
+        <span class="arrow">Read guide →</span>
+      </a>
+      <a class="doc-card reveal" href="https://github.com/LJMedPhys/Imagent_J/blob/main/user_guide/04_data_history_and_reports.md" target="_blank" rel="noopener">
+        <span class="num">04</span>
+        <h4>Data &amp; Reports</h4>
+        <p>Where files live, chat history, usage reports, issue reporting.</p>
+        <span class="arrow">Read guide →</span>
+      </a>
+      <a class="doc-card reveal" href="https://github.com/LJMedPhys/Imagent_J/blob/main/user_guide/05_security.md" target="_blank" rel="noopener">
+        <span class="num">05</span>
+        <h4>Security</h4>
+        <p>Local-only by default, container hardening, key handling.</p>
+        <span class="arrow">Read guide →</span>
+      </a>
+      <a class="doc-card reveal" href="https://github.com/LJMedPhys/Imagent_J/blob/main/DOCKER_MANUAL.md" target="_blank" rel="noopener">
+        <span class="num">06</span>
+        <h4>Docker manual</h4>
+        <p>Volumes, logs, troubleshooting, advanced configuration.</p>
+        <span class="arrow">Read guide →</span>
+      </a>
+    </div>
+
+    <div class="cta-band reveal">
+      <h3>Try it on your own data.</h3>
+      <p>Drop a TIFF into <code>./data/</code>, write your goal, and watch the agent take it to labelled masks, CSVs and plots. Bugs, suggestions, feature requests? Let us know!</p>
+      <div class="actions">
+        <a class="btn btn-primary" href="#quickstart">▶ Get started</a>
+        <a class="btn btn-ghost" href="https://github.com/LJMedPhys/Imagent_J" target="_blank" rel="noopener">Star on GitHub ★</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- =================== FOOTER =================== -->
+<footer>
+  <div class="container">
+    <div class="foot-grid">
+      <div class="foot-brand">
+        <div class="brand-row" style="margin-bottom:12px">
+          <img src="assets/logo.svg" alt="" />
+          <strong>Agentic-J</strong>
+        </div>
+        <p style="font-size:14px;max-width:360px">
+          An AI-powered agent for microscopy image analysis.
+        </p>
+
+        <div class="affiliations">
+          <h5>Built at</h5>
+          <a href="https://www.isas.de/" target="_blank" rel="noopener">ISAS e.V. — Leibniz-Institut für Analytische Wissenschaften</a>
+          <h5 style="margin-top:14px">In collaboration with</h5>
+          <a href="https://cs.ut.ee/en" target="_blank" rel="noopener">University of Tartu · Institute of Computer Science</a>
+        </div>
+      </div>
+
+      <div>
+        <h5>Project</h5>
+        <a href="#features">Features</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#plugins">Plugins</a>
+        <a href="#quickstart">Quick start</a>
+      </div>
+
+      <div>
+        <h5>Docs</h5>
+        <a href="https://github.com/LJMedPhys/Imagent_J/blob/main/user_guide/01_getting_started.md" target="_blank" rel="noopener">Getting started</a>
+        <a href="https://github.com/LJMedPhys/Imagent_J/blob/main/user_guide/03_prompting.md" target="_blank" rel="noopener">Prompting guide</a>
+        <a href="https://github.com/LJMedPhys/Imagent_J/blob/main/DOCKER_MANUAL.md" target="_blank" rel="noopener">Docker manual</a>
+        <a href="https://github.com/LJMedPhys/Imagent_J/blob/main/user_guide/05_security.md" target="_blank" rel="noopener">Security</a>
+      </div>
+
+      <div>
+        <h5>Contributors</h5>
+        <a href="https://github.com/LJMedPhys" target="_blank" rel="noopener">@LJMedPhys — Lukas Johanns</a>
+        <a href="https://github.com/marilin99" target="_blank" rel="noopener">@marilin99 — Marilin Moor</a>
+        <h5 style="margin-top:14px">Community</h5>
+        <a href="https://github.com/LJMedPhys/Imagent_J" target="_blank" rel="noopener">GitHub repository</a>
+        <a href="mailto:agentj.help@gmail.com">Report an issue</a>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <span>© 2026 ISAS e.V. · Apache License 2.0</span>
+      <span>Built with care for the bioimage community.</span>
+    </div>
+  </div>
+</footer>
+
+<script src="js/main.js"></script>
+</body>
+</html>

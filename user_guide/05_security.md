@@ -18,7 +18,7 @@ By default the container is configured for single-user local use:
 | Privilege escalation | Blocked (`no-new-privileges`) |
 | Resource limits | 4 CPU cores, 8 GB RAM |
 
-Your image data in `./data/` is readable and writable by the agent. This is the only folder, it can have access to. So all of your private files outside of this folder are never accessed. 
+Your image data in `./data/` is readable and writable by the agent. This is the only folder, it can have access to. So all of your private files outside of this folder are never accessed. This being said, keep backups of important raw image data outside the `./data` folder.
 Your image data are not directly sent to the agent but the metadata of the images are and any information your provide via chatting. 
 
 ---

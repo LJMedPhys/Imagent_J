@@ -40,7 +40,7 @@ API_KEYS_FILE = "/home/imagentj/api_keys.env"
 class SetupWizard(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("ImagentJ Setup")
+        self.setWindowTitle("Agentic-J Setup")
         self.setFixedSize(520, 360)
         self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
 
@@ -50,7 +50,7 @@ class SetupWizard(QWidget):
         root.setSpacing(14)
 
         # ── Title ────────────────────────────────────────────────────────────
-        title = QLabel("Welcome to ImagentJ")
+        title = QLabel("Welcome to Agentic-J")
         title_font = QFont()
         title_font.setPointSize(17)
         title_font.setBold(True)
@@ -134,7 +134,7 @@ class SetupWizard(QWidget):
         btn_row = QHBoxLayout()
         btn_row.addStretch()
 
-        self.start_btn = QPushButton("Start ImagentJ")
+        self.start_btn = QPushButton("Start Agentic-J")
         self.start_btn.setMinimumHeight(40)
         self.start_btn.setMinimumWidth(160)
         self.start_btn.setStyleSheet(

@@ -1,4 +1,4 @@
-# ImagentJ Docker Manual
+# Agentic-J Docker Manual
 
 A containerized AI-powered ImageJ/Fiji assistant for image analysis tasks.
 
@@ -40,7 +40,7 @@ OPENAI_API_KEY=your-openai-api-key
 # Optional - LangSmith tracing
 # LANGSMITH_API_KEY=your-langsmith-key
 # LANGSMITH_TRACING=true
-# LANGSMITH_PROJECT=imagentj
+# LANGSMITH_PROJECT=agentic-j
 
 # Optional - Custom image data directory
 # IMAGE_DATA_DIR=/path/to/your/images
@@ -63,7 +63,7 @@ cp /path/to/your/images/*.tif data/
 1. Start the container: `docker compose up -d`
 2. Open http://localhost:6080/vnc.html in your browser
 3. You'll see a virtual desktop with:
-   - **ImagentJ Chat Window** - AI assistant interface
+   - **Agentic-J Chat Window** - AI assistant interface
    - **Fiji** - ImageJ/Fiji application (opens when needed)
 
 ### Interacting with the AI Agent

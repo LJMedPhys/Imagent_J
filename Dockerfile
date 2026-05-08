@@ -27,7 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     #                       JOCL needs for dlopen("libOpenCL.so") to succeed
     pocl-opencl-icd ocl-icd-libopencl1 ocl-icd-opencl-dev \
     # Utilities
-    wget unzip procps curl build-essential cmake ninja-build \
+    wget unzip procps curl build-essential cmake ninja-build\
     # Locale support — ilastik4ij sets LC_ALL=en_US.UTF-8 in the subprocess
     # environment; without this the locale warning is printed to every log line
     locales \
@@ -149,58 +149,13 @@ RUN find /opt/Fiji.app/plugins -name 'mcib3d-core*.jar' \
     && echo "=== imagescience JARs ===" \
     && find /opt/Fiji.app -name 'imagescience*' 2>/dev/null | sort
 
-# ── Direct Maven download for CSBDeep and StarDist JARs ──────────────────────
-# The Fiji update sites for these two plugins have stale file links (all 404s).
-# URLs verified from maven.scijava.org (2026-04).
-#   csbdeep-0.6.0.jar         → jars/   (SciJava @Plugin library, not a menu plugin)
-#   StarDist_-0.3.0-scijava.jar → plugins/
-#   Clipper-6.4.2.jar         → jars/   (required runtime dep of StarDist)
-RUN python3 - <<'PYEOF'
-import urllib.request, ssl, sys
-from pathlib import Path
-
-plugins_dir = Path('/opt/Fiji.app/plugins')
-jars_dir    = Path('/opt/Fiji.app/jars')
-
-ctx = ssl.create_default_context()
-ctx.check_hostname = False
-ctx.verify_mode    = ssl.CERT_NONE
-
-MAVEN = 'https://maven.scijava.org/content/repositories'
-
-DOWNLOADS = [
-    (jars_dir,    'csbdeep-0.6.0.jar',
-     f'{MAVEN}/releases/de/csbdresden/csbdeep/0.6.0/csbdeep-0.6.0.jar'),
-    (plugins_dir, 'StarDist_-0.3.0-scijava.jar',
-     f'{MAVEN}/releases/de/csbdresden/StarDist_/0.3.0-scijava/StarDist_-0.3.0-scijava.jar'),
-    (jars_dir,    'Clipper-6.4.2.jar',
-     f'{MAVEN}/public/de/lighti/Clipper/6.4.2/Clipper-6.4.2.jar'),
-]
-
-all_ok = True
-for dest_dir, fname, url in DOWNLOADS:
-    dest = dest_dir / fname
-    if dest.exists():
-        print(f'[maven-dl] already present: {fname}')
-        continue
-    print(f'[maven-dl] GET {url}')
-    try:
-        req  = urllib.request.Request(url, headers={'User-Agent': 'Fiji-Docker/2.0'})
-        data = urllib.request.urlopen(req, timeout=120, context=ctx).read()
-        dest.write_bytes(data)
-        print(f'[maven-dl] saved {fname} ({len(data):,} bytes)')
-    except Exception as e:
-        print(f'[maven-dl] ERROR: {fname}: {e}', file=sys.stderr)
-        all_ok = False
-
-sys.exit(0 if all_ok else 1)
-PYEOF
-
-# Verify JARs are present (CSBDeep lives in jars/, not plugins/)
-RUN ls /opt/Fiji.app/jars/csbdeep-*.jar \
-    && ls /opt/Fiji.app/plugins/StarDist_*.jar \
-    && echo "OK: csbdeep and StarDist_ JARs verified" \
-    || { echo "ERROR: CSBDeep or StarDist JARs missing — Maven download failed"; exit 1; }
+# ── Bundled JARs for CSBDeep and StarDist ────────────────────────────────────
+# These are only on maven.scijava.org (not Maven Central), which is frequently
+# unavailable. Bundled here to make builds fully offline-capable.
+# Source versions: csbdeep-0.6.0, StarDist_-0.3.0-scijava, Clipper-6.4.2
+COPY bundled_jars/csbdeep-0.6.0.jar           /opt/Fiji.app/jars/
+COPY bundled_jars/StarDist_-0.3.0-scijava.jar /opt/Fiji.app/plugins/
+COPY bundled_jars/Clipper-6.4.2.jar           /opt/Fiji.app/jars/
 
 # ── For aarch64, install CSBDeep linux/arm64 TensorFlow Java single-JAR patch ────────────
 # The upstream CSBDeep Fiji JAR depends on TensorFlow Java 1.x JNI artifacts
@@ -245,14 +200,22 @@ ENV CONDA_DEFAULT_ENV=local_imagent_J
 # ── Conda env: cellpose  (PyTorch + Cellpose + Omnipose, served by TrackMate-Cellpose and TrackMate-Omnipose) ───
 # Omnipose 1.x is built on cellpose 3.x, so they share one env.
 # The micromamba shim routes both '-n cellpose' and '-n omnipose' here.
+# Snapshot (2026-04-30): Python 3.10.20, cellpose 3.1.1.2, omnipose 1.1.4, torch 2.11.0+cpu
 RUN /opt/conda/bin/conda create -n cellpose python=3.10 -y \
     && if [ "$TARGETARCH" = "arm64" ]; then \
-        /opt/conda/envs/cellpose/bin/pip install --no-cache-dir torch torchvision; \
+        /opt/conda/envs/cellpose/bin/pip install --no-cache-dir \
+            'torch==2.11.0' 'torchvision==0.26.0'; \
     else \
-        /opt/conda/envs/cellpose/bin/pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu; \
+        /opt/conda/envs/cellpose/bin/pip install --no-cache-dir \
+            'torch==2.11.0' 'torchvision==0.26.0' \
+            --index-url https://download.pytorch.org/whl/cpu; \
     fi \
-    && /opt/conda/envs/cellpose/bin/pip install --no-cache-dir 'cellpose[gui]==3.1.1.2' \
-    && /opt/conda/envs/cellpose/bin/pip install --no-cache-dir 'omnipose==1.1.4' \
+    && /opt/conda/envs/cellpose/bin/pip install --no-cache-dir \
+        'cellpose[gui]==3.1.1.2' \
+        'omnipose==1.1.4' \
+        'langchain-core==1.2.16' \
+        'langgraph-checkpoint-sqlite==3.0.3' \
+        'pydantic==2.12.5' \
     && /opt/conda/envs/cellpose/bin/cellpose --version \
     && /opt/conda/bin/conda clean -afy \
     && printf '#!/bin/bash\nexec /opt/conda/envs/cellpose/bin/cellpose "$@"\n' > /opt/conda/bin/cellpose \
@@ -263,13 +226,22 @@ RUN /opt/conda/bin/conda create -n cellpose python=3.10 -y \
 # TrackMate's CondaCLIConfigurator lists all conda envs in a dropdown — the user
 # selects 'cellpose4' in the Cellpose-SAM detector panel.
 # The micromamba shim routes '-n cellpose4' → /opt/conda/envs/cellpose4.
+# Snapshot (2026-04-30): Python 3.11.15, cellpose 4.1.1, segment-anything 1.0, torch 2.11.0+cpu
 RUN /opt/conda/bin/conda create -n cellpose4 python=3.11 -y \
     && if [ "$TARGETARCH" = "arm64" ]; then \
-        /opt/conda/envs/cellpose4/bin/pip install --no-cache-dir torch torchvision; \
+        /opt/conda/envs/cellpose4/bin/pip install --no-cache-dir \
+            'torch==2.11.0' 'torchvision==0.26.0'; \
     else \
-        /opt/conda/envs/cellpose4/bin/pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu; \
+        /opt/conda/envs/cellpose4/bin/pip install --no-cache-dir \
+            'torch==2.11.0' 'torchvision==0.26.0' \
+            --index-url https://download.pytorch.org/whl/cpu; \
     fi \
-    && /opt/conda/envs/cellpose4/bin/pip install --no-cache-dir 'cellpose[gui]>=4.0' \
+    && /opt/conda/envs/cellpose4/bin/pip install --no-cache-dir \
+        'cellpose[gui]==4.1.1' \
+        'segment-anything==1.0' \
+        'langchain-core==1.2.16' \
+        'langgraph-checkpoint-sqlite==3.0.3' \
+        'pydantic==2.12.5' \
     && /opt/conda/envs/cellpose4/bin/cellpose --version \
     && /opt/conda/bin/conda clean -afy
 
@@ -277,20 +249,24 @@ RUN /opt/conda/bin/conda create -n cellpose4 python=3.11 -y \
 # Separate env so TF version is independent of the main Python env.
 # Python 3.11 + TF 2.15 is the most stable combo for CSBDeep
 # (uses tf.compat.v1 graph APIs, which became fragile in TF 2.17+).
-# numpy<2 required — NumPy 2.0 breaks csbdeep's C-extension assumptions.
-# BuildKit provides TARGETARCH; arm64 uses the linux/aarch64 TensorFlow package
-# path, while amd64 keeps tensorflow-cpu for native x86_64 hosts.
+# Snapshot (2026-04-30): Python 3.11.15, stardist 0.9.2, csbdeep 0.8.2,
+#   tensorflow-cpu 2.15.1, numpy 1.26.4
+# arm64 uses generic 'tensorflow' (no -cpu suffix) — the linux/aarch64 TF wheel
+# is not published under the tensorflow-cpu name.
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
-        TF_PACKAGE='tensorflow==2.15.*'; \
+        TF_PACKAGE='tensorflow==2.15.1'; \
     else \
-        TF_PACKAGE='tensorflow-cpu==2.15.*'; \
+        TF_PACKAGE='tensorflow-cpu==2.15.1'; \
     fi \
     && /opt/conda/bin/conda create -n stardist python=3.11 -y \
     && /opt/conda/envs/stardist/bin/pip install --no-cache-dir \
         "$TF_PACKAGE" \
-        "csbdeep>=0.7.4" \
-        "stardist>=0.9" \
-        "numpy<2" \
+        "csbdeep==0.8.2" \
+        "stardist==0.9.2" \
+        "numpy==1.26.4" \
+        "langchain-core==1.2.16" \
+        "langgraph-checkpoint-sqlite==3.0.3" \
+        "pydantic==2.12.5" \
     && /opt/conda/bin/conda clean -afy
 
 # Verify the StarDist Python stack imports correctly
@@ -363,10 +339,18 @@ RUN mkdir -p /app/qdrant_data /home/imagentj/.cellpose /home/imagentj/.cache \
     && chown -R imagentj:imagentj /opt/appose
 
 # ── Cellpose models ───────────────────────────────────────────────────────────
-# Models are NOT baked into the image — docker-compose bind-mounts ./models to
-# /home/imagentj/.cellpose/models at runtime 
-# Create the directory so the seed has the correct structure and ownership.
+# Download the model bundle from the project's cloud storage and extract it
+# directly into the cellpose models directory so a pulled image works offline.
+# The imagentj_home named volume seeds from /home/imagentj.seed (created below),
+# so models are available on first container start without any host files.
 RUN mkdir -p /home/imagentj/.cellpose/models \
+    && echo "[cellpose] Downloading model bundle..." \
+    && curl -fsSL "https://owncloud.ut.ee/owncloud/s/HyXebMNEPd7niMa/download" -o /tmp/models.zip \
+    && echo "[cellpose] Extracting models..." \
+    && unzip -q /tmp/models.zip -d /tmp/models_extracted \
+    && cp -a /tmp/models_extracted/models/. /home/imagentj/.cellpose/models/ \
+    && rm -rf /tmp/models.zip /tmp/models_extracted \
+    && echo "[cellpose] Baked in $(ls /home/imagentj/.cellpose/models | wc -l) model files" \
     && chown -R imagentj:imagentj /home/imagentj/.cellpose
 
 # ── Seed home dir for named-volume persistence ────────────────────────────────
@@ -377,7 +361,7 @@ RUN cp -a /home/imagentj /home/imagentj.seed
 # ── Environment defaults ─────────────────────────────────────────────────────
 ENV DISPLAY=:1
 ENV QT_QPA_PLATFORM=xcb
-ENV JAVA_HOME=/opt/conda/envs/local_imagent_J
+ENV JAVA_HOME=/opt/conda/envs/local_imagent_J/lib/jvm
 ENV HOME=/home/imagentj
 
 # ── noVNC: default scaling mode → Local Scaling ──────────────────────────────
@@ -393,6 +377,19 @@ RUN NOVNC_UI=/usr/share/novnc/app/ui.js; \
     fi
 
 COPY --chmod=755 docker-entrypoint.sh /docker-entrypoint.sh
+
+# ── Pre-warm jgo/Maven dependency cache ──────────────────────────────────────
+# pyimagej resolves imglib2-imglyb and other bridge JARs via jgo/Maven at
+# first startup. maven.scijava.org is frequently unreliable so we resolve
+# everything during the build (when network is available) and store the result
+# in /opt/imagentj-seed/. The entrypoint seeds ~/.jgo and ~/.m2 from there
+# on first container start, before the imagentj_home volume can shadow them.
+COPY bundled_cache/imagentj-seed-cache.tar.gz /tmp/imagentj-seed-cache.tar.gz
+RUN mkdir -p /opt/imagentj-seed \
+    && tar xzf /tmp/imagentj-seed-cache.tar.gz -C /opt/imagentj-seed \
+    && rm /tmp/imagentj-seed-cache.tar.gz \
+    && chmod -R a+rX /opt/imagentj-seed \
+    && echo "[pre-warm] jgo/Maven cache extracted to /opt/imagentj-seed"
 
 EXPOSE 6080
 

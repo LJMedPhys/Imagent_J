@@ -1,5 +1,8 @@
 # ImageJ/Fiji Configuration
-# Update this path to your local Fiji installation's Java home
-# Docker overrides via FIJI_PATH env var; local dev uses the default below
+# Docker sets FIJI_PATH to /opt/Fiji.app via docker-compose.
+# For local (non-Docker) runs, set FIJI_PATH in your environment to point at
+# your Fiji installation, e.g.:
+#   Linux/macOS:  export FIJI_PATH=/path/to/Fiji.app
+#   Windows:      set FIJI_PATH=C:\path\to\Fiji.app
 import os
-FIJI_JAVA_HOME = os.environ.get("FIJI_PATH", "/home/marilin/Downloads/Fiji.app")
+FIJI_JAVA_HOME = os.environ.get("FIJI_PATH", "/opt/Fiji.app")

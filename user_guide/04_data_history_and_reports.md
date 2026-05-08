@@ -23,7 +23,7 @@ Everything the agent writes inside the container appears immediately on your com
 ├── chats/                      ← chat history database
 │   ├── checkpoints.db          ← full conversation history (SQLite)
 │   └── index.json              ← session index (titles, timestamps)
-└── imagentj_debug.log          ← application debug log
+└── agentic-j_debug.log         ← application debug log
 ```
 
 ---

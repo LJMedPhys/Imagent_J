@@ -4,7 +4,7 @@
 
 When you open `http://localhost:6080/vnc.html` you see a virtual desktop rendered via noVNC. It contains two main areas:
 
-- the ImagentJ chat interface (conversation history, new chat button, usage meter)
+- the Agentic-J chat interface (conversation history, new chat button, usage meter)
 - the full Fiji/ImageJ application running in the virtual desktop
 
 Scaling is set to "Local Scaling" by default so the desktop fits your browser window.
@@ -38,7 +38,7 @@ To copy text out of Fiji, select it in the virtual desktop, then open the clipbo
 
 ## Agent architecture
 
-ImagentJ uses a **supervisor + specialist** model. The supervisor receives your request, orchestrates the pipeline, and calls specialists as tools. You never address specialists directly.
+Agentic-J uses a **supervisor + specialist** model. The supervisor receives your request, orchestrates the pipeline, and calls specialists as tools. You never address specialists directly.
 
 | Agent | Model | Role |
 |-------|-------|------|
@@ -92,6 +92,13 @@ Due to display size restrictions, you may not see all of your plugins in the `Pl
 
 Users can also the agent to install additional plugins via chatting, or install them manually via `Help > Update…` in Fiji. **Be cautious with manual installs** — JAR version conflicts can break existing functionality and may require a container restart or volume reset to resolve. Additionally, since manually installed plugins do not come with predefined skills, the scripts or solutions may be less reliable.
 
+If something breaks after installation, the safest recovery is to delete the affected named volumes and restart:
+  ```bash
+  docker compose down
+  docker volume rm imagent_j_fiji_plugins imagent_j_fiji_jars
+  docker compose up
+  ```
+  This re-seeds the volumes from the image, restoring the known-good state.
 
 ---
 

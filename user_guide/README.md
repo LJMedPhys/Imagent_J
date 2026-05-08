@@ -1,4 +1,4 @@
-# ImagentJ User Guide
+# Agentic-J User Guide
 
 | Guide | Contents |
 |-------|----------|
