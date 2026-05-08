@@ -41,7 +41,7 @@
       <a href="#quickstart">Quick start</a>
       <a href="#plugins">Plugins</a>
       <a href="#docs">Docs</a>
-      <a href="https://github.com/LJMedPhys/Imagent_J" target="_blank" rel="noopener" class="nav-cta">GitHub ↗</a>
+      <a href="https://github.com/MMV-Lab/Agentic-J" target="_blank" rel="noopener" class="nav-cta">GitHub ↗</a>
     </nav>
   </div>
 </header>
@@ -51,10 +51,6 @@
 <!-- =================== HERO =================== -->
 <section class="hero">
   <div class="container">
-    <div class="reveal">
-      <span class="eyebrow"><span class="dot"></span> An AI lab partner for microscopy image analysis</span>
-    </div>
-
     <h1 class="reveal">
       Bioimage analysis,<br/>
       <span class="grad">written, run, and debugged</span><br/>
@@ -63,13 +59,13 @@
 
     <p class="lead reveal">
       Agentic-J runs ImageJ inside a container next to a chat panel that plans your analysis,
-      writes and executes Groovy macros, installs plugins on demand, and produces
+      writes and executes Groovy macros, guides plugin interface usage, and produces
       publication-ready figures and reports, and much more — all from your browser.
     </p>
 
     <div class="hero-actions reveal">
       <a class="btn btn-primary" href="#quickstart">▶ Get started</a>
-      <a class="btn btn-ghost" href="https://github.com/LJMedPhys/Imagent_J" target="_blank" rel="noopener">View on GitHub →</a>
+      <a class="btn btn-ghost" href="https://github.com/MMV-Lab/Agentic-J" target="_blank" rel="noopener">View on GitHub →</a>
     </div>
 
     <p class="trust reveal" aria-label="Privacy and security highlights">
@@ -262,7 +258,7 @@
     <div class="section-head reveal">
       <span class="section-tag">// quick start</span>
       <h2 class="section-title">Up and running in three commands.</h2>
-      <p class="section-sub">Requires Docker Desktop, ~8 GB RAM, ~25 GB free disk, and an OpenAI <em>or</em> OpenRouter API key.</p>
+      <p class="section-sub">Requires Docker Desktop, ~8 GB RAM, ~30 GB free disk, and an OpenAI <em>or</em> OpenRouter API key.</p>
     </div>
 
     <div class="qs-grid">
@@ -272,8 +268,8 @@
         <p>Install <a href="https://git-scm.com/downloads" target="_blank" rel="noopener" style="color:var(--accent-2)">Git</a> + <a href="https://git-lfs.com/" target="_blank" rel="noopener" style="color:var(--accent-2)">Git LFS</a> (the RAG database is stored via LFS), then clone.</p>
         <pre class="code"><button class="copy" data-copy>copy</button><span class="tok-c"># one-time: enable LFS for your user</span>
 git lfs install
-git clone https://github.com/LJMedPhys/Imagent_J.git
-cd Imagent_J</pre>
+git clone https://github.com/MMV-Lab/Agentic-J.git Agentic-J
+cd Agentic-J</pre>
       </div>
 
       <div class="qs-step reveal">
@@ -283,16 +279,15 @@ cd Imagent_J</pre>
         <pre class="code"><button class="copy" data-copy>copy</button><span class="tok-c"># pick OpenAI <em>or</em> OpenRouter</span>
 cp .env.template .env
 <span class="tok-c"># edit .env →</span>
-<span class="tok-v">OPENAI_API_KEY</span>=<span class="tok-s">sk-...</span></pre>
+<span class="tok-v">OPENAI_API_KEY</span>=<span class="tok-s">sk-...</span>
 <span class="tok-v">OPEN_ROUTER_API_KEY</span>=<span class="tok-s">sk-...</span></pre>
-
       </div>
 
       <div class="qs-step reveal">
         <span class="num">step 03</span>
         <h4>Add your images</h4>
         <p>Drop image files into <code>./data/</code>; the agent sees them at <code>/app/data</code>.</p>
-        <pre class="code"><button class="copy" data-copy>copy</button>Imagent_J/
+        <pre class="code"><button class="copy" data-copy>copy</button>Agentic-J/
 ├── data/
 │   └── my_image.tif
 ├── .env
@@ -407,37 +402,37 @@ cp .env.template .env
     </div>
 
     <div class="doc-grid">
-      <a class="doc-card reveal" href="https://github.com/LJMedPhys/Imagent_J/blob/main/user_guide/01_getting_started.md" target="_blank" rel="noopener">
+      <a class="doc-card reveal" href="https://github.com/MMV-Lab/Agentic-J/blob/main/user_guide/01_getting_started.md" target="_blank" rel="noopener">
         <span class="num">01</span>
         <h4>Getting Started</h4>
         <p>Prerequisites, <code>.env</code> setup, API keys, starting the container.</p>
         <span class="arrow">Read guide →</span>
       </a>
-      <a class="doc-card reveal" href="https://github.com/LJMedPhys/Imagent_J/blob/main/user_guide/02_interface_and_agents.md" target="_blank" rel="noopener">
+      <a class="doc-card reveal" href="https://github.com/MMV-Lab/Agentic-J/blob/main/user_guide/02_interface_and_agents.md" target="_blank" rel="noopener">
         <span class="num">02</span>
         <h4>Interface &amp; Agents</h4>
         <p>The noVNC interface, agent architecture, supported plugins.</p>
         <span class="arrow">Read guide →</span>
       </a>
-      <a class="doc-card reveal" href="https://github.com/LJMedPhys/Imagent_J/blob/main/user_guide/03_prompting.md" target="_blank" rel="noopener">
+      <a class="doc-card reveal" href="https://github.com/MMV-Lab/Agentic-J/blob/main/user_guide/03_prompting.md" target="_blank" rel="noopener">
         <span class="num">03</span>
         <h4>Prompting</h4>
         <p>How to write effective prompts, with concrete before/after examples.</p>
         <span class="arrow">Read guide →</span>
       </a>
-      <a class="doc-card reveal" href="https://github.com/LJMedPhys/Imagent_J/blob/main/user_guide/04_data_history_and_reports.md" target="_blank" rel="noopener">
+      <a class="doc-card reveal" href="https://github.com/MMV-Lab/Agentic-J/blob/main/user_guide/04_data_history_and_reports.md" target="_blank" rel="noopener">
         <span class="num">04</span>
         <h4>Data &amp; Reports</h4>
         <p>Where files live, chat history, usage reports, issue reporting.</p>
         <span class="arrow">Read guide →</span>
       </a>
-      <a class="doc-card reveal" href="https://github.com/LJMedPhys/Imagent_J/blob/main/user_guide/05_security.md" target="_blank" rel="noopener">
+      <a class="doc-card reveal" href="https://github.com/MMV-Lab/Agentic-J/blob/main/user_guide/05_security.md" target="_blank" rel="noopener">
         <span class="num">05</span>
         <h4>Security</h4>
         <p>Local-only by default, container hardening, key handling.</p>
         <span class="arrow">Read guide →</span>
       </a>
-      <a class="doc-card reveal" href="https://github.com/LJMedPhys/Imagent_J/blob/main/DOCKER_MANUAL.md" target="_blank" rel="noopener">
+      <a class="doc-card reveal" href="https://github.com/MMV-Lab/Agentic-J/blob/main/DOCKER_MANUAL.md" target="_blank" rel="noopener">
         <span class="num">06</span>
         <h4>Docker manual</h4>
         <p>Volumes, logs, troubleshooting, advanced configuration.</p>
@@ -450,7 +445,7 @@ cp .env.template .env
       <p>Drop a TIFF into <code>./data/</code>, write your goal, and watch the agent take it to labelled masks, CSVs and plots. Bugs, suggestions, feature requests? Let us know!</p>
       <div class="actions">
         <a class="btn btn-primary" href="#quickstart">▶ Get started</a>
-        <a class="btn btn-ghost" href="https://github.com/LJMedPhys/Imagent_J" target="_blank" rel="noopener">Star on GitHub ★</a>
+        <a class="btn btn-ghost" href="https://github.com/MMV-Lab/Agentic-J" target="_blank" rel="noopener">Star on GitHub ★</a>
       </div>
     </div>
   </div>
@@ -489,10 +484,10 @@ cp .env.template .env
 
       <div>
         <h5>Docs</h5>
-        <a href="https://github.com/LJMedPhys/Imagent_J/blob/main/user_guide/01_getting_started.md" target="_blank" rel="noopener">Getting started</a>
-        <a href="https://github.com/LJMedPhys/Imagent_J/blob/main/user_guide/03_prompting.md" target="_blank" rel="noopener">Prompting guide</a>
-        <a href="https://github.com/LJMedPhys/Imagent_J/blob/main/DOCKER_MANUAL.md" target="_blank" rel="noopener">Docker manual</a>
-        <a href="https://github.com/LJMedPhys/Imagent_J/blob/main/user_guide/05_security.md" target="_blank" rel="noopener">Security</a>
+        <a href="https://github.com/MMV-Lab/Agentic-J/blob/main/user_guide/01_getting_started.md" target="_blank" rel="noopener">Getting started</a>
+        <a href="https://github.com/MMV-Lab/Agentic-J/blob/main/user_guide/03_prompting.md" target="_blank" rel="noopener">Prompting guide</a>
+        <a href="https://github.com/MMV-Lab/Agentic-J/blob/main/DOCKER_MANUAL.md" target="_blank" rel="noopener">Docker manual</a>
+        <a href="https://github.com/MMV-Lab/Agentic-J/blob/main/user_guide/05_security.md" target="_blank" rel="noopener">Security</a>
       </div>
 
       <div>
@@ -500,7 +495,7 @@ cp .env.template .env
         <a href="https://github.com/LJMedPhys" target="_blank" rel="noopener">@LJMedPhys — Lukas Johanns</a>
         <a href="https://github.com/marilin99" target="_blank" rel="noopener">@marilin99 — Marilin Moor</a>
         <h5 style="margin-top:14px">Community</h5>
-        <a href="https://github.com/LJMedPhys/Imagent_J" target="_blank" rel="noopener">GitHub repository</a>
+        <a href="https://github.com/MMV-Lab/Agentic-J" target="_blank" rel="noopener">GitHub repository</a>
         <a href="mailto:agentj.help@gmail.com">Report an issue</a>
       </div>
     </div>

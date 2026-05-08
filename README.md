@@ -18,8 +18,8 @@ Steps:
 git lfs install
 
 # 2. Clone the repository (LFS files download automatically)
-git clone https://github.com/LJMedPhys/Imagent_J.git
-cd Imagent_J
+git clone https://github.com/LJMedPhys/Imagent_J.git Agentic-J
+cd Agentic-J
 
 # If you cloned BEFORE running `git lfs install`, hydrate the LFS files now:
 # git lfs pull
