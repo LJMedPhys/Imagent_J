@@ -9,7 +9,7 @@ from .rag_tools import (
     save_coding_experience, save_recipe,
 )
 from .script_tools import run_script_safe, save_script, execute_script, get_script_info, load_script, get_script_history
-from .imagej_tools import ask_user, load_image_ij, inspect_all_ui_windows, extract_image_metadata, capture_plugin_dialog, set_dialog_vision_llm, show_in_imagej_gui
+from .imagej_tools import ask_user, load_image_ij, inspect_all_ui_windows, extract_image_metadata, capture_plugin_dialog, set_dialog_vision_llm, show_in_imagej_gui, close_imagej_windows
 from .general_tools import internet_search, inspect_java_class
 from .analyst_tools import run_python_code, inspect_csv_header
 from .plugin_tools import search_fiji_plugins, install_fiji_plugin, check_plugin_installed
@@ -28,7 +28,7 @@ __all__ = [
     'inspect_folder_tree', 'save_reusable_script', 'smart_file_reader',
     'rag_retrieve_docs', 'rag_retrieve_mistakes', 'rag_retrieve_recipes',
     'save_coding_experience', 'save_recipe',
-    'run_script_safe', 'ask_user', 'load_image_ij', 'show_in_imagej_gui', 'inspect_all_ui_windows', 'extract_image_metadata', 'capture_plugin_dialog',
+    'run_script_safe', 'ask_user', 'load_image_ij', 'show_in_imagej_gui', 'inspect_all_ui_windows', 'extract_image_metadata', 'capture_plugin_dialog', 'close_imagej_windows',
     'internet_search', 'inspect_java_class',
     'search_fiji_plugins', 'install_fiji_plugin', 'check_plugin_installed',
     'SafeToolLoggerMiddleware', 'TodoDisplayMiddleware', 'NarrationReminderMiddleware', 'PhaseGuardMiddleware',
