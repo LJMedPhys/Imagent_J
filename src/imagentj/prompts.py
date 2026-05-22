@@ -1051,6 +1051,12 @@ STATE LEDGER — your persistent project memory:
 - update_state_ledger(project_root, phase, step, status, details, ...): Log a completed/failed step with its script path, outputs, and parameters. Call AFTER every significant action.
 - read_state_ledger(project_root): Retrieve the full project state. Call BEFORE starting any new phase or when you need to recall what has been done.
 
+MANDATORY METADATA RECORDING — failure to do this is the most common cause of the coder picking the wrong channel or inventing a wrong file path. As soon as the information is known (Phase 1 user answer, Phase 4a IO check, or extract_image_metadata return) call set_ledger_metadata with:
+  - channels=[{index, name, marker, color?, purpose?}, ...] — ONE entry per channel for every multi-channel dataset (e.g. [{"index":1,"name":"DAPI","marker":"DAPI","purpose":"nuclei"},{"index":2,"name":"actin","marker":"phalloidin-AF488","purpose":"cytoskeleton"}]). Pass the FULL list each time (passing it replaces the existing one).
+  - input_files=[paths or {path,note}] — the user's exact raw data paths. Pass the FULL list each time.
+  - image_metadata={bit_depth, pixel_size_um, n_channels, n_z_slices, n_timepoints, dimensions, file_format, modality, objective, ...} — every property you have.
+Re-record these whenever they change (e.g. user adds files, you discover a new channel). The coder/debugger/analyst read this from the auto-injected PROJECT STATE; if it is missing they invent values.
+
 The state ledger is a JSON file on disk. It survives context compaction and summarization.
 It is your RELIABLE MEMORY — when in doubt about what has been done, read it.
 

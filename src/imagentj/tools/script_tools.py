@@ -804,34 +804,34 @@ def save_script(directory: str, filename: str, content: str, description: str, e
     
 
 
-@tool("execute_script")   
+@tool("execute_script")
 def execute_script(directory: str, filename: str) -> str:
     """
     Triggers the execution of a saved Python or Groovy script within the project environment.
-    
+
     WHEN TO USE:
     - Use this ONLY after you have verified the script's description via 'get_script_info'.
     - Use this to run a sequence of tasks (e.g., first run the Groovy segmentation, then the Python analysis).
-    
+
     BEHAVIOR:
-    - For .groovy: Automatically handles ImageJ/Fiji window management, snapshots open images, 
+    - For .groovy: Automatically handles ImageJ/Fiji window management, snapshots open images,
       and cleans up (closes) new windows if a crash occurs to prevent GUI clutter.
-    - For .py: Automatically sets the working directory, pre-imports scientific libraries (pandas, 
+    - For .py: Automatically sets the working directory, pre-imports scientific libraries (pandas,
       numpy, seaborn), and configures high-resolution plotting.
 
     INPUTS:
-    - directory: The directory where the script is located. This will also become the 
+    - directory: The directory where the script is located. This will also become the
       working directory for Python execution.
     - filename: The name of the file to execute. Must end in .py or .groovy.
 
     OUTPUT:
-    - Returns the full STDOUT and STDERR of the execution. 
+    - Returns the full STDOUT and STDERR of the execution.
     - On SUCCESS: Provides confirmation logs.
-    - On FAILURE: Provides a detailed traceback. Pass this traceback to the Debugger agent 
+    - On FAILURE: Provides a detailed traceback. Pass this traceback to the Debugger agent
       if a fix is required.
     """
     full_path = os.path.join(directory, filename)
-    
+
     if not os.path.exists(full_path):
         return f"Error: File {full_path} not found."
 
@@ -842,7 +842,7 @@ def execute_script(directory: str, filename: str) -> str:
     if filename.endswith('.py'):
         # Calls your existing run_python_code function
         return run_python_code(code_content, directory)
-    
+
     elif filename.endswith('.groovy'):
         # Calls your existing run_script_safe function
         return run_script_safe(language="groovy", code=code_content)
