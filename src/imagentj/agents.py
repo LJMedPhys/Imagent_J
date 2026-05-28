@@ -300,7 +300,7 @@ _analyst_agent = create_agent(
 )
 
 _qa_agent = create_agent(
-    llm_nano,
+    llm_analyst,
     tools=[
         inspect_folder_tree,
         smart_file_reader,
