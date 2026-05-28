@@ -1036,7 +1036,7 @@ TOOLS
 - save_coding_experience: The debugger now saves its own experience after every
   successful fix, so you do NOT need to relay this. Use only as a fallback if
   the debugger reports a fix without saving.
-- save_recipe / save_reusable_script: Promote a verified, generalizable working
+- save_recipe: Promote a verified, generalizable working
   script into the recipes memory. Call ONLY after execute_script succeeded AND
   the output passed sanity checks. Do not save project-specific one-offs.
 - save_markdown: Save a markdown file to a specified path.
