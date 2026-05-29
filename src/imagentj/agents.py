@@ -300,7 +300,7 @@ _analyst_agent = create_agent(
 )
 
 _qa_agent = create_agent(
-    llm_nano,
+    llm_analyst,
     tools=[
         inspect_folder_tree,
         smart_file_reader,
@@ -659,7 +659,6 @@ def init_agent(enable_qa: bool = False):
             rag_retrieve_mistakes,
             rag_retrieve_recipes,
             save_recipe,
-            save_reusable_script,
             inspect_folder_tree,
             smart_file_reader,
             extract_image_metadata,
