@@ -217,6 +217,24 @@ find "$FIJI_HOME/update" -type f -name "*.jar" | while read -r f; do
     esac
 done
 
+# ── Remove logback-classic 1.2.x from named volume (incompatible with SLF4J 2.x) ──
+# SLF4J 2.x ignores 1.7.x-style StaticLoggerBinder JARs and warns at startup.
+# The image ships slf4j-nop-2.0.x instead; remove any logback 1.2.x that survived
+# in the volume from an earlier image build.
+find "$FIJI_HOME/jars" -name 'logback-classic-1.2*.jar' -delete 2>/dev/null && true
+
+# ── Ensure slf4j-nop-2.0.16 is in the fiji_jars volume ──────────────────────
+# The fiji_jars named volume shadows /opt/Fiji.app/jars, so JARs added to the
+# image's jars/ directory don't reach the volume via normal seeding. Copy from
+# /opt/fiji-patches/ (not volume-mounted) the same way StarDist/CSBDeep patches do.
+_SLF4J_NOP="$FIJI_HOME/jars/slf4j-nop-2.0.16.jar"
+_SLF4J_NOP_SRC="/opt/fiji-patches/slf4j-nop-2.0.16.jar"
+if [ ! -f "$_SLF4J_NOP" ] && [ -f "$_SLF4J_NOP_SRC" ]; then
+    echo "[entrypoint] Installing slf4j-nop-2.0.16.jar into fiji_jars volume..."
+    cp "$_SLF4J_NOP_SRC" "$_SLF4J_NOP"
+    echo "[entrypoint] slf4j-nop-2.0.16.jar installed"
+fi
+
 # ── Remove stale TrackMate-StarDist 1.2.0 from named volume ──────────────────
 # 1.2.0 has AbstractMethodError with TrackMate 8.x (missing 4-arg getDetector).
 # The image now ships patched 2.0.0; remove any 1.x lingering in the volume.
