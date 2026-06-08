@@ -213,7 +213,7 @@ llm_analyst = ChatOpenAI(
 )
 
 llm_nano = ChatOpenAI(
-    model=m("openai/gpt-4o-mini"),
+    model=m("openai/gpt-5.4-nano"),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
@@ -452,6 +452,18 @@ def python_data_analyst(task: str, input_csv: str, output_dir: str, project_root
     return result["structured_response"]
 
 
+# ---------------------------------------------------------------------------
+# QA enabled flag — toggled at runtime without rebuilding the supervisor graph
+# ---------------------------------------------------------------------------
+
+_qa_enabled: bool = False
+
+
+def set_qa_enabled(enabled: bool) -> None:
+    global _qa_enabled
+    _qa_enabled = enabled
+
+
 @tool
 def qa_reporter(project_root: str) -> QAHandoff:
     """
@@ -467,6 +479,15 @@ def qa_reporter(project_root: str) -> QAHandoff:
     Returns a QAHandoff with checklist_path, pass/fail counts, and critical_failures.
     Relay critical_failures to the user verbatim.
     """
+    if not _qa_enabled:
+        return QAHandoff(
+            checklist_path="",
+            minimal_workflow_passed=0,
+            minimal_workflow_total=0,
+            critical_failures=["QA Agent is disabled — enable it in the panel to run the audit."],
+            success=False,
+        )
+
     sections = [f"PROJECT ROOT: {project_root}"]
     # Inject the full ledger — it contains the workflow summary, all parameters,
     # all scripts, all outputs. This is exactly what the QA agent needs to audit.
@@ -601,7 +622,7 @@ def plugin_manager(task: str, project_root: str = "") -> PluginRecommendation:
 # Factory
 # ---------------------------------------------------------------------------
 
-def init_agent(enable_qa: bool = False):
+def init_agent():
     fs_backend = FilesystemBackend(
         root_dir="/app/data/",
         virtual_mode=False,
@@ -611,10 +632,9 @@ def init_agent(enable_qa: bool = False):
         imagej_coder,
         imagej_debugger,
         python_data_analyst,
+        qa_reporter,   # always present; _qa_enabled flag controls execution
         # vlm_judge,  # VLM disabled
     ]
-    if enable_qa:
-        subagent_tools.append(qa_reporter)
 
     set_dialog_vision_llm(llm_nano)
 
@@ -674,7 +694,7 @@ def init_agent(enable_qa: bool = False):
             read_state_ledger,
             set_ledger_metadata,
         ],
-        system_prompt=build_supervisor_prompt(enable_qa),
+        system_prompt=build_supervisor_prompt(enable_qa=True),
         subagents=[],
         middleware=supervisor_middleware,
         model=llm_supervisor,
