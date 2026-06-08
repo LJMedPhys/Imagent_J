@@ -13,6 +13,8 @@ from filelock import FileLock
 import threading
 import time
 from scyjava import jimport
+import imagentj.stop_signal as stop_signal
+from imagentj.stop_signal import StopRequested
 
 # ── Window classification ─────────────────────────────────────────────────
 
@@ -526,8 +528,49 @@ def run_groovy_script(script: str, ij) -> str:
 
     monitor = _WindowMonitor(windows_before).start()
 
+    # ── Run script in a sub-thread so this thread can poll stop_signal ───────
+    # ij.py.run_script() is a blocking JNI call — SystemExit injection (used by
+    # SubagentRunner) only fires at Python bytecode boundaries and never reaches
+    # code blocked inside the JVM. Moving it to a daemon sub-thread lets us poll
+    # here and signal Fiji via two complementary mechanisms:
+    #   1. IJ.setEscapePressed(True) — ImageJ's own abort flag, checked by most
+    #      plugins and the Groovy interpreter between statements.
+    #   2. thread.interrupt()        — unblocks JVM sleep/IO waits.
+    _java_thread: list = [None]
+    _script_result: list = [None]
+    _script_exc: list = [None]
+
+    def _run():
+        Thread = jpype.JClass("java.lang.Thread")
+        _java_thread[0] = Thread.currentThread()
+        try:
+            _script_result[0] = ij.py.run_script("Groovy", script)
+        except Exception as e:
+            _script_exc[0] = e
+
+    script_thread = threading.Thread(target=_run, daemon=True)
+    script_thread.start()
+
+    IJ = jpype.JClass("ij.IJ")
     try:
-        result = ij.py.run_script("Groovy", script)
+        while script_thread.is_alive():
+            script_thread.join(timeout=0.1)
+            if stop_signal.is_set() and script_thread.is_alive():
+                IJ.setEscapePressed(True)
+                jt = _java_thread[0]
+                if jt is not None:
+                    try:
+                        jt.interrupt()
+                    except Exception:
+                        pass
+                script_thread.join(timeout=3.0)
+                IJ.setEscapePressed(False)
+                raise StopRequested("Groovy script cancelled by user")
+
+        if _script_exc[0] is not None:
+            raise _script_exc[0]
+
+        result = _script_result[0]
         stdout = str(out_stream.toString())
         stderr = str(err_stream.toString())
 
@@ -610,6 +653,10 @@ def run_groovy_script(script: str, ij) -> str:
         parts.append(f"RESULTS_WINDOWS: {results_count} table(s) (suppressed)")
 
         return "\n".join(parts)
+
+    except StopRequested:
+        monitor.stop()
+        raise
 
     except Exception as e:
         ij_log_new = get_new_ij_log_entries(ij_log_before)
