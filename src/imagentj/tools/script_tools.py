@@ -16,6 +16,39 @@ from scyjava import jimport
 import imagentj.stop_signal as stop_signal
 from imagentj.stop_signal import StopRequested
 
+# ── Active script tracking ────────────────────────────────────────────────
+# Java 21 removed Thread.stop(), so there is no reliable API-level kill for a
+# running JVM thread. We track the active script thread globally so that:
+#   - on cancellation, signals are sent (IJ.setEscapePressed + interrupt)
+#   - on the NEXT script call, the zombie is re-signalled and given 2 s to
+#     react before a new script starts, preventing two scripts competing for Fiji.
+
+_active_script_thread: Optional[threading.Thread] = None
+_active_java_thread: list = [None]   # [java.lang.Thread | None]
+_script_state_lock = threading.Lock()
+
+
+def _signal_active_script(wait: float = 0.0) -> None:
+    """Send abort signals to the currently-tracked script thread (if alive)."""
+    with _script_state_lock:
+        t  = _active_script_thread
+        jt = _active_java_thread[0]
+    if t is None or not t.is_alive():
+        return
+    try:
+        IJ = jpype.JClass("ij.IJ")
+        IJ.setEscapePressed(True)
+    except Exception:
+        pass
+    if jt is not None:
+        try:
+            jt.interrupt()
+        except Exception:
+            pass
+    if wait > 0:
+        t.join(timeout=wait)
+
+
 # ── Window classification ─────────────────────────────────────────────────
 
 _ERROR_KEYWORDS = (
@@ -536,19 +569,30 @@ def run_groovy_script(script: str, ij) -> str:
     #   1. IJ.setEscapePressed(True) — ImageJ's own abort flag, checked by most
     #      plugins and the Groovy interpreter between statements.
     #   2. thread.interrupt()        — unblocks JVM sleep/IO waits.
-    _java_thread: list = [None]
+
+    # Re-signal any zombie thread from a previous cancelled run before starting.
+    _signal_active_script(wait=2.0)
+
     _script_result: list = [None]
     _script_exc: list = [None]
 
     def _run():
+        global _active_script_thread, _active_java_thread
         Thread = jpype.JClass("java.lang.Thread")
-        _java_thread[0] = Thread.currentThread()
+        with _script_state_lock:
+            _active_java_thread[0] = Thread.currentThread()
         try:
             _script_result[0] = ij.py.run_script("Groovy", script)
         except Exception as e:
             _script_exc[0] = e
+        finally:
+            with _script_state_lock:
+                _active_java_thread[0] = None
 
     script_thread = threading.Thread(target=_run, daemon=True)
+    with _script_state_lock:
+        global _active_script_thread
+        _active_script_thread = script_thread
     script_thread.start()
 
     IJ = jpype.JClass("ij.IJ")
@@ -557,7 +601,8 @@ def run_groovy_script(script: str, ij) -> str:
             script_thread.join(timeout=0.1)
             if stop_signal.is_set() and script_thread.is_alive():
                 IJ.setEscapePressed(True)
-                jt = _java_thread[0]
+                with _script_state_lock:
+                    jt = _active_java_thread[0]
                 if jt is not None:
                     try:
                         jt.interrupt()
