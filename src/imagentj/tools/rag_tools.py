@@ -47,11 +47,13 @@ from .vector_stores import (
 
 __all__ = [
     'rag_retrieve_docs', 'rag_retrieve_mistakes', 'rag_retrieve_recipes',
-    'save_coding_experience', 'save_recipe',
+    'save_recipe',
     # Internal helpers exposed for testing & for auto-injection wrappers
     '_retrieve_mistakes_raw', '_retrieve_recipes_raw',
     '_save_coding_experience_raw', '_save_recipe_raw',
     '_build_metadata_filter', '_find_dedup_candidate',
+    # Deterministic lesson capture (debugger buffers, execute_script commits)
+    'register_pending_lesson', 'commit_pending_lesson',
 ]
 
 openrouter_key = os.getenv("OPEN_ROUTER_API_KEY")
@@ -269,8 +271,8 @@ def rag_retrieve_mistakes(query: str,
         language:   Optional filter ("Groovy" | "Python"). Strongly recommended
                     so a Python pandas lesson is not returned for a Groovy task.
         error_type: Optional filter (e.g. "MissingMethod", "NullPointer",
-                    "ClassCast"). One word, matches what `save_coding_experience`
-                    used.
+                    "ClassCast"). One word, matches the saved lesson's
+                    error_type.
 
     Returns a list of {rule, failed_code, working_code, language, error_type,
     times_seen, score}. If no entry passes the relevance threshold, returns an
@@ -342,39 +344,76 @@ def _save_coding_experience_raw(
     return "Experience saved. The agent will surface this rule for future similar errors."
 
 
-@tool("save_coding_experience")
-def save_coding_experience(language: str,
-                           rule: str,
-                           failed_code: str,
-                           working_code: str,
-                           error_type: str,
-                           class_involved: str = "") -> str:
-    """
-    Record a fix to the persistent mistakes memory. Call this after the
-    debugger has produced a working version of a previously-failing script.
+# ---------------------------------------------------------------------------
+# Deterministic lesson capture
+#
+# The debugger cannot verify its own fix, and asking the supervisor LLM to call
+# save_coding_experience after execute_script proved unreliable — it is a
+# trailing bookkeeping step that competes with task completion and was usually
+# skipped. Instead the debugger BUFFERS its lesson here (keyed by the script it
+# repaired) and execute_script COMMITS it automatically the moment the rerun
+# confirms the fix runs clean. No LLM decision is involved in the save.
+# ---------------------------------------------------------------------------
 
-    Args:
-        language:       "Groovy" or "Python".
-        rule:           The lesson, written as a short imperative rule that
-                        starts with the symptom. Example:
-                          "When ImageCalculator is used without explicit
-                          'import ij.plugin.ImageCalculator', a MissingProperty
-                          error fires. Always import the class explicitly."
-                        Keep it under ~40 words. This is what gets EMBEDDED.
-        failed_code:    The original failing snippet (stored, not embedded).
-        working_code:   The corrected snippet (stored, not embedded).
-        error_type:     One word: "MissingMethod" | "NullPointer" | "ClassCast"
-                        | "Import" | "Logic" | "Path" | etc. Used as a filter.
-        class_involved: Main class (e.g. "ImagePlus", "TrackMate"). Optional.
-    """
-    return _save_coding_experience_raw(
-        language=language,
-        rule=rule,
-        failed_code=failed_code,
-        working_code=working_code,
-        error_type=error_type,
-        class_involved=class_involved,
-    )
+_PENDING_LESSONS: Dict[str, Dict[str, Any]] = {}
+
+
+def register_pending_lesson(script_path: str, *, language: str, rule: str,
+                            failed_code: str = "", working_code: str = "",
+                            error_type: str = "Logic",
+                            class_involved: str = "") -> None:
+    """Buffer a debugger lesson, keyed by the absolute path of the script it
+    repaired. commit_pending_lesson() persists it once execute_script confirms
+    that script now runs cleanly."""
+    if not script_path or not (rule or "").strip():
+        return
+    _PENDING_LESSONS[os.path.abspath(script_path)] = {
+        "language": language or "Groovy",
+        "rule": rule.strip(),
+        "failed_code": failed_code or "",
+        "working_code": working_code or "",
+        "error_type": error_type or "Logic",
+        "class_involved": class_involved or "",
+    }
+
+
+def _run_succeeded(execute_output: str) -> bool:
+    """True iff an execute_script return string indicates the run did not error.
+    Handles both the Groovy runner ("STATUS: SUCCESS|WARNING|ERROR") and the
+    Python runner ("SUCCESS:\n..." vs "CRASH DETECTED...")."""
+    if not execute_output:
+        return False
+    if "STATUS: ERROR" in execute_output:
+        return False
+    if "STATUS: SUCCESS" in execute_output or "STATUS: WARNING" in execute_output:
+        return True
+    return execute_output.lstrip().startswith("SUCCESS:")
+
+
+def commit_pending_lesson(script_path: str, execute_output: str) -> Optional[str]:
+    """Called by execute_script after every run. If the script had a buffered
+    debugger lesson AND the run confirms the fix worked, persist it
+    deterministically. Returns a short status string when it saves, else None.
+    A buffered lesson for a still-failing script is left in place so a later
+    green run commits it."""
+    key = os.path.abspath(script_path)
+    pending = _PENDING_LESSONS.get(key)
+    if pending is None:
+        return None
+    if not _run_succeeded(execute_output):
+        return None
+    _PENDING_LESSONS.pop(key, None)
+    try:
+        return _save_coding_experience_raw(**pending)
+    except Exception:
+        return None
+
+
+# NOTE: there is intentionally no manual "save_coding_experience" tool. Mistakes
+# are captured deterministically: the debugger / analyst populate the lesson on
+# their handoff, register_pending_lesson() buffers it, and execute_script commits
+# it via _save_coding_experience_raw() once the rerun is confirmed green. A manual
+# save would bypass that verified-green gate and risk persisting unverified fixes.
 
 
 # ---------------------------------------------------------------------------
@@ -516,28 +555,54 @@ def _save_recipe_raw(
     return "Recipe saved. Future tasks matching this description will see it as a template."
 
 
+_RECIPE_EXT_TO_LANG = {".groovy": "Groovy", ".py": "Python"}
+
+
 @tool("save_recipe")
-def save_recipe(name: str,
+def save_recipe(script_path: str,
+                name: str,
                 description: str,
-                code: str,
-                inputs_required: str,
-                language: str = "Groovy") -> str:
+                inputs_required: str) -> str:
     """
     Record a verified working script into the recipes memory.
+
+    Pass the PATH to the script that `execute_script` just ran — the code is
+    read from disk, so the saved recipe is byte-for-byte the verified script
+    (no need to retype it, and no risk of drift from what actually ran).
 
     Use only AFTER `execute_script` has confirmed the script ran cleanly AND
     produced the expected outputs. Do not save partial fixes or
     project-specific one-offs.
 
     Args:
+        script_path:     Absolute path to the verified .groovy or .py script
+                         (e.g. the script_path you passed to execute_script).
+                         The language is inferred from the extension.
         name:            Short title (e.g. "Nuclei Segmentation via StarDist").
         description:     1-3 sentence summary of what the script does and when
                          to use it. This is what gets EMBEDDED for retrieval.
-        code:            The full working script (stored, not embedded).
         inputs_required: What the user must have ready (e.g. "Open a 2D Tiff
                          image with DAPI channel").
-        language:        "Groovy" (default) or "Python".
     """
+    if not script_path or not os.path.isfile(script_path):
+        return (f"Recipe NOT saved: script_path '{script_path}' does not exist "
+                f"or is not a file. Pass the path to the verified script.")
+
+    ext = os.path.splitext(script_path)[1].lower()
+    language = _RECIPE_EXT_TO_LANG.get(ext)
+    if language is None:
+        return (f"Recipe NOT saved: unsupported extension '{ext}'. "
+                f"Expected .groovy or .py.")
+
+    try:
+        with open(script_path, "r", encoding="utf-8") as f:
+            code = f.read()
+    except Exception as e:
+        return f"Recipe NOT saved: could not read '{script_path}': {e}"
+
+    if not code.strip():
+        return f"Recipe NOT saved: '{script_path}' is empty."
+
     return _save_recipe_raw(
         name=name,
         description=description,

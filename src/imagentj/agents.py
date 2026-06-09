@@ -32,9 +32,9 @@ from .prompts import (
 from .tools import (
     internet_search, inspect_all_ui_windows, capture_plugin_dialog,
     show_in_imagej_gui, close_imagej_windows,
-    rag_retrieve_docs, inspect_java_class, save_coding_experience,
+    rag_retrieve_docs, inspect_java_class,
     rag_retrieve_mistakes, rag_retrieve_recipes, save_recipe,
-    save_reusable_script, inspect_folder_tree,
+    inspect_folder_tree,
     smart_file_reader, inspect_csv_header,
     extract_image_metadata, search_fiji_plugins, install_fiji_plugin,
     check_plugin_installed, mkdir_copy, save_script, execute_script,
@@ -45,6 +45,9 @@ from .tools import (
     check_environment,
     set_dialog_vision_llm,
     # capture_ij_window, build_compilation, analyze_image,  # VLM disabled
+)
+from .tools.rag_tools import (
+    register_pending_lesson, _retrieve_mistakes_raw, _retrieve_recipes_raw,
 )
 from imagentj.tracker import UsageMetrics, MetricsSignalBridge, UsageTrackerCallback
 
@@ -94,9 +97,8 @@ class ScriptHandoff(BaseModel):
     error_message: Optional[str] = None
     requires_user_approval: bool = False  # True for single-image verification runs
     # Debugger-only fields. The debugger does NOT save the lesson itself
-    # (it cannot run the fix to verify correctness); it populates these so
-    # the supervisor can call save_coding_experience after execute_script
-    # confirms the fix actually works.
+    # (it cannot run the fix to verify correctness); it populates these and the
+    # lesson is committed automatically once execute_script confirms the fix.
     lesson: Optional[str] = None          # one-line imperative rule
     failed_code: Optional[str] = None     # the offending snippet that was replaced
     working_code: Optional[str] = None    # the corrected snippet
@@ -116,6 +118,14 @@ class AnalystHandoff(BaseModel):
     figure_paths: list[str] = []          # Stage 2 only
     success: bool
     error_message: Optional[str] = None
+    # Populated ONLY when this run fixed a previously-failing script. Like the
+    # debugger's, the lesson is saved automatically once execute_script confirms
+    # the fix is green (no manual save call needed).
+    lesson: Optional[str] = None          # one-line imperative rule
+    failed_code: Optional[str] = None     # the offending snippet that was replaced
+    working_code: Optional[str] = None    # the corrected snippet
+    error_type: Optional[str] = None      # Pandas | Plotting | Import | Logic | Path | ...
+    class_involved: Optional[str] = None  # main library/object (e.g. "seaborn", "DataFrame")
 
 
 class QAHandoff(BaseModel):
@@ -280,6 +290,8 @@ _analyst_agent = create_agent(
         load_script,
         get_script_history,
         get_script_info,
+        rag_retrieve_mistakes,
+        rag_retrieve_recipes,
     ],
     system_prompt=python_analyst_prompt,
     response_format=ToolStrategy(schema=AnalystHandoff, handle_errors=True),
@@ -378,13 +390,95 @@ def imagej_coder(task: str, project_root: str) -> ScriptHandoff:
 
     sections.append(f"TASK: {task}")
 
+    # Auto-inject known pitfalls so the coder avoids previously-learned errors at
+    # WRITE time. The mistakes store used to be debugger-only (read reactively,
+    # after a failure); surfacing it here — deterministically, like the ledger —
+    # lets the coder dodge the error before it writes the broken pattern.
+    sections.append(_build_pitfalls_section(task))
+
+    # Auto-inject a LEAN catalogue of matching recipes (name/description/inputs
+    # only — not the full code). This is always-on, unlike the old prompt-only
+    # "decide whether to query recipes" path. The coder pulls the full code for a
+    # chosen recipe via rag_retrieve_recipes — keeps the always-on cost small
+    # while telling the coder exactly what to fetch next.
+    sections.append(_build_recipes_section(task))
+
     agent = _make_coder_agent(model, "imagej_coder", imagej_coder_prompt)
 
     result = stop_signal.SubagentRunner(
         agent.invoke,
-        {"messages": [{"role": "user", "content": "\n\n".join(sections)}]},
+        {"messages": [{"role": "user", "content": "\n\n".join(s for s in sections if s)}]},
     ).run()
     return result["structured_response"]
+
+
+def _build_pitfalls_section(query: str, language: str = "Groovy") -> str:
+    """Retrieve the most relevant past mistakes for `query` (a task description or
+    an error symptom) and format them as a KNOWN PITFALLS block. Returns "" when
+    RAG is unavailable or nothing relevant is found (the section is then skipped)."""
+    try:
+        mistakes = _retrieve_mistakes_raw(query=query, language=language, limit=5)
+    except Exception:
+        return ""
+
+    entries = []
+    for m in mistakes:
+        rule = (m.get("rule") or "").strip()
+        if not rule:
+            continue
+        entry = f"- {rule}"
+        working = (m.get("working_code") or "").strip()
+        if working:
+            indented = "\n".join("    " + line for line in working.splitlines())
+            entry += f"\n  WORKING PATTERN:\n{indented}"
+        entries.append(entry)
+
+    if not entries:
+        return ""
+
+    return (
+        "KNOWN PITFALLS (lessons from past failures — apply unconditionally where "
+        "the same class/call appears in this task; these are mistakes the agent "
+        "has already made and fixed):\n" + "\n".join(entries)
+    )
+
+
+def _build_recipes_section(task: str, language: str = "Groovy") -> str:
+    """Retrieve recipes matching `task` and format a LEAN catalogue (name,
+    description, inputs — no code). The agent fetches the full code of a chosen
+    recipe via the rag_retrieve_recipes tool. Returns "" when RAG is unavailable
+    or nothing relevant is found."""
+    try:
+        recipes = _retrieve_recipes_raw(task=task, language=language, limit=3)
+    except Exception:
+        return ""
+
+    entries = []
+    for r in recipes:
+        name = (r.get("name") or "").strip()
+        desc = (r.get("description") or "").strip()
+        if not (name or desc):
+            continue
+        line = f"- {name or '(unnamed)'}: {desc}"
+        inputs = r.get("inputs_required")
+        if inputs:
+            if isinstance(inputs, (list, tuple)):
+                inputs = ", ".join(str(i) for i in inputs)
+            line += f"\n  Inputs required: {inputs}"
+        entries.append(line)
+
+    if not entries:
+        return ""
+
+    return (
+        "AVAILABLE RECIPES (verified working scripts that may match this task — "
+        "shown as a catalogue only). If one fits, call "
+        f"rag_retrieve_recipes(task=<recipe name or short description>, "
+        f"language=\"{language}\") to fetch its full code, then ADAPT it to this "
+        "task's data, columns, and parameters — do not copy "
+        "verbatim. Ignore the catalogue for genuinely novel tasks:\n"
+        + "\n".join(entries)
+    )
 
 
 @tool
@@ -398,7 +492,8 @@ def imagej_debugger(script_path: str, error_message: str, project_root: str = ""
         project_root:  Absolute path to the project folder.
 
     Returns a ScriptHandoff with the repaired script_path and a lesson field.
-    After success, pass lesson to save_coding_experience.
+    The lesson on the returned handoff is saved automatically once execute_script
+    confirms the repaired script runs green.
     """
     agent = _make_coder_agent(llm_worker, "imagej_debugger", imagej_debugger_prompt)
 
@@ -408,11 +503,36 @@ def imagej_debugger(script_path: str, error_message: str, project_root: str = ""
         if ledger_ctx:
             sections.insert(1, f"PROJECT STATE (for context):\n{ledger_ctx}")
 
+    # Auto-inject prior fixes deterministically, keyed on the ERROR SYMPTOM (not
+    # the task — the debugger's anchor is the stack trace). This guarantees the
+    # debugger always sees a relevant past fix even if it would not have queried;
+    # the prompt's manual rag_retrieve_mistakes call is now an optional refinement.
+    sections.append(_build_pitfalls_section(error_message))
+
     result = stop_signal.SubagentRunner(
         agent.invoke,
-        {"messages": [{"role": "user", "content": "\n\n".join(sections)}]},
+        {"messages": [{"role": "user", "content": "\n\n".join(s for s in sections if s)}]},
     ).run()
-    return result["structured_response"]
+    handoff = result["structured_response"]
+
+    # Buffer the lesson for deterministic capture. The debugger CANNOT verify its
+    # own fix; execute_script persists this automatically once the supervisor
+    # reruns the repaired script and it passes — no manual save call involved.
+    try:
+        if handoff.lesson and handoff.working_code:
+            register_pending_lesson(
+                handoff.script_path,
+                language="Groovy",
+                rule=handoff.lesson,
+                failed_code=handoff.failed_code or "",
+                working_code=handoff.working_code or "",
+                error_type=handoff.error_type or "Logic",
+                class_involved=handoff.class_involved or "",
+            )
+    except Exception:
+        pass
+
+    return handoff
 
 
 
@@ -445,11 +565,35 @@ def python_data_analyst(task: str, input_csv: str, output_dir: str, project_root
             sections.append(f"PROJECT STATE (use for axis labels, units, and context):\n{ledger_ctx}")
     sections.append(f"TASK: {task}")
 
+    # Same write-time memory the Groovy coder gets, scoped to Python: known
+    # pitfalls (pandas/plotting lessons) and a lean recipe catalogue.
+    sections.append(_build_pitfalls_section(task, language="Python"))
+    sections.append(_build_recipes_section(task, language="Python"))
+
     result = stop_signal.SubagentRunner(
         _analyst_agent.invoke,
-        {"messages": [{"role": "user", "content": "\n\n".join(sections)}]},
+        {"messages": [{"role": "user", "content": "\n\n".join(s for s in sections if s)}]},
     ).run()
-    return result["structured_response"]
+    handoff = result["structured_response"]
+
+    # Deterministic lesson capture for the Python flow, mirroring imagej_debugger.
+    # Populated only when this run fixed a failing script; execute_script commits
+    # it once the rerun is green.
+    try:
+        if handoff.lesson and handoff.working_code:
+            register_pending_lesson(
+                handoff.script_path,
+                language="Python",
+                rule=handoff.lesson,
+                failed_code=handoff.failed_code or "",
+                working_code=handoff.working_code or "",
+                error_type=handoff.error_type or "Logic",
+                class_involved=handoff.class_involved or "",
+            )
+    except Exception:
+        pass
+
+    return handoff
 
 
 @tool
@@ -655,7 +799,6 @@ def init_agent(enable_qa: bool = False):
             show_in_imagej_gui,
             close_imagej_windows,
             rag_retrieve_docs,
-            save_coding_experience,
             rag_retrieve_mistakes,
             rag_retrieve_recipes,
             save_recipe,

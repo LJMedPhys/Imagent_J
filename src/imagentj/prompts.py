@@ -580,9 +580,20 @@ python_analyst_prompt = r"""
          ────────────────────────────────────────
          If — and only if — the Supervisor's task message says a previous script failed:
          1. Use `load_script` to read the faulty script.
-         2. Use `get_script_history` once to see why prior versions failed; do not repeat a logged failure.
-         3. Use `save_script` to commit the fix, filling 'error_context' with the prior failure reason.
-         4. Return the AnalystHandoff and stop.
+         2. A "KNOWN PITFALLS" section may be in your input — apply any rule whose
+            library/call matches the failure. You MAY also call
+            `rag_retrieve_mistakes(query=<error symptom>, language="Python")`.
+         3. Use `get_script_history` once to see why prior versions failed; do not repeat a logged failure.
+         4. Use `save_script` to commit the fix, filling 'error_context' with the prior failure reason.
+         5. REPORT THE FIX so it is remembered. Populate these AnalystHandoff
+            fields (they are saved automatically once the Supervisor reruns the
+            script and it passes — an empty lesson/working_code saves nothing):
+              - lesson:        one short imperative sentence — symptom AND fix
+              - failed_code:   the offending snippet you replaced (diff slice only)
+              - working_code:  your corrected snippet (matching diff slice)
+              - error_type:    one word — Pandas | Plotting | Import | Logic | Path | ...
+              - class_involved: main library/object (e.g. "seaborn", "DataFrame")
+         6. Return the AnalystHandoff and stop.
 
 
          You are the final step in the pipeline. Your output is the scientific conclusion of the study.
@@ -621,15 +632,15 @@ imagej_coder_prompt = """
        state the concrete reason in the save_script `description` field, then choose
        the next-best option. Never deviate without an explicit reason.
    1. CONSULT HISTORY: Before writing a script, call `get_script_history`. If previous versions exist, analyze the "failure_reason" to ensure your new code solves the previous issues.
-   1b. RECIPES (query yourself when useful): For common, well-defined bioimage
-       workflows (counting, segmentation, registration, intensity measurement,
-       stitching, etc.), call `rag_retrieve_recipes(task=<short description>,
-       language="Groovy")` BEFORE writing the script. Treat any returned recipe as
-       a REFERENCE TEMPLATE only — borrow imports, structural skeleton, and plugin
-       invocation style when they match this task's image type, channel layout,
-       plugin version, and parameters. Always reason from the current task first;
-       consult the recipe second. Do NOT copy recipe code verbatim. Skip the
-       retrieval call for obviously novel or one-off tasks where no recipe applies.
+   1b. RECIPES: An "AVAILABLE RECIPES" catalogue (name + description + inputs,
+       no code) may be included in your input — these are verified working scripts
+       that matched this task. If one fits, call `rag_retrieve_recipes(task=<recipe
+       name or short description>, language="Groovy")` to fetch its full code.
+       Treat the fetched recipe as a REFERENCE TEMPLATE only — borrow imports,
+       structural skeleton, and plugin invocation style when they match this task's
+       image type, channel layout, plugin version, and parameters. Always reason
+       from the current task first; consult the recipe second. Do NOT copy recipe
+       code verbatim. Ignore the catalogue for genuinely novel or one-off tasks.
    2. SAVE WITH DOCUMENTATION: Always use `save_script` to commit your code.
       - MANDATORY PATH: Scripts MUST always be saved to the 'scripts/imagej/' 
         subfolder of the project directory provided by the Supervisor.
@@ -663,10 +674,13 @@ imagej_coder_prompt = """
    4. Always include required imports.
    5. The script runs in ImageJ GUI mode.
    6. Guard against missing inputs.
-   7. CONSULT EXPERIENCE: If you are about to use a class or plugin call that has
-      a known history of producing errors (or you've just hit one yourself), call
-      `rag_retrieve_mistakes(query=<symptom or class name>, language="Groovy")`
-      and apply any returned rule unconditionally. Skip when the call is trivial.
+   7. CONSULT EXPERIENCE: A "KNOWN PITFALLS" section may be included in your
+      input — these are lessons from past failures, already retrieved for this
+      task. Apply any pitfall whose class/call appears in your code
+      unconditionally. For a specific class or plugin not covered there that you
+      suspect has a known history of errors, you may additionally call
+      `rag_retrieve_mistakes(query=<symptom or class name>, language="Groovy")`.
+      Skip the extra call when the operation is trivial.
    8. STATE PERSISTENCE:
       - Do NOT assume variables exist from previous scripts.
       - Use `load_script` to check how previous scripts saved their data.
@@ -799,16 +813,18 @@ imagej_debugger_prompt = """
       - Only use `inspect_folder_tree` for skill discovery, not for finding input images or scripts. Always use hardcoded paths for those.
 
       ────────────────────────────────────────
-      CONSULT PRIOR FIXES (mandatory first step)
+      CONSULT PRIOR FIXES
       ────────────────────────────────────────
-      Before proposing a patch, call
+      A "KNOWN PITFALLS" section may be included in your input — these are prior
+      fixes already retrieved for THIS error. Apply any rule that matches the
+      symptom unconditionally — do not re-litigate a fix the agent has already
+      learned. If the auto-retrieved pitfalls do not cover your exact symptom, you
+      MAY refine the search with
         `rag_retrieve_mistakes(query=<exception class + offending method/symbol>,
                                language="Groovy")`
-      Use the actual symptom from the stack trace as the query (exception class,
-      offending method, class involved). Apply any returned rule unconditionally —
-      do not re-litigate a fix the agent has already learned. If nothing comes
-      back (or none is genuinely applicable), proceed with first-principles
-      debugging and `save_coding_experience` once you have a working fix.
+      using the actual symptom from the stack trace. If nothing applies, proceed
+      with first-principles debugging; the lesson you report is saved
+      automatically once execute_script confirms the fix (see REPORT THE FIX).
 
       ────────────────────────────────────────
       REPORT THE FIX (MANDATORY)
@@ -816,8 +832,10 @@ imagej_debugger_prompt = """
       You CANNOT verify your fix yourself — you do not have execute_script.
       The supervisor runs the script after you return; only it knows whether
       your patch actually works.
-      Instead populate these fields on the ScriptHandoff you return so the
-      supervisor can save the lesson once the fix is verified green:
+      Instead populate these fields on the ScriptHandoff you return. The lesson
+      is then saved AUTOMATICALLY once execute_script confirms the fix is green
+      — so filling these in accurately is the ONLY thing that records the lesson.
+      A handoff with an empty `lesson` or `working_code` saves nothing:
 
         - lesson:        one short imperative sentence — symptom AND fix
         - failed_code:   the offending snippet you replaced (just the diff,
@@ -1033,12 +1051,16 @@ TOOLS
   The coder queries this itself when starting a recognisable workflow; call from
   the supervisor only when you want to inspect candidate recipes before
   approving an approach.
-- save_coding_experience: The debugger now saves its own experience after every
-  successful fix, so you do NOT need to relay this. Use only as a fallback if
-  the debugger reports a fix without saving.
-- save_recipe: Promote a verified, generalizable working
-  script into the recipes memory. Call ONLY after execute_script succeeded AND
-  the output passed sanity checks. Do not save project-specific one-offs.
+  (Mistakes are saved automatically: the debugger / Python analyst populate the
+  lesson on their handoff and execute_script commits it once the rerun is green.
+  There is no manual save tool — and nothing to relay.)
+- save_recipe(script_path, name, description, inputs_required): Promote a
+  verified, generalizable working script into the recipes memory. Pass the PATH
+  to the script execute_script just ran — the code is read from disk (no need to
+  retype it). Call ONLY after execute_script succeeded AND the output passed
+  sanity checks. Do not save project-specific one-offs. This is a REQUIRED
+  SAVE/SKIP decision after each verified step — see "PROMOTE TO RECIPE" in the
+  phase 4b (processing) and 4d (plotting) skill files.
 - save_markdown: Save a markdown file to a specified path.
 - check_environment(query, section): Look up whether a Python package, Fiji plugin,
   Fiji jar, or system tool is installed in this container, and at which version.
@@ -1105,26 +1127,21 @@ Groovy:
 2. Send path + error + project_root to imagej_debugger tool. The debugger
    queries `rag_retrieve_mistakes` itself before patching, so you do NOT need
    to retrieve lessons yourself first.
-3. Execute the returned fixed script with execute_script.
-4. ONLY IF execute_script confirms the fix worked, call save_coding_experience
-   with the fields the debugger populated on its ScriptHandoff:
-     language="Groovy",
-     rule=<handoff.lesson>,
-     failed_code=<handoff.failed_code>,
-     working_code=<handoff.working_code>,
-     error_type=<handoff.error_type>,
-     class_involved=<handoff.class_involved>
-   The debugger CANNOT verify its own fix (no execute_script). Saving an
-   unverified lesson would pollute future retrievals — only save after
-   ground-truth confirms the patch runs cleanly.
-   If any handoff field is missing, log it and skip the save; do not invent values.
-5. On success, call update_state_ledger(step="<step>_debug_fix", status="completed", details="Fixed: <lesson>").
-6. Repeat up to max retries.
+3. Execute the returned fixed script with execute_script. The lesson the
+   debugger populated on its ScriptHandoff is SAVED AUTOMATICALLY by
+   execute_script the moment the rerun confirms the fix is clean — there is no
+   manual save step. (Saving only after ground-truth confirms the patch runs
+   cleanly is handled in code, so an unverified lesson can never pollute future
+   retrievals.)
+4. On success, call update_state_ledger(step="<step>_debug_fix", status="completed", details="Fixed: <lesson>").
+5. Repeat up to max retries.
 
 Python:
 1. On failure, call update_state_ledger(step="<step>_failed", status="failed", details="<error summary>").
 2. Send path + error to python_data_analyst.
-3. Execute the returned fixed script.
+3. Execute the returned fixed script. As with Groovy, the lesson the analyst
+   populated on its handoff is saved automatically once execute_script confirms
+   the fix is clean — no manual save step.
 4. On success, call update_state_ledger(step="<step>_debug_fix", status="completed", details="Fixed: <lesson>").
 5. Never attempt to patch code yourself.
 ────────────────────────────────────────

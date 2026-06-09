@@ -1,12 +1,10 @@
 import os
 
-SCRIPTS_DIR = os.path.join(os.path.dirname(__file__), "../../scripts/saved_scripts")
-
 # Tools package - re-export all tools for backward compatibility
-from .file_tools import inspect_folder_tree, save_reusable_script, smart_file_reader, mkdir_copy, setup_analysis_workspace, save_markdown
+from .file_tools import inspect_folder_tree, smart_file_reader, mkdir_copy, setup_analysis_workspace, save_markdown
 from .rag_tools import (
     rag_retrieve_docs, rag_retrieve_mistakes, rag_retrieve_recipes,
-    save_coding_experience, save_recipe,
+    save_recipe,
 )
 from .script_tools import run_script_safe, save_script, execute_script, get_script_info, load_script, get_script_history
 from .imagej_tools import ask_user, load_image_ij, inspect_all_ui_windows, extract_image_metadata, capture_plugin_dialog, set_dialog_vision_llm, show_in_imagej_gui, close_imagej_windows
@@ -25,9 +23,9 @@ from .vector_stores import (
 )
 
 __all__ = [
-    'inspect_folder_tree', 'save_reusable_script', 'smart_file_reader',
+    'inspect_folder_tree', 'smart_file_reader',
     'rag_retrieve_docs', 'rag_retrieve_mistakes', 'rag_retrieve_recipes',
-    'save_coding_experience', 'save_recipe',
+    'save_recipe',
     'run_script_safe', 'ask_user', 'load_image_ij', 'show_in_imagej_gui', 'inspect_all_ui_windows', 'extract_image_metadata', 'capture_plugin_dialog', 'close_imagej_windows',
     'internet_search', 'inspect_java_class',
     'search_fiji_plugins', 'install_fiji_plugin', 'check_plugin_installed',
