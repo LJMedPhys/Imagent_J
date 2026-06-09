@@ -149,6 +149,18 @@ RUN find /opt/Fiji.app/plugins -name 'mcib3d-core*.jar' \
     && echo "=== imagescience JARs ===" \
     && find /opt/Fiji.app -name 'imagescience*' 2>/dev/null | sort
 
+# ── Fix SLF4J startup warnings ────────────────────────────────────────────────
+# Fiji ships SLF4J 2.x API (ServiceLoader-based providers) but logback-classic
+# 1.2.x uses the old StaticLoggerBinder mechanism from SLF4J 1.7.x, which 2.x
+# ignores — producing the "No SLF4J providers" and "Ignoring binding" warnings.
+# Remove the incompatible logback JAR and add the proper 2.x NOP provider.
+RUN rm -f /opt/Fiji.app/jars/logback-classic-1.2*.jar \
+    && wget -q "https://repo1.maven.org/maven2/org/slf4j/slf4j-nop/2.0.16/slf4j-nop-2.0.16.jar" \
+         -O /opt/Fiji.app/jars/slf4j-nop-2.0.16.jar \
+    && mkdir -p /opt/fiji-patches \
+    && cp /opt/Fiji.app/jars/slf4j-nop-2.0.16.jar /opt/fiji-patches/slf4j-nop-2.0.16.jar \
+    && echo "[slf4j] logback-classic-1.2.x removed; slf4j-nop-2.0.16 installed"
+
 # ── Bundled JARs for CSBDeep and StarDist ────────────────────────────────────
 # These are only on maven.scijava.org (not Maven Central), which is frequently
 # unavailable. Bundled here to make builds fully offline-capable.
