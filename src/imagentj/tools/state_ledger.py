@@ -221,7 +221,8 @@ def update_state_ledger(
                       Example: {"threshold_method": "Otsu", "gaussian_sigma": 1.5}
 
     Returns:
-        The full formatted ledger as a string (for immediate reference).
+        A one-line confirmation. This tool no longer echoes the whole ledger —
+        call read_state_ledger when you need the full project state.
     """
     ledger = _load_ledger(project_root)
 
@@ -247,7 +248,16 @@ def update_state_ledger(
     ledger["completed_steps"].append(entry)
     _save_ledger(project_root, ledger)
 
-    return _format_ledger(ledger)
+    # Return a compact acknowledgement, NOT the full ledger. Echoing the whole
+    # ledger after every step floods the supervisor's context and invites it to
+    # re-read/re-narrate state it already holds. Keep the "CURRENT PHASE: <x>"
+    # token so PhaseGuardMiddleware can still detect the phase from this output.
+    n_steps = len(ledger["completed_steps"])
+    return (
+        f"✓ Ledger updated — phase {phase}, step '{step}' ({status}). "
+        f"{n_steps} step(s) recorded. CURRENT PHASE: {phase}. "
+        f"Call read_state_ledger for the full project state."
+    )
 
 
 @tool
@@ -343,7 +353,8 @@ def set_ledger_metadata(
                                    "finding": "Use 'dark' flag for bright objects. 16-bit needs conversion to 8-bit."}
 
     Returns:
-        The full formatted ledger as a string.
+        A one-line confirmation listing the fields that changed. Call
+        read_state_ledger when you need the full project state.
     """
     ledger = _load_ledger(project_root)
     ledger.setdefault("project_root", project_root)
@@ -401,4 +412,23 @@ def set_ledger_metadata(
             })
 
     _save_ledger(project_root, ledger)
-    return _format_ledger(ledger)
+
+    # Compact acknowledgement instead of the full ledger (see update_state_ledger).
+    updated = [
+        name for name, val in (
+            ("scientific_goal", scientific_goal),
+            ("operating_mode", operating_mode),
+            ("pipeline_plan", pipeline_plan),
+            ("key_decision", key_decision),
+            ("image_metadata", image_metadata),
+            ("channels", channels),
+            ("input_files", input_files),
+            ("relevant_skill", relevant_skill),
+            ("recommended_plugin", recommended_plugin),
+            ("rag_reference", rag_reference),
+        ) if val is not None
+    ]
+    return (
+        f"✓ Ledger metadata updated: {', '.join(updated) if updated else 'no fields changed'}. "
+        f"Call read_state_ledger for the full project state."
+    )
