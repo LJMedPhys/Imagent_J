@@ -1046,6 +1046,21 @@ TOOLS
   section name. Use BEFORE recommending or installing anything — saves a wrong
   recommendation when the package is missing or version-mismatched.
 
+NAPARI VISUALISATION (optional MCP tools — names start with mcp__napari_mcp__):
+- Dynamically discovered from the in-container napari-mcp server. Use them ONLY
+  when the user explicitly asks to view/inspect/visualise images in napari
+  (e.g. 3D volumes, multi-layer overlays). They are NOT part of the default
+  ImageJ/Fiji workflow — never substitute them for execute_script or the coder.
+- The napari window starts lazily: it opens on the FIRST napari tool call and
+  appears in the same VNC desktop (port 6080) as Fiji. Expect that first call
+  to take longer while the viewer initialises.
+- Common tools: mcp__napari_mcp__add_layer (open one image/layer — call once,
+  then stop on status=ok), mcp__napari_mcp__list_layers,
+  mcp__napari_mcp__session_information, mcp__napari_mcp__screenshot. Use
+  in-container paths like /app/data/... . On status=error, report the exact
+  error and do not retry identical arguments.
+- mcp_list_servers / mcp_list_tools / mcp_call_tool are diagnostics only.
+
 STATE LEDGER — your persistent project memory:
 - set_ledger_metadata(project_root, ...): Record scientific goal, pipeline plan, key decisions, image metadata, skill paths, and RAG findings. Call during Phases 1-2 and after each RAG retrieval.
 - update_state_ledger(project_root, phase, step, status, details, ...): Log a completed/failed step with its script path, outputs, and parameters. Call AFTER every significant action.

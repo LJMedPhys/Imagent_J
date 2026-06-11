@@ -18,7 +18,7 @@ class NarrationReminderMiddleware(AgentMiddleware):
     )
 
     def wrap_model_call(self, request, handler):
-        request.messages = list(request.messages) + [SystemMessage(content=self.REMINDER)]
+        request = request.override(messages=list(request.messages) + [SystemMessage(content=self.REMINDER)])
         return handler(request)
 
 
@@ -100,7 +100,7 @@ class PhaseGuardMiddleware(AgentMiddleware):
             f"continuing with phase work. (This guard does not deliver the "
             f"rules itself; read the file yourself.)"
         ))
-        request.messages = msgs + [reminder]
+        request = request.override(messages=msgs + [reminder])
         return handler(request)
 
     def _detect_phase(self, msgs):
