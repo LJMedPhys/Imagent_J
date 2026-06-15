@@ -219,9 +219,9 @@ class ChatScrollArea(QWidget):
         self._container = QWidget()
         self._container.setStyleSheet("background: white;")
         self._msg_layout = QVBoxLayout(self._container)
-        self._msg_layout.setContentsMargins(8, 8, 8, 8)
+        self._msg_layout.setContentsMargins(2,2,2,2)
         self._msg_layout.setSpacing(6)
-        self._msg_layout.setAlignment(Qt.AlignTop)
+        self._msg_layout.addStretch(1)  # bottom-gravity: pushes messages down
         self._last_bubble = None
 
         self._scroll.setWidget(self._container)
@@ -263,6 +263,7 @@ class ChatScrollArea(QWidget):
             item = self._msg_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+        self._msg_layout.addStretch(1)  # restore bottom-gravity after clear
 
 
 class SubagentHeartbeatTimer:
@@ -1158,10 +1159,12 @@ class ImageJAgentGUI(QWidget):
     def on_agent_error(self, msg: str):
         log.error(f"Agent error: {msg}")
         self._stop_heartbeat()
-        self._agent_had_error    = True
         self._current_ai_bubble  = None
         self._ai_response_buffer = ""
         self._status_bubble      = None
+        if hasattr(self, 'worker') and self.worker._stop_requested:
+            return
+        self._agent_had_error    = True
         self.chat_scroll.add_message('error', f"Agent error:\n{msg}")
         self.status_label.setText("Error")
         self.status_label.setStyleSheet("color: red;")
