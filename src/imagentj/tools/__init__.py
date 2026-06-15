@@ -17,6 +17,7 @@ from .middleware import SafeToolLoggerMiddleware, TodoDisplayMiddleware, Narrati
 # from .vision_tools import capture_ij_window, build_compilation, analyze_image, set_vision_llm  # VLM disabled
 from .state_ledger import update_state_ledger, read_state_ledger, set_ledger_metadata, get_ledger_context
 from .environment_tools import check_environment
+from .auto_ui_tools import click_menu_path, perform_dialog_actions, verify_fiji_state
 
 # Lazy accessors for vector stores (RAG is optional)
 from .vector_stores import (
@@ -39,5 +40,6 @@ __all__ = [
     'setup_analysis_workspace', 'save_markdown',
     'set_vision_llm', 'capture_ij_window', 'build_compilation', 'analyze_image',
     'update_state_ledger', 'read_state_ledger', 'set_ledger_metadata', 'get_ledger_context',
-    'check_environment'
+    'check_environment',
+    'click_menu_path', 'perform_dialog_actions', 'verify_fiji_state',
 ]

@@ -44,6 +44,7 @@ from .tools import (
     update_state_ledger, read_state_ledger, set_ledger_metadata, get_ledger_context,
     check_environment,
     set_dialog_vision_llm,
+    click_menu_path, perform_dialog_actions, verify_fiji_state,
     # capture_ij_window, build_compilation, analyze_image,  # VLM disabled
 )
 from imagentj.tracker import UsageMetrics, MetricsSignalBridge, UsageTrackerCallback
@@ -689,6 +690,10 @@ def init_agent():
             setup_analysis_workspace,
             save_markdown,
             check_environment,
+            # ── auto-ui (active only in operating_mode == "auto_ui") ─────────
+            click_menu_path,
+            perform_dialog_actions,
+            verify_fiji_state,
             # ── state ledger (persistent project memory) ─────────────────────
             update_state_ledger,
             read_state_ledger,

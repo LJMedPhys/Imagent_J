@@ -26,6 +26,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # ocl-icd-opencl-dev — provides the unversioned libOpenCL.so symlink that
     #                       JOCL needs for dlopen("libOpenCL.so") to succeed
     pocl-opencl-icd ocl-icd-libopencl1 ocl-icd-opencl-dev \
+    # Auto-UI: X11 mouse/keyboard control + window-scoped screenshots
+    xdotool imagemagick \
     # Utilities
     wget unzip procps curl build-essential cmake ninja-build\
     # Locale support — ilastik4ij sets LC_ALL=en_US.UTF-8 in the subprocess

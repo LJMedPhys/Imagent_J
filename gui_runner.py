@@ -50,7 +50,7 @@ To get started, please share:
 - **Image details:** 1-2 sample images (file type), single image or batch?
 - **File location:** file/folder path or is the image open in the window.
 - **Outputs:** tables/measurements, labeled masks/overlays, ROIs, saved images, what format.
-- **Solving approach (UI/script):** do you want to go click-by-click via user interface or do you want scripts to run in the background for you?
+- **Solving approach (script/UI/Auto-UI):** do you want automated Groovy scripts to run in the background, step-by-step guidance through the Fiji menus (you click), or fully automatic clicking where the AI controls Fiji for you?
 - **Plugin preference:** are there specific plugin/models you want to use.
 
 If you're unsure, tell me what task do you want to solve and provide one representative image."""

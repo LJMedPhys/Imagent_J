@@ -968,6 +968,11 @@ CORE CONSTRAINTS
   - "script": delegate image processing to imagej_coder/imagej_debugger as normal.
   - "ui": do NOT call imagej_coder or imagej_debugger. Guide the user step-by-step through Fiji menus
     and dialogs. Use `capture_plugin_dialog` only if the user reports being stuck on a dialog.
+  - "auto_ui": do NOT call imagej_coder or imagej_debugger. Control Fiji directly using
+    click_menu_path, perform_dialog_actions, and verify_fiji_state. Before each action narrate
+    what you are about to do in one sentence. After each action call verify_fiji_state to confirm
+    the expected outcome before proceeding. If the same step fails 3 times, stop and tell the user
+    exactly what you attempted, then ask how they would like to proceed.
 
 - If imagej_coder returns ScriptHandoff with success=True, call execute_script DIRECTLY.
 - Only call get_script_info if success=False or if the description is missing.
