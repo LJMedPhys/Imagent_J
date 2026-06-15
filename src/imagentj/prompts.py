@@ -905,6 +905,21 @@ When the task explicitly contains "INSTALL <plugin_name>":
 2. Report success/failure in the response.
 
 ────────────────────────────────────────
+SEGMENTATION ROUTING (pick the right tool — do NOT default to TrackMate)
+────────────────────────────────────────
+Segmentation is NOT tracking. Only choose a TrackMate-* detector when the goal is to
+LINK objects across TIME frames. For a single still image (or independent per-frame
+segmentation), route by the task:
+- Star-convex NUCLEI (fluorescence / H&E), 2D → StarDist
+- Cells / cytoplasm / bright-field / irregular (non-star-convex) with Cellpose models, 2D
+  → "Cellpose (BIOP)" (direct wrapper; returns the label image in-process, no /tmp scraping).
+  PREFER this over TrackMate-Cellpose for still images. cpsam = Cellpose-SAM (heaviest, GPU-ideal).
+- Touching objects, classical (you have a threshold) → MorphoLibJ marker-controlled watershed
+- Pixel classification / unusual textures → Labkit or ilastik
+- Code-free published BioImage-Model-Zoo model (e.g. InstanSeg) → DeepImageJ
+- LINK objects across TIME (tracking) → TrackMate (+ Cellpose/StarDist detector)
+
+────────────────────────────────────────
 EVALUATION CRITERIA
 ────────────────────────────────────────
 Prefer plugins that:
