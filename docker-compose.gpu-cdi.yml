@@ -1,0 +1,42 @@
+# GPU override (CDI / device-request variant) for amd64 hosts with an NVIDIA GPU.
+#
+# Use this INSTEAD of docker-compose.gpu.yml on hosts that expose GPUs through the
+# modern CDI / device-request path (`docker run --gpus all ...` works) rather than a
+# named 'nvidia' runtime. Typical of cloud, CI, and recent nvidia-container-toolkit
+# installs that did not register a named runtime in the Docker daemon.
+#
+# Pick the right file for your host:
+#   docker info | grep -i runtime
+#     • lists 'nvidia'                       → use docker-compose.gpu.yml (runtime path)
+#   docker run --rm --gpus all ubuntu nvidia-smi
+#     • prints the GPU table                 → use THIS file (CDI / device-request path)
+#   If both work, prefer docker-compose.gpu.yml (matches the rest of the project).
+#
+# Build:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu-cdi.yml build
+# Run:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu-cdi.yml up
+#
+# CUDA_TAG semantics are identical to docker-compose.gpu.yml: cu126 default; only
+# cu126/cu128 publish torch 2.11.0 wheels (cu126 → driver 560+, cu128 → 570+).
+
+services:
+  imagentj:
+    image: ${IMAGENTJ_IMAGE:-agenticj:gpu-local}
+    build:
+      args:
+        USE_GPU: "true"
+        CUDA_TAG: ${CUDA_TAG:-cu126}
+    environment:
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    # Request GPUs via Docker's device API (the compose equivalent of `--gpus`).
+    # This deep-merges with the cpu/memory `deploy` block in the base compose file.
+    # To scope to specific GPUs on a shared node, replace `count: all` with e.g.
+    #   device_ids: ['0']   (or ['0','3'])   — count and device_ids are mutually exclusive.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
