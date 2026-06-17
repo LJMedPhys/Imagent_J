@@ -2,6 +2,16 @@ FROM continuumio/miniconda3:latest AS base-cpu
 ENV DEBIAN_FRONTEND=noninteractive
 FROM base-cpu AS cpu
 ARG TARGETARCH
+# Set USE_GPU=true at build time to install CUDA-enabled PyTorch / TensorFlow (amd64 only).
+# CUDA_TAG selects the PyTorch wheel index. Default cu121 (CUDA 12.1) requires driver 530+,
+# which covers RTX 20xx+ and most post-2022 setups.
+# tensorflow[and-cuda]==2.15.1 bundles its own CUDA 12.2 libs (driver 535+), so the
+# effective minimum with the default tag is driver 535.
+# Common overrides:
+#   cu118 → driver 520+  (widest compatibility, if torch 2.11.0 has a cu118 build)
+#   cu124 → driver 550+  (RTX 40xx / A100 / H100 users already on fresh drivers)
+ARG USE_GPU=false
+ARG CUDA_TAG=cu121
 
 # ── Core system dependencies (rarely change) ─────────────────────────────────
 # Split from fonts to preserve cache when adding new fonts
@@ -212,11 +222,15 @@ ENV CONDA_DEFAULT_ENV=local_imagent_J
 # ── Conda env: cellpose  (PyTorch + Cellpose + Omnipose, served by TrackMate-Cellpose and TrackMate-Omnipose) ───
 # Omnipose 1.x is built on cellpose 3.x, so they share one env.
 # The micromamba shim routes both '-n cellpose' and '-n omnipose' here.
-# Snapshot (2026-04-30): Python 3.10.20, cellpose 3.1.1.2, omnipose 1.1.4, torch 2.11.0+cpu
+# Snapshot (2026-04-30): Python 3.10.20, cellpose 3.1.1.2, omnipose 1.1.4, torch 2.11.0+cpu|cu124
 RUN /opt/conda/bin/conda create -n cellpose python=3.10 -y \
     && if [ "$TARGETARCH" = "arm64" ]; then \
         /opt/conda/envs/cellpose/bin/pip install --no-cache-dir \
             'torch==2.11.0' 'torchvision==0.26.0'; \
+    elif [ "$USE_GPU" = "true" ]; then \
+        /opt/conda/envs/cellpose/bin/pip install --no-cache-dir \
+            'torch==2.11.0' 'torchvision==0.26.0' \
+            --index-url https://download.pytorch.org/whl/${CUDA_TAG}; \
     else \
         /opt/conda/envs/cellpose/bin/pip install --no-cache-dir \
             'torch==2.11.0' 'torchvision==0.26.0' \
@@ -238,11 +252,15 @@ RUN /opt/conda/bin/conda create -n cellpose python=3.10 -y \
 # TrackMate's CondaCLIConfigurator lists all conda envs in a dropdown — the user
 # selects 'cellpose4' in the Cellpose-SAM detector panel.
 # The micromamba shim routes '-n cellpose4' → /opt/conda/envs/cellpose4.
-# Snapshot (2026-04-30): Python 3.11.15, cellpose 4.1.1, segment-anything 1.0, torch 2.11.0+cpu
+# Snapshot (2026-04-30): Python 3.11.15, cellpose 4.1.1, segment-anything 1.0, torch 2.11.0+cpu|cu124
 RUN /opt/conda/bin/conda create -n cellpose4 python=3.11 -y \
     && if [ "$TARGETARCH" = "arm64" ]; then \
         /opt/conda/envs/cellpose4/bin/pip install --no-cache-dir \
             'torch==2.11.0' 'torchvision==0.26.0'; \
+    elif [ "$USE_GPU" = "true" ]; then \
+        /opt/conda/envs/cellpose4/bin/pip install --no-cache-dir \
+            'torch==2.11.0' 'torchvision==0.26.0' \
+            --index-url https://download.pytorch.org/whl/${CUDA_TAG}; \
     else \
         /opt/conda/envs/cellpose4/bin/pip install --no-cache-dir \
             'torch==2.11.0' 'torchvision==0.26.0' \
@@ -262,11 +280,15 @@ RUN /opt/conda/bin/conda create -n cellpose4 python=3.11 -y \
 # Python 3.11 + TF 2.15 is the most stable combo for CSBDeep
 # (uses tf.compat.v1 graph APIs, which became fragile in TF 2.17+).
 # Snapshot (2026-04-30): Python 3.11.15, stardist 0.9.2, csbdeep 0.8.2,
-#   tensorflow-cpu 2.15.1, numpy 1.26.4
+#   tensorflow[-cpu|[and-cuda]] 2.15.1, numpy 1.26.4
 # arm64 uses generic 'tensorflow' (no -cpu suffix) — the linux/aarch64 TF wheel
 # is not published under the tensorflow-cpu name.
+# GPU (amd64 only): tensorflow[and-cuda] bundles the CUDA 12.2 runtime libraries
+# so no system CUDA install is needed in the container.
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
         TF_PACKAGE='tensorflow==2.15.1'; \
+    elif [ "$USE_GPU" = "true" ]; then \
+        TF_PACKAGE='tensorflow[and-cuda]==2.15.1'; \
     else \
         TF_PACKAGE='tensorflow-cpu==2.15.1'; \
     fi \

@@ -402,6 +402,15 @@ if [ -z "$OPENAI_API_KEY" ] && [ -z "$OPEN_ROUTER_API_KEY" ]; then
     echo "[entrypoint]          place 'export OPENAI_API_KEY=...' in /home/imagentj/api_keys.env"
 fi
 
+# ── GPU availability check ───────────────────────────────────────────────────
+if command -v nvidia-smi &>/dev/null; then
+    echo "[entrypoint] NVIDIA GPU detected:"
+    nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader 2>/dev/null \
+        | sed 's/^/  /' || echo "  (nvidia-smi query failed)"
+else
+    echo "[entrypoint] No NVIDIA GPU detected — running on CPU"
+fi
+
 # ── Launch the application ───────────────────────────────────────────────────
 # PATH is already set in Dockerfile to include the conda env; no need to activate
 echo "[entrypoint] Launching: $@"
