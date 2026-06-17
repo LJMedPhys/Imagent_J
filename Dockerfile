@@ -3,15 +3,17 @@ ENV DEBIAN_FRONTEND=noninteractive
 FROM base-cpu AS cpu
 ARG TARGETARCH
 # Set USE_GPU=true at build time to install CUDA-enabled PyTorch / TensorFlow (amd64 only).
-# CUDA_TAG selects the PyTorch wheel index. Default cu121 (CUDA 12.1) requires driver 530+,
-# which covers RTX 20xx+ and most post-2022 setups.
-# tensorflow[and-cuda]==2.15.1 bundles its own CUDA 12.2 libs (driver 535+), so the
-# effective minimum with the default tag is driver 535.
-# Common overrides:
-#   cu118 → driver 520+  (widest compatibility, if torch 2.11.0 has a cu118 build)
-#   cu124 → driver 550+  (RTX 40xx / A100 / H100 users already on fresh drivers)
+# CUDA_TAG selects the PyTorch wheel index. torch==2.11.0 wheels are published ONLY for
+# cu126 and cu128 — older tags (cu118/cu121/cu124) top out at torch 2.6.0 and fail the
+# build with "No matching distribution found for torch==2.11.0". Default cu126 needs
+# driver 560+.
+# tensorflow[and-cuda]==2.15.1 bundles its own CUDA 12.2 libs (driver 535+); the
+# effective driver minimum is therefore set by the torch CUDA tag.
+# Valid overrides (must have a torch 2.11.0 build):
+#   cu126 → driver 560+  (default; widest driver compatibility for torch 2.11.0)
+#   cu128 → driver 570+  (newest CUDA; RTX 50xx / freshest drivers)
 ARG USE_GPU=false
-ARG CUDA_TAG=cu121
+ARG CUDA_TAG=cu126
 
 # ── Core system dependencies (rarely change) ─────────────────────────────────
 # Split from fonts to preserve cache when adding new fonts

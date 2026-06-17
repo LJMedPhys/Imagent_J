@@ -1,8 +1,9 @@
 # GPU override for amd64 hosts with an NVIDIA GPU.
 #
 # Requirements:
-#   • NVIDIA driver 520+ (for CUDA 12.4) installed on the host
-#   • nvidia-container-toolkit installed and configured
+#   • NVIDIA driver 560+ (for the default CUDA 12.6 tag) installed on the host
+#   • nvidia-container-toolkit installed and configured, with the 'nvidia' runtime
+#     registered in the Docker daemon
 #     (https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
 #
 # Build the GPU image:
@@ -12,10 +13,12 @@
 #   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up
 #
 # To target a different CUDA version set CUDA_TAG in your environment before building:
-#   CUDA_TAG=cu126 docker compose -f docker-compose.yml -f docker-compose.gpu.yml build
-#   Driver requirements: cu118 → 520+, cu121 → 530+, cu124 → 550+, cu126 → 560+
-#   tensorflow[and-cuda]==2.15.1 bundles CUDA 12.2 (driver 535+), so effective
-#   minimum with the default cu121 tag is driver 535.
+#   CUDA_TAG=cu128 docker compose -f docker-compose.yml -f docker-compose.gpu.yml build
+#   torch==2.11.0 wheels exist ONLY for cu126 and cu128 — older tags (cu118/cu121/cu124)
+#   top out at torch 2.6.0 and fail the build.
+#   Driver requirements: cu126 → 560+, cu128 → 570+
+#   tensorflow[and-cuda]==2.15.1 bundles CUDA 12.2 (driver 535+), so the effective
+#   driver minimum is set by the torch CUDA tag (560+ by default).
 
 services:
   imagentj:
@@ -23,15 +26,13 @@ services:
     build:
       args:
         USE_GPU: "true"
-        CUDA_TAG: ${CUDA_TAG:-cu124}
+        CUDA_TAG: ${CUDA_TAG:-cu126}
+    # Expose the host GPUs via the nvidia container runtime. This project uses
+    # `runtime: nvidia` + NVIDIA_VISIBLE_DEVICES rather than deploy.resources.devices,
+    # which would otherwise merge with the cpu/memory `deploy` block in the base
+    # compose file and is not honored by `docker compose up` the same way.
+    runtime: nvidia
     environment:
       # Expose all NVIDIA GPUs to the container runtime
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
