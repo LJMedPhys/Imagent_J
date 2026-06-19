@@ -9,8 +9,10 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .venv/
-data/
-qdrant_data/
+data/*
+!data/environment/
+!data/environment/**
+!data/example_1.tif
 src/config/keys.py
 .env
 *.log
