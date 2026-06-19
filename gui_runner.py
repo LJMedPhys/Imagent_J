@@ -221,7 +221,7 @@ class ChatScrollArea(QWidget):
         self._msg_layout = QVBoxLayout(self._container)
         self._msg_layout.setContentsMargins(2,2,2,2)
         self._msg_layout.setSpacing(6)
-        self._msg_layout.addStretch(1)  # bottom-gravity: pushes messages down
+        self._msg_layout.setAlignment(Qt.AlignTop)
         self._last_bubble = None
 
         self._scroll.setWidget(self._container)
@@ -263,7 +263,6 @@ class ChatScrollArea(QWidget):
             item = self._msg_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        self._msg_layout.addStretch(1)  # restore bottom-gravity after clear
 
 
 class SubagentHeartbeatTimer:
