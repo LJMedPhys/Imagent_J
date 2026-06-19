@@ -41,26 +41,11 @@ After EACH processing step (single-image verified + batch executed), call:
     script_path="<path>", output_paths=["<output_dir>"],
     parameters={"threshold_method": "Otsu", ...})
 
-## PROMOTE TO RECIPE (required decision after each verified step)
+## RECIPES (automatic — no action needed)
 
-After a step is verified (single-image approved AND its script ran cleanly),
-you MUST explicitly decide SAVE or SKIP for the recipe library — do not silently
-move on:
-
-- SAVE if the script is a generalizable, well-defined workflow a FUTURE project
-  could reuse (e.g. "Nuclei Segmentation via StarDist", "TurboReg registration",
-  "intensity measurement per ROI"). Call:
-    save_recipe(
-      script_path="<the verified script path>",   # code is READ from disk — do NOT paste it
-      name="<short title>",
-      description="<1-3 sentences: what it does and when to use it>",
-      inputs_required="<what must be ready, e.g. '2D Tiff with a DAPI channel'>")
-  Save the core processing script (the single-image version is usually the best
-  template). Saving a near-duplicate just bumps its times_seen — don't worry
-  about exact repeats.
-
-- SKIP if the script is a project-specific one-off (heavily hardcoded to this
-  dataset's quirks, or a trivial/ad-hoc operation). Do not pollute the recipe
-  library with one-offs.
-
-State your SAVE/SKIP choice in one short sentence, then continue.
+Recipes are saved automatically. The moment a script runs cleanly via
+execute_script, the Librarian evaluates it in the background and decides on its
+own whether it is a generalizable, novel recipe worth keeping (skipping one-offs
+and duplicates) and writes it with its own name/description. You do NOT need to
+call save_recipe — only use it to force-save a specific script you don't want
+left to the automatic decision.

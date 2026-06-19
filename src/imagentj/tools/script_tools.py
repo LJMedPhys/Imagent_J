@@ -848,15 +848,13 @@ def execute_script(directory: str, filename: str) -> str:
     else:
         return f"Error: File extension of {filename} is not supported for execution."
 
-    # Deterministic lesson capture: if the debugger buffered a fix for this exact
-    # script, persist it now that we have ground-truth on whether the rerun is
-    # clean. This replaces the unreliable supervisor-driven save. Lazy import
-    # avoids any import cycle with the RAG layer.
+    # On a verified-green run, hand the result to the background Librarian: it files
+    # the reusable recipe and/or the debugger's buffered error->fix lesson, dedups,
+    # and (periodically) rebalances CORE — all off the hot path, so the task never
+    # waits. Lazy import avoids any import cycle with the agents/RAG layer.
     try:
-        from .rag_tools import commit_pending_lesson
-        saved = commit_pending_lesson(full_path, output)
-        if saved:
-            output = f"{output}\n\n[memory] Auto-saved debugger lesson: {saved}"
+        from .learned_memory import on_success
+        on_success(directory, filename, output)
     except Exception:
         pass
 

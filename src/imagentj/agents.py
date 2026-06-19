@@ -27,13 +27,13 @@ from .prompts import (
     python_analyst_prompt,
     qa_reporter_prompt,
     plugin_manager_prompt,
+    librarian_prompt,
     # vlm_judge_prompt,  # VLM disabled
 )
 from .tools import (
     internet_search, inspect_all_ui_windows, capture_plugin_dialog,
     show_in_imagej_gui, close_imagej_windows,
     rag_retrieve_docs, inspect_java_class,
-    rag_retrieve_mistakes, rag_retrieve_recipes, save_recipe,
     inspect_folder_tree,
     smart_file_reader, inspect_csv_header,
     extract_image_metadata, search_fiji_plugins, install_fiji_plugin,
@@ -46,8 +46,9 @@ from .tools import (
     set_dialog_vision_llm,
     # capture_ij_window, build_compilation, analyze_image,  # VLM disabled
 )
-from .tools.rag_tools import (
-    register_pending_lesson, _retrieve_mistakes_raw, _retrieve_recipes_raw,
+from .tools.learned_memory import (
+    register_pending_lesson, core_pitfalls, core_recipes, recall,
+    library_add_pitfall, library_add_recipe, library_remove, library_set_core,
 )
 from imagentj.tracker import UsageMetrics, MetricsSignalBridge, UsageTrackerCallback
 
@@ -231,6 +232,20 @@ llm_nano = ChatOpenAI(
     callbacks=[shared_tracker],
 )
 
+# Model behind the background Librarian agent (curates the learned-memory wiki off
+# the hot path) and the gated recall() deep-search fallback. Kept small/cheap.
+llm_curator = ChatOpenAI(
+    model=m("openai/gpt-5.4-mini"),
+    api_key=api_key,
+    base_url=base_url,
+    temperature=0.,
+    reasoning_effort="low",
+    timeout=30,          # never let a stalled call hang the curator thread or
+    max_retries=1,       # the (gated) hot-path deep-recall fallback forever
+    verbose=True,
+    callbacks=[shared_tracker],
+)
+
 # llm_vlm = ChatOpenAI(  # VLM disabled
 #     model=m("openai/gpt-5.4-nano"),
 #     api_key=api_key,
@@ -255,8 +270,7 @@ def _make_coder_agent(model, name, system_prompt):
             load_script,
             get_script_history,
             smart_file_reader,
-            rag_retrieve_mistakes,
-            rag_retrieve_recipes,
+            recall,
             inspect_folder_tree,   # lets agent survey /app/skills/ before reading
         ],
         system_prompt=system_prompt,
@@ -290,8 +304,7 @@ _analyst_agent = create_agent(
         load_script,
         get_script_history,
         get_script_info,
-        rag_retrieve_mistakes,
-        rag_retrieve_recipes,
+        recall,
     ],
     system_prompt=python_analyst_prompt,
     response_format=ToolStrategy(schema=AnalystHandoff, handle_errors=True),
@@ -353,6 +366,30 @@ _plugin_agent = create_agent(
     ],
 )
 
+# Background Librarian — curates the learned-memory wiki off the hot path. Fired by
+# learned_memory.on_success() in a daemon thread on every verified-green run (the
+# task never waits). Acts ONLY through the deterministic library_* tools; its
+# operating manual is the skills/learned_memory skill (loaded via SkillsMiddleware).
+_librarian_skills_backend = FilesystemBackend(root_dir="/app/", virtual_mode=False)
+
+librarian_agent = create_agent(
+    llm_curator,
+    tools=[
+        library_add_pitfall,
+        library_add_recipe,
+        library_remove,
+        library_set_core,
+    ],
+    system_prompt=librarian_prompt,
+    name="librarian",
+    middleware=[
+        SkillsMiddleware(
+            backend=_librarian_skills_backend,
+            sources=["/app/skills/learned_memory/"],  # only the Librarian's own skill
+        ),
+    ],
+)
+
 # _vlm_agent = create_agent(
 #     llm_vlm,
 #     tools=[
@@ -390,18 +427,10 @@ def imagej_coder(task: str, project_root: str) -> ScriptHandoff:
 
     sections.append(f"TASK: {task}")
 
-    # Auto-inject known pitfalls so the coder avoids previously-learned errors at
-    # WRITE time. The mistakes store used to be debugger-only (read reactively,
-    # after a failure); surfacing it here — deterministically, like the ledger —
-    # lets the coder dodge the error before it writes the broken pattern.
-    sections.append(_build_pitfalls_section(task))
-
-    # Auto-inject a LEAN catalogue of matching recipes (name/description/inputs
-    # only — not the full code). This is always-on, unlike the old prompt-only
-    # "decide whether to query recipes" path. The coder pulls the full code for a
-    # chosen recipe via rag_retrieve_recipes — keeps the always-on cost small
-    # while telling the coder exactly what to fetch next.
-    sections.append(_build_recipes_section(task))
+    # Always inject the CORE pitfalls (can't-miss floor) + featured recipes. The
+    # coder pulls extra task-specific lessons/recipes itself via the recall() tool.
+    sections.append(core_pitfalls("Groovy"))
+    sections.append(core_recipes("Groovy"))
 
     agent = _make_coder_agent(model, "imagej_coder", imagej_coder_prompt)
 
@@ -410,75 +439,6 @@ def imagej_coder(task: str, project_root: str) -> ScriptHandoff:
         {"messages": [{"role": "user", "content": "\n\n".join(s for s in sections if s)}]},
     ).run()
     return result["structured_response"]
-
-
-def _build_pitfalls_section(query: str, language: str = "Groovy") -> str:
-    """Retrieve the most relevant past mistakes for `query` (a task description or
-    an error symptom) and format them as a KNOWN PITFALLS block. Returns "" when
-    RAG is unavailable or nothing relevant is found (the section is then skipped)."""
-    try:
-        mistakes = _retrieve_mistakes_raw(query=query, language=language, limit=5)
-    except Exception:
-        return ""
-
-    entries = []
-    for m in mistakes:
-        rule = (m.get("rule") or "").strip()
-        if not rule:
-            continue
-        entry = f"- {rule}"
-        working = (m.get("working_code") or "").strip()
-        if working:
-            indented = "\n".join("    " + line for line in working.splitlines())
-            entry += f"\n  WORKING PATTERN:\n{indented}"
-        entries.append(entry)
-
-    if not entries:
-        return ""
-
-    return (
-        "KNOWN PITFALLS (lessons from past failures — apply unconditionally where "
-        "the same class/call appears in this task; these are mistakes the agent "
-        "has already made and fixed):\n" + "\n".join(entries)
-    )
-
-
-def _build_recipes_section(task: str, language: str = "Groovy") -> str:
-    """Retrieve recipes matching `task` and format a LEAN catalogue (name,
-    description, inputs — no code). The agent fetches the full code of a chosen
-    recipe via the rag_retrieve_recipes tool. Returns "" when RAG is unavailable
-    or nothing relevant is found."""
-    try:
-        recipes = _retrieve_recipes_raw(task=task, language=language, limit=3)
-    except Exception:
-        return ""
-
-    entries = []
-    for r in recipes:
-        name = (r.get("name") or "").strip()
-        desc = (r.get("description") or "").strip()
-        if not (name or desc):
-            continue
-        line = f"- {name or '(unnamed)'}: {desc}"
-        inputs = r.get("inputs_required")
-        if inputs:
-            if isinstance(inputs, (list, tuple)):
-                inputs = ", ".join(str(i) for i in inputs)
-            line += f"\n  Inputs required: {inputs}"
-        entries.append(line)
-
-    if not entries:
-        return ""
-
-    return (
-        "AVAILABLE RECIPES (verified working scripts that may match this task — "
-        "shown as a catalogue only). If one fits, call "
-        f"rag_retrieve_recipes(task=<recipe name or short description>, "
-        f"language=\"{language}\") to fetch its full code, then ADAPT it to this "
-        "task's data, columns, and parameters — do not copy "
-        "verbatim. Ignore the catalogue for genuinely novel tasks:\n"
-        + "\n".join(entries)
-    )
 
 
 @tool
@@ -503,11 +463,9 @@ def imagej_debugger(script_path: str, error_message: str, project_root: str = ""
         if ledger_ctx:
             sections.insert(1, f"PROJECT STATE (for context):\n{ledger_ctx}")
 
-    # Auto-inject prior fixes deterministically, keyed on the ERROR SYMPTOM (not
-    # the task — the debugger's anchor is the stack trace). This guarantees the
-    # debugger always sees a relevant past fix even if it would not have queried;
-    # the prompt's manual rag_retrieve_mistakes call is now an optional refinement.
-    sections.append(_build_pitfalls_section(error_message))
+    # Always inject the CORE pitfalls floor. The debugger pulls error-specific
+    # lessons itself via the recall() tool (keyed on the stack trace).
+    sections.append(core_pitfalls("Groovy"))
 
     result = stop_signal.SubagentRunner(
         agent.invoke,
@@ -565,10 +523,10 @@ def python_data_analyst(task: str, input_csv: str, output_dir: str, project_root
             sections.append(f"PROJECT STATE (use for axis labels, units, and context):\n{ledger_ctx}")
     sections.append(f"TASK: {task}")
 
-    # Same write-time memory the Groovy coder gets, scoped to Python: known
-    # pitfalls (pandas/plotting lessons) and a lean recipe catalogue.
-    sections.append(_build_pitfalls_section(task, language="Python"))
-    sections.append(_build_recipes_section(task, language="Python"))
+    # Always inject the CORE pitfalls floor + featured recipes (Python). The
+    # analyst pulls extra lessons/recipes itself via the recall() tool.
+    sections.append(core_pitfalls("Python"))
+    sections.append(core_recipes("Python"))
 
     result = stop_signal.SubagentRunner(
         _analyst_agent.invoke,
@@ -799,9 +757,7 @@ def init_agent(enable_qa: bool = False):
             show_in_imagej_gui,
             close_imagej_windows,
             rag_retrieve_docs,
-            rag_retrieve_mistakes,
-            rag_retrieve_recipes,
-            save_recipe,
+            recall,
             inspect_folder_tree,
             smart_file_reader,
             extract_image_metadata,

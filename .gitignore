@@ -29,9 +29,11 @@ src/scripts/saved_scripts/
 
 checkpoints*
 
-/data/
+/data/*
 !/data/environment/
 !/data/environment/container_snapshot.md
+!/data/learned/
+/data/learned/.runcount
 
 .env
 
