@@ -44,7 +44,7 @@ services:
       # Bind-mount the host folder directly: qdrant_data/ is in .dockerignore and therefore
       # never reaches the image, so a named volume would always seed empty. The host folder
       # is the source of truth for ingested data.
-      - ./qdrant_data:/app/qdrant_data
+      - qdrant_data:/app/qdrant_data
       # Image data directory (place images in ./data on host, access as /mnt/data in container)
       - ${IMAGE_DATA_DIR:-./data}:/data
       # Source code mount for development (remove in production image)
@@ -107,6 +107,7 @@ volumes:
   appose_envs:
   imagentj_home:
   cellpose_models:
+  qdrant_data:
 
 networks:
   imagent_net:
