@@ -533,6 +533,11 @@ RUN mkdir -p /home/imagentj/.cellpose/models \
 # shadowing these baked-in config files. The entrypoint seeds it on first start.
 RUN cp -a /home/imagentj /home/imagentj.seed
 
+# -- Seed /app/data for mounted volume persistence -----------------------------
+# /app/data is a bind mount volume mounted at ./data. It starts empty,
+# shadowing these baked-in data files. The entrypoint seeds it on first start.
+RUN cp -a /app/data /app/data.seed
+
 # ── Environment defaults ─────────────────────────────────────────────────────
 ENV DISPLAY=:1
 ENV QT_QPA_PLATFORM=xcb

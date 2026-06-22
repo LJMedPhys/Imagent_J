@@ -46,6 +46,7 @@ PYEOF
 _seed_volume "fiji_jars"    "$FIJI_HOME/jars.seed"    "$FIJI_HOME/jars"    "$FIJI_HOME/jars/.seeded"
 _seed_volume "fiji_plugins" "$FIJI_HOME/plugins.seed" "$FIJI_HOME/plugins" "$FIJI_HOME/plugins/.seeded"
 _seed_volume "imagentj_home" "/home/imagentj.seed" "/home/imagentj" "/home/imagentj/.seeded"
+_seed_volume "app_data"     "/app/data.seed"     "/app/data"     "/app/data/.seeded"
 
 # ── Lock environment snapshot read-only ──────────────────────────────────────
 # The agent reads this file via check_environment() to know what's installed.
