@@ -7,13 +7,50 @@ An AI-powered agent for microscopy image analysis. Agentic-J runs ImageJ inside 
 Prerequisites:
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or Docker Engine + Compose on Linux)
-- [Git](https://git-scm.com/downloads) **and** [Git LFS](https://git-lfs.com/) — the RAG vector database (`qdrant_data/**/storage.sqlite`) is stored via Git LFS, so a plain clone without LFS will give you stub files that won't work.
 - ~8 GB RAM and ~30 GB free disk
 - An OpenAI **or** OpenRouter API key
 
-> The optional VLM Judge uses `google/gemini-3.5-flash` when
-> `OPEN_ROUTER_API_KEY` is set (including when both keys are present). OpenAI-only
-> setups use `gpt-5.6-luna` with high reasoning through the Responses API.
+### Run the published image without cloning the repository
+
+Use this path if you only want to run Agentic-J with Docker and do not need the source code locally.
+
+```bash
+# 1. Create a working folder and a data folder for your images/results
+mkdir -p Agentic-J-run/data
+cd Agentic-J-run
+
+# 2. Start Agentic-J from the published Docker Compose artifact
+docker compose \
+  -f oci://docker.io/mmvlab/agenticj-compose:latest \
+  run \
+  -d \
+  --service-ports \
+  -e OPEN_ROUTER_API_KEY="your-openrouter-api-key" \
+  -v "$PWD/data:/app/data" \
+  imagentj
+```
+
+Replace `your-openrouter-api-key` with your key, or set it to an empty string (`OPEN_ROUTER_API_KEY=""`) to enter the key in the browser setup wizard instead.
+
+Then open <http://localhost:6080/vnc.html> in your browser. Fiji and the Agentic-J chat panel run inside the virtual desktop.
+
+To stop and remove the container/network created by Compose:
+
+```bash
+docker compose \
+  -f oci://docker.io/mmvlab/agenticj-compose:latest \
+  down --remove-orphans
+```
+
+Place images you want to analyse in `./data/` inside the working folder — the agent sees them at `/app/data` inside the container.
+
+### Run from a source checkout
+
+Use this path if you want to build from the current source tree or edit the code.
+
+Additional prerequisite:
+
+- [Git](https://git-scm.com/downloads) **and** [Git LFS](https://git-lfs.com/) — the RAG vector database (`qdrant_data/**/storage.sqlite`) is stored via Git LFS, so a plain clone without LFS will give you stub files that won't work.
 
 Steps:
 
@@ -36,7 +73,7 @@ cp .env.template .env
 docker compose up
 ```
 
-Then open <http://localhost:6080/vnc.html> in your browser. Fiji and the Agentic-J chat panel run inside the virtual desktop.
+Then open <http://localhost:6080/vnc.html> in your browser.
 
 If no API key is set in `.env`, a setup wizard appears in the browser before Fiji launches.
 
