@@ -44,14 +44,17 @@ There are two kinds of run, and the message tells you which:
 
 - **Normal run** — just step 1: file the new candidate(s) if novel. Do **not** audit
   the library or rebalance CORE. (The lean snapshot only shows one-liners anyway.)
-- **Deep-clean run** (every few dispatches) — you also get the **FULL LIBRARY** with
-  every entry's full description, and you additionally do steps 2 and 3:
+- **Dedup/rebalance run** — you also get a **bounded shard** of the library with full
+  descriptions (either the newest entries, or a rotating full-coverage shard — the
+  message says which), and you additionally do steps 2 and 3. The shard is **sorted so
+  similar entries sit next to each other**, and you must act **only on entries shown**
+  — the rest of the library is covered by other passes.
 
-2. **Dedup the whole library** with `library_remove(hash)`. Using the full
-   descriptions, find near-duplicate entries (recipes doing essentially the same
-   operation/workflow; pitfalls with the same root cause + fix), KEEP the clearest /
-   most-seen / most-robust one, and remove the redundant others. This is where
-   duplicate cleanup happens — so be willing to remove here.
+2. **Dedup the shard** with `library_remove(hash)`. Among the entries shown, find
+   near-duplicates (recipes doing essentially the same operation/workflow; pitfalls
+   with the same root cause + fix), KEEP the clearest / most-seen / most-robust one,
+   and remove the redundant others. This is where duplicate cleanup happens — so be
+   willing to remove here.
 3. **Rebalance CORE** with `library_set_core(language, kind, core_hashes)` — the
    comma-separated hashes that should be CORE for that language. This both promotes
    (regular→CORE) and demotes (CORE→regular) in one call and enforces the per-language

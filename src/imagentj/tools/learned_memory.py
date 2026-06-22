@@ -22,11 +22,14 @@ HOW IT WORKS:
   * CAPTURE + CURATE is the Librarian subagent (agents.librarian_agent, defined
     with the skills/learned_memory skill). on_success() fires it in a BACKGROUND
     thread on every verified-green run — the task never waits. On a NORMAL run it
-    just files the new recipe/pitfall. Every DEEP_EVERY-th dispatch (counted in a
-    persisted .runcount) is a DEEP-CLEAN run: it gets the full-description library and
-    additionally dedups the whole library and rebalances CORE (promotion AND demotion
-    to a fixed cap). It acts ONLY through the deterministic library_* tools below, so
-    it can judge but never garble or lose the format.
+    just files the new recipe/pitfall. Dispatches are counted in a persisted .runcount
+    that drives a TWO-TIER lint cadence (kept context-bounded as the library grows):
+    every LINT_RECENT_EVERY-th dispatch reviews the newest entries; every
+    LINT_FULL_EVERY-th reviews the next similarity-sorted shard via a persisted cursor
+    (.lintcursor) so all entries are covered over time. Each lint pass shows at most
+    LINT_BUDGET regular entries plus the (capped) CORE, then dedups and rebalances CORE
+    (promotion AND demotion). It acts ONLY through the deterministic library_* tools
+    below, so it can judge but never garble or lose the format.
 """
 import os
 import re
@@ -47,7 +50,15 @@ LOG_PATH = os.path.join(ROOT, "log.md")
 # analyst never sees Groovy entries and each language's CORE caps independently.
 CORE_MAX = 12             # fixed cap on CORE pitfalls per language
 CORE_RECIPE_MAX = 5       # fixed cap on featured recipes per language
-DEEP_EVERY = 3            # Librarian dispatches between deep dedup + CORE rebalance passes
+# Two-tier linting keeps the Librarian's context BOUNDED as the library grows:
+#  - tier 1 (recent): every LINT_RECENT_EVERY dispatches, review the newest entries.
+#  - tier 2 (full):   every LINT_FULL_EVERY dispatches, review the next similarity-
+#    sorted shard via a persisted cursor, so all entries are covered over time.
+# Either way at most LINT_BUDGET regular entries are shown per pass.
+LINT_RECENT_EVERY = 3
+LINT_FULL_EVERY = 10
+LINT_RECENT_N = 10
+LINT_BUDGET = 30
 RECALL_K = 5
 RECIPE_MIN_CHARS = 200    # below this, too trivial to be a reusable recipe
 DEEP_RECALL = os.environ.get("LEARNED_DEEP_RECALL", "1") != "0"
@@ -57,7 +68,8 @@ _STOP = {"the", "and", "for", "with", "from", "this", "that", "image", "images",
          "script", "data", "use", "via", "into", "run", "all", "new", "get", "set"}
 _LOCK = threading.Lock()
 _PENDING: Dict[str, dict] = {}    # script_path -> buffered failure->fix lesson
-_RUNCOUNT_PATH = os.path.join(ROOT, ".runcount")  # persisted dispatch counter (survives restarts)
+_RUNCOUNT_PATH = os.path.join(ROOT, ".runcount")    # persisted dispatch counter (survives restarts)
+_LINTCURSOR_PATH = os.path.join(ROOT, ".lintcursor")  # per-language tier-2 sweep cursor
 _BLOCK_RE = re.compile(r"<!--[pr]:[^>]*-->.*?(?=\n<!--[pr]:|\Z)", re.S)
 # Plugin/environment-specific lessons are NEVER promoted to CORE: they are version/
 # install-site specific, so injecting them into every run is noise (and can be wrong
@@ -196,6 +208,25 @@ def _bump_runcount() -> int:
         with open(_RUNCOUNT_PATH, "w", encoding="utf-8") as f:
             f.write(str(n))
     return n
+
+def _lint_cursor(language: str) -> int:
+    import json
+    try:
+        return int(json.loads(_read(_LINTCURSOR_PATH) or "{}").get(language, 0))
+    except Exception:
+        return 0
+
+def _set_lint_cursor(language: str, value: int) -> None:
+    import json
+    with _LOCK:
+        try:
+            d = json.loads(_read(_LINTCURSOR_PATH) or "{}")
+        except Exception:
+            d = {}
+        d[language] = value
+        os.makedirs(ROOT, exist_ok=True)
+        with open(_LINTCURSOR_PATH, "w", encoding="utf-8") as f:
+            f.write(json.dumps(d))
 
 def _safe_name(name: str) -> str:
     s = re.sub(r"[^A-Za-z0-9]+", "_", (name or "recipe").strip()).strip("_").lower()
@@ -494,10 +525,12 @@ def on_success(directory: str, filename: str, execute_output: str) -> None:
                  and not _recipe_exists(language, _hash(code)))
     if not recipe_ok and not pending:
         return                                       # nothing new to learn
-    deep = _bump_runcount() % DEEP_EVERY == 0        # every Nth dispatch: deep dedup pass
+    n = _bump_runcount()                             # two-tier lint cadence (bounded context)
+    mode = ("full" if n % LINT_FULL_EVERY == 0
+            else "recent" if n % LINT_RECENT_EVERY == 0 else None)
     desc = _script_description(directory, filename)
     threading.Thread(target=_librarian_bg, daemon=True,
-                     args=(language, full, recipe_ok, desc, pending, deep)).start()
+                     args=(language, full, recipe_ok, desc, pending, mode)).start()
 
 def _snapshot(language: str) -> str:
     def one(b):
@@ -520,31 +553,58 @@ def _snapshot(language: str) -> str:
         f"REGULAR RECIPES:\n{fmt(_blocks(_recipe_page(language)))}"
     )
 
-def _full_snapshot(language: str, cap: int = 40) -> str:
-    """Full-description view for the deep dedup/rebalance pass: each entry's FULL
-    rule (pitfall) or name + FULL description (recipe), so the Librarian can judge
-    semantic equivalence — not the truncated one-liners of the lean snapshot."""
-    def one(b):
-        if _is_recipe(b):
-            lines = [ln.strip(" -") for ln in _body(b).splitlines()
-                     if ln.strip() and not ln.strip().startswith("SCRIPT:")]
-            txt = " — ".join(lines[:2])                     # name + full description
-        else:
-            txt = " ".join(ln.strip(" -") for ln in _body(b).splitlines() if ln.strip())
-        return f"  [{_hash_of(b)} seen:{_seen(b)}] {txt}"
+def _full_line(b) -> str:
+    """Full-description line for a lint pass: pitfall -> the FULL rule; recipe ->
+    name + FULL description, so the Librarian can judge semantic equivalence."""
+    if _is_recipe(b):
+        lines = [ln.strip(" -") for ln in _body(b).splitlines()
+                 if ln.strip() and not ln.strip().startswith("SCRIPT:")]
+        txt = " — ".join(lines[:2])
+    else:
+        txt = " ".join(ln.strip(" -") for ln in _body(b).splitlines() if ln.strip())
+    return f"  [{_hash_of(b)} seen:{_seen(b)}] {txt}"
+
+def _sig(b) -> str:
+    """Lexical-similarity signature: near-duplicate entries share most match tokens,
+    so sorting by this string clusters them adjacently (so they land in one shard)."""
+    return " ".join(sorted(_match_tokens(b)))
+
+def _lint_shard(language: str, mode: str):
+    """Pick a BOUNDED (<= LINT_BUDGET) set of regular entries for the Librarian to
+    dedup. 'recent' -> the newest entries (append order). 'full' -> the next
+    similarity-sorted shard from a persisted, wrapping cursor (full coverage over
+    successive passes). Returns (pitfall_blocks, recipe_blocks)."""
+    reg_pit = _blocks(_pitfall_page(language))
+    reg_rec = _blocks(_recipe_page(language))
+    if mode == "recent":
+        return reg_pit[-LINT_RECENT_N:], reg_rec[-LINT_RECENT_N:]
+    pool = sorted(reg_pit + reg_rec, key=_sig)            # cluster near-dups together
+    if not pool:
+        return [], []
+    cur = _lint_cursor(language) % len(pool)
+    take = min(LINT_BUDGET, len(pool))
+    shard = [pool[(cur + i) % len(pool)] for i in range(take)]
+    _set_lint_cursor(language, (cur + take) % len(pool))
+    return ([b for b in shard if not _is_recipe(b)],
+            [b for b in shard if _is_recipe(b)])
+
+def _lint_snapshot(language: str, mode: str) -> str:
+    """CORE (full, for rebalance) + a bounded shard of the regular library (for dedup)."""
+    pit, rec = _lint_shard(language, mode)
     def sect(label, blocks):
-        rows = sorted(blocks, key=_seen, reverse=True)[:cap]
-        return f"{label}:\n" + ("\n".join(one(b) for b in rows) or "  (none)")
+        return f"{label}:\n" + ("\n".join(_full_line(b) for b in blocks) or "  (none)")
+    scope = "newest entries" if mode == "recent" else "rotating full-coverage shard"
     return "\n".join((
-        f"FULL LIBRARY (language={language}) — for dedup + CORE rebalance",
+        f"LIBRARY ({language}) — {scope} for dedup; CORE shown in full for rebalance",
         sect(f"CORE PITFALLS (cap {CORE_MAX})", _blocks(_core_pitfall_page(language))),
-        sect("REGULAR PITFALLS", _blocks(_pitfall_page(language))),
+        sect("REGULAR PITFALLS (this shard)", pit),
         sect(f"CORE RECIPES (cap {CORE_RECIPE_MAX})", _blocks(_core_recipe_page(language))),
-        sect("REGULAR RECIPES", _blocks(_recipe_page(language))),
+        sect("REGULAR RECIPES (this shard)", rec),
     ))
 
-def _librarian_bg(language, full, recipe_ok, desc, pending, deep) -> None:
-    snapshot = _full_snapshot(language) if deep else _snapshot(language)
+def _librarian_bg(language, full, recipe_ok, desc, pending, mode) -> None:
+    lint = mode in ("recent", "full")
+    snapshot = _lint_snapshot(language, mode) if lint else _snapshot(language)
     parts = [f"A script just ran GREEN (verified). Maintain the {language} learned-memory "
              f"wiki, following the learned_memory skill. Act ONLY through the library_* "
              f"tools.", "", snapshot, ""]
@@ -557,16 +617,16 @@ def _librarian_bg(language, full, recipe_ok, desc, pending, deep) -> None:
         parts += [f"NEW PITFALL CANDIDATE (the fix that produced this green run):\n"
                   f"  rule: {pending['rule']}\n  error_type: {pending.get('error_type')} "
                   f"class: {pending.get('class_involved')}\n  working snippet:\n{snip}", ""]
-    if deep:
+    if lint:
         parts.append(
-            "DEEP-CLEAN RUN. DO: (1) file each NEW candidate above that is genuinely novel "
-            "(skip true duplicates). (2) DEDUP: from the FULL library above, find near-"
-            "duplicate entries (recipes doing essentially the same operation/workflow; "
-            "pitfalls with the same root cause + fix), KEEP the clearest/most-seen one and "
-            "library_remove the redundant others — prefer keeping the more robust variant. "
-            "(3) REBALANCE CORE for pitfalls and recipes with library_set_core: promote the "
-            "most broadly-reusable, high-value entries and demote stale/narrow ones, within "
-            "the caps.")
+            "DEDUP/REBALANCE RUN. DO: (1) file each NEW candidate above that is genuinely "
+            "novel (skip true duplicates). (2) DEDUP within the shard shown above (it is "
+            "sorted so similar entries are adjacent): near-duplicate recipes (same "
+            "operation/workflow) or pitfalls (same root cause + fix) -> KEEP the clearest/"
+            "most-seen one and library_remove the redundant others, preferring the more "
+            "robust variant. (3) REBALANCE CORE for pitfalls and recipes with "
+            "library_set_core: promote the most broadly-reusable, high-value entries and "
+            "demote stale/narrow ones, within the caps. Only act on entries shown above.")
     else:
         parts.append(
             "DO: file each NEW candidate above that is genuinely novel (skip a true "
