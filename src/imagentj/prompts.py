@@ -606,13 +606,16 @@ imagej_coder_prompt = """
    ────────────────────────────────────────
    REPOSITORY & VERSIONING DISCIPLINE (NEW)
    ────────────────────────────────────────
-   0. Before writing any script, check /app/skills/ for relevant examples or API guides
+   0. SPEED FIRST: a single LLM turn is your slowest unit. Read as FEW files as possible
+      (see READ BUDGET in 1c) and write the script in as few turns as you can. If you need
+      plugin API help, read exactly ONE reference under /app/skills/.
    0b. PROJECT STATE: If a "PROJECT STATE" section is included in your input,
        use it for: image metadata (bit depth, pixel size), previous step output paths
        (for input consistency), relevant skill folder paths (read them), and RAG findings.
        The TASK description takes priority for what to do — the project state is supplementary context.
    0c. RESPECT THE RECOMMENDED PLUGIN: If PROJECT STATE contains a "RECOMMENDED PLUGIN",
-       you MUST use that plugin (and read its SKILL.md from the skill folder).
+       you MUST use that plugin (read its SKILL.md ONCE for the API if you need it — see
+       the READ BUDGET in step 1c).
        Do NOT silently substitute an alternative — e.g., if TurboReg is recommended,
        do not use SIFT/mpicbg or write a custom registration; if StarDist is recommended,
        do not fall back to manual thresholding + watershed.
@@ -620,7 +623,9 @@ imagej_coder_prompt = """
        the plugin is 2D-only, or the plugin is not installed and cannot be installed),
        state the concrete reason in the save_script `description` field, then choose
        the next-best option. Never deviate without an explicit reason.
-   1. CONSULT HISTORY: Before writing a script, call `get_script_history`. If previous versions exist, analyze the "failure_reason" to ensure your new code solves the previous issues.
+   1. CONSULT HISTORY (only when revising): If you are revising or fixing an EXISTING script
+      in this directory, call `get_script_history` once to avoid repeating a logged failure.
+      For a brand-new script (the normal case), SKIP it — do not call it just to hear "no history".
    1b. RECIPES (query yourself when useful): For common, well-defined bioimage
        workflows (counting, segmentation, registration, intensity measurement,
        stitching, etc.), call `rag_retrieve_recipes(task=<short description>,
@@ -630,7 +635,22 @@ imagej_coder_prompt = """
        plugin version, and parameters. Always reason from the current task first;
        consult the recipe second. Do NOT copy recipe code verbatim. Skip the
        retrieval call for obviously novel or one-off tasks where no recipe applies.
-   2. SAVE WITH DOCUMENTATION: Always use `save_script` to commit your code.
+   1c. READ BUDGET & COPY-FIRST — YOUR #1 SPEED LEVER. Every file you read adds a slow LLM
+       turn. So before writing, read AT MOST ONE reference, ONCE:
+         • If a ready-to-run WORKFLOW SCRIPT exists in the recommended plugin's skill folder
+           (a real .groovy/.py file under /app/skills/, e.g. GROOVY_WORKFLOW_*.groovy or
+           WORKFLOW_*), or a prior project script closely fits, SEED from it with
+           `copy_file(source_path=<that file>, directory=<.../scripts/imagej>, filename=..., description=...)`.
+           copy_file copies it AND returns its full content, so you do NOT need load_script.
+           Then patch ONLY the parameters and input/output paths with `edit_script` (preserve
+           the rest); do NOT save_script over a copied file.
+         • Otherwise read the recommended plugin's SKILL.md once for the API + pitfalls, then
+           write the script with save_script.
+       Do NOT browse multiple skill files, do NOT read both a SKILL.md and a workflow script,
+       and NEVER re-read a file you already have. When you only need one section of a large
+       file, use the grep/file-search tool to pull that snippet. Plan all edit_script changes
+       from the one copy/read you have and batch them into as FEW calls as possible.
+   2. SAVE WITH DOCUMENTATION: For a brand-new from-scratch script, use `save_script` to commit your code.
       - MANDATORY PATH: Scripts MUST always be saved to the 'scripts/imagej/' 
         subfolder of the project directory provided by the Supervisor.
         Correct:   /app/data/projects/project_name/scripts/imagej/my_script.groovy
@@ -759,11 +779,20 @@ imagej_debugger_prompt = """
       ────────────────────────────────────────
       REPOSITORY & DEBUGGING WORKFLOW (MANDATORY)
       ────────────────────────────────────────
-      1. RETRIEVE CODE: Use `load_script` to read the faulty script from the directory provided by the Supervisor.
-      2. CONSULT HISTORY (ONCE): Call `get_script_history` exactly once to see why prior versions failed. If the response says "no prior attempts," "no previous history," or "this is version 1," proceed directly to step 3 — do not re-call the tool. If history exists, do not attempt a fix that has already been logged as a failure.
-      3. SAVE THE FIX: Use `save_script` to commit your correction.
-         - You MUST fill the 'error_context' parameter with the failure reason (e.g., "v2 failed with MissingMethodException on line 12").
-         - The 'description' should explain why the new logic is safer, in short and precise way.
+      1. RETRIEVE CODE: Use `load_script` ONCE to read the faulty script. Work from that
+         single read — do NOT re-read the file later.
+      2. CONSULT HISTORY (ONCE): Call `get_script_history` exactly once to see why prior
+         versions failed. If it says "no prior attempts," "no previous history," or "this is
+         version 1," proceed directly to step 3 — do not re-call it. Do not repeat a fix
+         already logged as a failure.
+      3. PATCH THE FIX (SURGICAL — this is the whole job): use `edit_script` to replace ONLY
+         the broken line(s). Copy `old_string` exactly from the code you read in step 1; plan
+         all changes and apply them in as FEW edit_script calls as possible (replacing a whole
+         block in one call is fine). This is far faster than re-emitting the file and cannot
+         break untouched code — that is exactly what "minimum changes" means. Use `save_script`
+         ONLY if the fix is a near-total rewrite.
+         - EITHER way, fill `error_context` with the failure reason (e.g., "v2 failed with
+           MissingMethodException on line 12"); keep `description` short and precise.
       4. PATH REPORTING: Your final response MUST explicitly state the absolute path to the saved script (e.g., "PATH: C:/project/scripts/imagej/segmenter.groovy").
 
       ────────────────────────────────────────

@@ -37,7 +37,7 @@ from .tools import (
     save_reusable_script, inspect_folder_tree,
     smart_file_reader, inspect_csv_header,
     extract_image_metadata, search_fiji_plugins, install_fiji_plugin,
-    check_plugin_installed, mkdir_copy, save_script, execute_script,
+    check_plugin_installed, mkdir_copy, save_script, edit_script, copy_file, execute_script,
     get_script_info, load_script, get_script_history,
     setup_analysis_workspace, save_markdown,
     NarrationReminderMiddleware, PhaseGuardMiddleware,
@@ -241,7 +241,9 @@ def _make_coder_agent(model, name, system_prompt):
         tools=[
             internet_search,
             inspect_java_class,
-            save_script,
+            copy_file,             # seed a new script from any existing file (returns its content)
+            save_script,           # full write (from-scratch only)
+            edit_script,           # surgical patch — preferred for fixes + param tweaks
             load_script,
             get_script_history,
             smart_file_reader,
@@ -254,7 +256,9 @@ def _make_coder_agent(model, name, system_prompt):
         name=name,
         middleware=[
             FilesystemFileSearchMiddleware(
-                root_path="/app/skills/",  # scoped to skills only
+                # /app/ so the agent can grep BOTH skill templates and the project's
+                # own scripts it is editing (was scoped to /app/skills/).
+                root_path="/app/",
                 use_ripgrep=True,
             ),
             ContextEditingMiddleware(
