@@ -103,9 +103,18 @@ class PhaseGuardMiddleware(AgentMiddleware):
 
     _PHASE_RE = re.compile(r"CURRENT PHASE:\s*([0-9a-z]+)", re.IGNORECASE)
 
+    _TRACK_RE = re.compile(r"TRACK:\s*([a-z]+)", re.IGNORECASE)
+
     def before_model(self, state, runtime=None):
         msgs = list(state.get("messages", []))
         already = list(state.get("phase_reminders_sent") or [])
+
+        # Fast track has no numbered phases, so the phase-file nag is pure
+        # overhead there. Stay silent while the most recent track signal is
+        # "fast"; the guard re-engages automatically if the request is later
+        # escalated to "full" (which restores numbered phase signals).
+        if self._on_fast_track(msgs):
+            return None
 
         # Credit EVERY phase whose file was read in the recent window — including
         # a read-ahead for a phase not entered yet. Keying "handled" on the read
@@ -135,6 +144,27 @@ class PhaseGuardMiddleware(AgentMiddleware):
         ))
         # Mark handled in the SAME update so the reminder fires exactly once.
         return {"messages": [reminder], "phase_reminders_sent": handled + [active_phase]}
+
+    def _on_fast_track(self, msgs):
+        """True if the most recent track signal is 'fast'.
+
+        Looks at the same bounded window as phase detection. A
+        set_ledger_metadata(track=...) tool call or a "TRACK: <x>" line in any
+        ledger output counts; the most recent wins so an escalation to "full"
+        (which re-sets track) cleanly re-enables the guard.
+        """
+        for msg in reversed(msgs[-self.LOOKBACK:]):
+            if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
+                for tc in msg.tool_calls:
+                    if tc.get("name") == "set_ledger_metadata":
+                        t = tc.get("args", {}).get("track")
+                        if t:
+                            return str(t).strip().lower() == "fast"
+            if isinstance(msg, ToolMessage) and msg.content:
+                m = self._TRACK_RE.search(str(msg.content))
+                if m and not m.group(1).startswith("not"):
+                    return m.group(1).strip().lower() == "fast"
+        return False
 
     def _detect_phase(self, msgs):
         """Most recent ledger phase signal wins. Skips '[not set]' sentinels."""
