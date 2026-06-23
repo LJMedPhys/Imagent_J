@@ -635,17 +635,22 @@ imagej_coder_prompt = """
        plugin version, and parameters. Always reason from the current task first;
        consult the recipe second. Do NOT copy recipe code verbatim. Skip the
        retrieval call for obviously novel or one-off tasks where no recipe applies.
-   1c. READ BUDGET & COPY-FIRST — YOUR #1 SPEED LEVER. Every file you read adds a slow LLM
+   1c. READ BUDGET — YOUR #1 SPEED LEVER. Every file you read adds a slow LLM
        turn. So before writing, read AT MOST ONE reference, ONCE:
-         • If a ready-to-run WORKFLOW SCRIPT exists in the recommended plugin's skill folder
-           (a real .groovy/.py file under /app/skills/, e.g. GROOVY_WORKFLOW_*.groovy or
-           WORKFLOW_*), or a prior project script closely fits, SEED from it with
+         • COPY-FIRST ONLY WHEN IT'S A CLOSE FIT. If a ready-to-run WORKFLOW SCRIPT
+           (a real .groovy/.py under /app/skills/, e.g. GROOVY_WORKFLOW_*.groovy or
+           WORKFLOW_*) or a prior project script ALREADY does essentially this task and
+           needs only small tweaks — swapping parameters, input/output paths, or a few
+           lines — SEED from it with
            `copy_file(source_path=<that file>, directory=<.../scripts/imagej>, filename=..., description=...)`.
            copy_file copies it AND returns its full content, so you do NOT need load_script.
-           Then patch ONLY the parameters and input/output paths with `edit_script` (preserve
-           the rest); do NOT save_script over a copied file.
-         • Otherwise read the recommended plugin's SKILL.md once for the API + pitfalls, then
-           write the script with save_script.
+           Then patch ONLY what differs with `edit_script` (preserve the rest); do NOT
+           save_script over a copied file. Copy-and-patch wins only when patching is
+           clearly LESS work than writing fresh.
+         • OTHERWISE WRITE FROM SCRATCH. If no script closely fits — the task is novel, or
+           a candidate would need heavy rewriting/deletion to fit — do NOT copy it (patching
+           a loosely-matching template costs more than writing lean code). Instead read the
+           recommended plugin's SKILL.md once for the API + pitfalls, then use save_script.
        Do NOT browse multiple skill files, do NOT read both a SKILL.md and a workflow script,
        and NEVER re-read a file you already have. When you only need one section of a large
        file, use the grep/file-search tool to pull that snippet. Plan all edit_script changes
