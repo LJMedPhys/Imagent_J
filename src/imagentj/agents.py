@@ -256,9 +256,12 @@ def _make_coder_agent(model, name, system_prompt):
         name=name,
         middleware=[
             FilesystemFileSearchMiddleware(
-                # /app/ so the agent can grep BOTH skill templates and the project's
-                # own scripts it is editing (was scoped to /app/skills/).
-                root_path="/app/",
+                # Scoped to /app/skills/ — the workflow templates / SKILL.md the coder
+                # copies from. Do NOT widen to /app/: /app/data is ~66 GB of images and
+                # a broad glob/grep that descends into it stalls for minutes (looks like
+                # an infinite loop). The project's own scripts live under the project_root
+                # temp dir (outside /app), so widening bought nothing.
+                root_path="/app/skills/",
                 use_ripgrep=True,
             ),
             ContextEditingMiddleware(
