@@ -956,22 +956,27 @@ def execute_script(directory: str, filename: str) -> str:
 @tool("get_script_info")
 def get_script_info(directory: str, filename: str) -> str:
     """
-    Retrieves the metadata and functional description for a specific script from the project dictionary.
-    
-    WHEN TO USE:
-    - Use this immediately AFTER the Coder/Architect subagent claims to have saved a script.
-    - Use this to VERIFY that the script's logic (e.g., threshold methods, file paths, specific algorithms) 
-      matches your original instructions before you attempt to execute it.
-    - Use this if you have forgotten what a specific file in the directory does.
+    (Supervisor-only) Read the one-line description a subagent logged for a script.
+
+    This is an EXCEPTION tool, NOT a routine step. Do NOT call it to "verify" a script
+    after the coder saves or before you execute — the coder already returns its
+    script_path and description in the ScriptHandoff, so calling this adds a wasted turn
+    and can trap you in a verify -> re-save -> verify loop.
+
+    WHEN TO USE (only these):
+    - The subagent returned success=False or with NO description, and you need to confirm
+      whether anything was logged at all.
+    - You genuinely forgot what an OLD file in the directory does and it is not in the
+      current handoff.
+    Otherwise, trust the handoff and proceed straight to execute_script.
 
     INPUTS:
     - directory: The project root or output folder where 'script_dictionary.json' resides.
     - filename: The exact name of the script (e.g., 'segment_cells.groovy').
 
     OUTPUT:
-    - Returns a formatted string containing the Language and the Coder's detailed description.
-    - If the script is not in the dictionary, it returns an error; use this to catch if the 
-      subagent failed to log its work.
+    - Returns a formatted string with the Language and the logged description, or an error
+      if the script is not in the dictionary (i.e. the subagent failed to log its work).
     """
     dict_path = os.path.join(directory, "script_dictionary.json")
     if not os.path.exists(dict_path):

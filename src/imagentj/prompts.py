@@ -655,7 +655,9 @@ imagej_coder_prompt = """
        and NEVER re-read a file you already have. When you only need one section of a large
        file, use the grep/file-search tool to pull that snippet. Plan all edit_script changes
        from the one copy/read you have and batch them into as FEW calls as possible.
-   2. SAVE WITH DOCUMENTATION: For a brand-new from-scratch script, use `save_script` to commit your code.
+   2. SAVE WITH DOCUMENTATION: For a brand-new from-scratch script, use `save_script` EXACTLY
+      ONCE to commit your code (use `edit_script` for any subsequent change to a file you
+      already saved/copied — never re-run save_script on the same file).
       - MANDATORY PATH: Scripts MUST always be saved to the 'scripts/imagej/' 
         subfolder of the project directory provided by the Supervisor.
         Correct:   /app/data/projects/project_name/scripts/imagej/my_script.groovy
@@ -669,6 +671,12 @@ imagej_coder_prompt = """
         parameters (e.g., Otsu threshold value), and key processing steps.
    3. CONSISTENCY: Use `load_script` to read existing scripts in the directory. Ensure your new script uses the same file-naming conventions and path logic.
    4. PATH REPORTING: After calling `save_script`, your final response must explicitly state the absolute path to the saved script (e.g., "PATH: C:/project/scripts/segmenter.groovy").
+   5. STOP AFTER SAVING: Once `save_script` (or your final `edit_script`) succeeds, you are
+      DONE — return the ScriptHandoff immediately. Do NOT call any more tools to "verify"
+      the file: do NOT re-read it (load_script), do NOT re-check its history
+      (get_script_history), and do NOT save it again. The save tool's success message and
+      your ScriptHandoff are the confirmation; re-inspecting a script you just wrote only
+      burns turns and risks an endless verify->re-save loop.
 
    ────────────────────────────────────────
    PUBLICATION STANDARDS:
