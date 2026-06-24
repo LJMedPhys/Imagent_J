@@ -823,7 +823,8 @@ def edit_script(directory: str, filename: str, old_string: str, new_string: str,
 
     Work like a careful engineer: from the file content you ALREADY have (from
     load_script or copy_file), plan all your changes and apply them in as FEW
-    edit_script calls as possible. Do NOT re-read the file between edits.
+    edit_script calls as possible. Do NOT re-read the file between or after edits —
+    the patch is applied to the content you already have.
 
     Args:
         directory:   Folder containing the script.
@@ -1004,6 +1005,8 @@ def load_script(directory: str, filename: str) -> str:
 
     CONSTRAINTS:
     - Only .py and .groovy files can be read.
+    - Read a given file at most ONCE — its content does not change while you work. Do not
+      re-load it to 'verify'; use the content you already have.
     - Do not use this tool to 'verify' a script for the Supervisor (use get_script_info instead).
     """
     allowed_extensions = ('.py', '.groovy')

@@ -16,6 +16,7 @@ from langchain.agents.structured_output import ToolStrategy
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.errors import GraphRecursionError
 from pydantic import BaseModel
 from deepagents.middleware.skills import SkillsMiddleware
 
@@ -281,12 +282,19 @@ def _make_coder_agent(model, name, system_prompt):
 
 _analyst_agent = create_agent(
     llm_analyst,
+    # NOTE: save_script only — NO edit_script/copy_file. Proven (A/B, same model+prompt):
+    # edit_script triples the loop rate on this agent's model (gpt-5.2 ~50% vs save_script
+    # ~17%). edit_script is a blind patch, so gpt-5.2 re-reads (load_script/inspect) to
+    # "verify" and cascades into a loop — even when edit_script echoes the full result and
+    # says not to. Analyst scripts are tiny, so a full save_script rewrite costs nothing and
+    # the model trusts content it authored itself. edit_script stays on the coder/debugger
+    # (gpt-5.3-codex), which trusts its patches and never loops. get_script_info also removed
+    # (Supervisor-only verify tool that invited the same post-commit cycle).
     tools=[
         inspect_csv_header,
         save_script,
         load_script,
         get_script_history,
-        get_script_info,
     ],
     system_prompt=python_analyst_prompt,
     response_format=ToolStrategy(schema=AnalystHandoff, handle_errors=True),
@@ -361,6 +369,50 @@ _plugin_agent = create_agent(
 # )
 
 
+# ---------------------------------------------------------------------------
+# Recursion cap — bound a runaway tool loop in a stateless subagent
+# ---------------------------------------------------------------------------
+# LangGraph's default recursion_limit is 1000 super-steps (~500 turns), so a tool
+# loop (e.g. an analyst re-verifying after it already committed) can burn credits
+# unbounded. We cap every subagent. Legit runs use ~3-8 turns (~6-18 super-steps),
+# so 30 leaves generous headroom while turning a runaway into a bounded ~15-turn stop.
+_RECURSION_LIMIT = int(os.environ.get("AGENT_RECURSION_LIMIT", "30"))
+
+
+def _newest_script(directory: str) -> str:
+    """Best-effort: the most recently modified .py/.groovy under `directory` (recursive)."""
+    newest, newest_mtime = "", -1.0
+    try:
+        for root, _dirs, files in os.walk(directory):
+            for fn in files:
+                if fn.lower().endswith((".py", ".groovy")):
+                    p = os.path.join(root, fn)
+                    try:
+                        mt = os.path.getmtime(p)
+                    except OSError:
+                        continue
+                    if mt > newest_mtime:
+                        newest, newest_mtime = p, mt
+    except Exception:
+        pass
+    return newest
+
+
+def _run_capped(agent, payload, on_cap):
+    """Run a stateless subagent with a hard recursion cap. On hitting the cap (a runaway
+    tool loop) return on_cap() — a best-effort handoff — instead of raising/looping forever,
+    so the Supervisor still receives a structured result it can act on."""
+    try:
+        result = stop_signal.SubagentRunner(
+            agent.invoke,
+            payload,
+            config={"recursion_limit": _RECURSION_LIMIT},
+        ).run()
+        return result["structured_response"]
+    except GraphRecursionError:
+        return on_cap()
+
+
 @tool
 def imagej_coder(task: str, project_root: str) -> ScriptHandoff:
     """
@@ -387,11 +439,20 @@ def imagej_coder(task: str, project_root: str) -> ScriptHandoff:
 
     agent = _make_coder_agent(model, "imagej_coder", imagej_coder_prompt)
 
-    result = stop_signal.SubagentRunner(
-        agent.invoke,
+    def _on_cap():
+        path = _newest_script(os.path.join(project_root, "scripts", "imagej"))
+        return ScriptHandoff(
+            script_path=path,
+            description="Coder stopped at the recursion cap (likely a tool loop); any saved script may be incomplete.",
+            success=False,
+            error_message=f"Hit the {_RECURSION_LIMIT}-step recursion cap before returning a handoff.",
+        )
+
+    return _run_capped(
+        agent,
         {"messages": [{"role": "user", "content": "\n\n".join(sections)}]},
-    ).run()
-    return result["structured_response"]
+        _on_cap,
+    )
 
 
 @tool
@@ -415,11 +476,19 @@ def imagej_debugger(script_path: str, error_message: str, project_root: str = ""
         if ledger_ctx:
             sections.insert(1, f"PROJECT STATE (for context):\n{ledger_ctx}")
 
-    result = stop_signal.SubagentRunner(
-        agent.invoke,
+    def _on_cap():
+        return ScriptHandoff(
+            script_path=script_path,
+            description="Debugger stopped at the recursion cap (likely a tool loop); the fix may be incomplete.",
+            success=False,
+            error_message=f"Hit the {_RECURSION_LIMIT}-step recursion cap before returning a handoff.",
+        )
+
+    return _run_capped(
+        agent,
         {"messages": [{"role": "user", "content": "\n\n".join(sections)}]},
-    ).run()
-    return result["structured_response"]
+        _on_cap,
+    )
 
 
 
@@ -452,11 +521,20 @@ def python_data_analyst(task: str, input_csv: str, output_dir: str, project_root
             sections.append(f"PROJECT STATE (use for axis labels, units, and context):\n{ledger_ctx}")
     sections.append(f"TASK: {task}")
 
-    result = stop_signal.SubagentRunner(
-        _analyst_agent.invoke,
+    def _on_cap():
+        path = _newest_script(output_dir)
+        return AnalystHandoff(
+            script_path=path,
+            description="Analyst stopped at the recursion cap (likely a post-commit verify loop); any saved script was not confirmed.",
+            success=False,
+            error_message=f"Hit the {_RECURSION_LIMIT}-step recursion cap before returning a handoff.",
+        )
+
+    return _run_capped(
+        _analyst_agent,
         {"messages": [{"role": "user", "content": "\n\n".join(sections)}]},
-    ).run()
-    return result["structured_response"]
+        _on_cap,
+    )
 
 
 # ---------------------------------------------------------------------------
