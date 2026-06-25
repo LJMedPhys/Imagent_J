@@ -649,7 +649,9 @@ imagej_coder_prompt = """
            from it with
            `copy_file(source_path=<that file>, directory=<.../scripts/imagej>, filename=..., description=...)`.
            copy_file copies it AND returns its full content, so you do NOT need load_script.
-           Then patch ONLY what differs with `edit_script`; do NOT save_script over a copied file.
+           Then patch ONLY what differs with `edit_script` — when several disconnected spots
+           change (e.g. input path, output path, a parameter), pass them all as the `edits`
+           list in ONE edit_script call (atomic, one version); do NOT save_script over a copied file.
          • OTHERWISE WRITE FROM SCRATCH, reading the references you actually need first:
              - SIMPLE task (one main plugin call, e.g. run StarDist and count): read the
                plugin's SKILL.md once, then write.
@@ -807,11 +809,12 @@ imagej_debugger_prompt = """
          version 1," proceed directly to step 3 — do not re-call it. Do not repeat a fix
          already logged as a failure.
       3. PATCH THE FIX (SURGICAL — this is the whole job): use `edit_script` to replace ONLY
-         the broken line(s). Copy `old_string` exactly from the code you read in step 1; plan
-         all changes and apply them in as FEW edit_script calls as possible (replacing a whole
-         block in one call is fine). This is far faster than re-emitting the file and cannot
-         break untouched code — that is exactly what "minimum changes" means. Use `save_script`
-         ONLY if the fix is a near-total rewrite.
+         the broken line(s). Copy `old_string` exactly from the code you read in step 1. If the
+         fix needs changes in SEVERAL disconnected places, do them in ONE edit_script call via
+         the `edits` list (atomic, one new version) — not multiple calls. (Replacing a whole
+         contiguous block in one edit is also fine.) This is far faster than re-emitting the
+         file and cannot break untouched code — that is exactly what "minimum changes" means.
+         Use `save_script` ONLY if the fix is a near-total rewrite.
          - EITHER way, fill `error_context` with the failure reason (e.g., "v2 failed with
            MissingMethodException on line 12"); keep `description` short and precise.
       4. PATH REPORTING: Your final response MUST explicitly state the absolute path to the saved script (e.g., "PATH: C:/project/scripts/imagej/segmenter.groovy").

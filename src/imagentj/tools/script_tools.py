@@ -811,31 +811,41 @@ def save_script(directory: str, filename: str, content: str, description: str, e
 
 
 @tool("edit_script")
-def edit_script(directory: str, filename: str, old_string: str, new_string: str,
+def edit_script(directory: str, filename: str,
+                old_string: Optional[str] = None, new_string: Optional[str] = None,
+                edits: Optional[list] = None,
                 error_context: Optional[str] = None, description: Optional[str] = None,
                 replace_all: bool = False) -> str:
     """
-    Apply a SURGICAL patch to an existing saved script: replace `old_string` with
-    `new_string`. This is the preferred way to change a script (fix a bug, tweak
-    parameters) — it touches only the lines you target, so it is far cheaper than
-    re-emitting the file and cannot introduce errors in untouched code. Versioning is
-    handled exactly like save_script.
+    Apply SURGICAL patch(es) to an existing saved script. This is the preferred way to
+    change a script (fix a bug, tweak parameters) — it touches only the text you target,
+    so it is far cheaper than re-emitting the file and cannot introduce errors in
+    untouched code. Versioning is handled exactly like save_script.
 
-    Work like a careful engineer: from the file content you ALREADY have (from
-    load_script or copy_file), plan all your changes and apply them in as FEW
-    edit_script calls as possible. Do NOT re-read the file between or after edits —
-    the patch is applied to the content you already have.
+    Work like a careful engineer: from the file content you ALREADY have (from load_script
+    or copy_file), plan ALL your changes up front. Do NOT re-read the file between or after
+    edits — patches apply to the content you already have.
+
+    TWO forms:
+      • Single change — pass `old_string` + `new_string`.
+      • SEVERAL disconnected changes — pass `edits`, a list of
+        {"old_string": ..., "new_string": ..., optional "replace_all": bool} objects.
+        ALWAYS prefer ONE edit_script call with an `edits` list over multiple calls: the
+        edits are applied in order and committed as a SINGLE new version, and the whole
+        batch is ATOMIC — if ANY old_string is missing or non-unique, NOTHING is written
+        and you get told which edit failed, so you never leave a half-patched file.
 
     Args:
         directory:   Folder containing the script.
         filename:    The .py or .groovy file to patch.
-        old_string:  Exact text to replace — copy it verbatim (incl. indentation) from
-                     the content you already have. Must be UNIQUE in the file unless
-                     replace_all=True. You may replace a whole block in one call.
-        new_string:  Replacement text.
+        old_string:  (Single form) Exact text to replace — copy it verbatim (incl.
+                     indentation) from the content you have. Must be UNIQUE unless replace_all.
+        new_string:  (Single form) Replacement text.
+        edits:       (Multi form) List of {old_string, new_string[, replace_all]} objects,
+                     each targeting a DISTINCT, non-overlapping region. Applied in order.
         error_context: (Optional) For a fix, the failure reason (stored in history).
         description: (Optional) New one-line description; if omitted the existing one is kept.
-        replace_all: (Optional) Replace every occurrence (default: one unique match).
+        replace_all: (Optional, single form) Replace every occurrence (default: one unique match).
     """
     allowed_extensions = ('.py', '.groovy')
     if not filename.lower().endswith(allowed_extensions):
@@ -849,22 +859,53 @@ def edit_script(directory: str, filename: str, old_string: str, new_string: str,
             content = f.read()
     except Exception as e:
         return f"Error reading file: {str(e)}"
-    if old_string == new_string:
-        return "Error: old_string and new_string are identical — nothing to change."
-    count = content.count(old_string)
-    if count == 0:
-        return ("Error: old_string not found. Copy the exact text (incl. indentation) "
-                "from the content you already have.")
-    if count > 1 and not replace_all:
-        return (f"Error: old_string occurs {count} times — not unique. Add surrounding "
-                f"context to target one spot, or pass replace_all=true.")
-    new_content = content.replace(old_string, new_string) if replace_all else content.replace(old_string, new_string, 1)
+
+    # Normalize both forms into one ordered list of (old, new, replace_all)
+    edit_list = []
+    if edits:
+        if not isinstance(edits, (list, tuple)):
+            return "Error: 'edits' must be a list of {old_string, new_string} objects."
+        for e in edits:
+            if not isinstance(e, dict) or "old_string" not in e or "new_string" not in e:
+                return "Error: each item in 'edits' must be an object with 'old_string' and 'new_string'."
+            edit_list.append((e["old_string"], e["new_string"], bool(e.get("replace_all", False))))
+    elif old_string is not None and new_string is not None:
+        edit_list.append((old_string, new_string, replace_all))
+    else:
+        return "Error: provide either (old_string AND new_string) or a non-empty 'edits' list."
+    if not edit_list:
+        return "Error: no edits provided."
+
+    # Apply sequentially to an in-memory copy. ATOMIC: validate each before anything is
+    # written; on any failure return without committing (no half-patched file).
+    working = content
+    total_repl = 0
+    for idx, (os_, ns_, ra_) in enumerate(edit_list, 1):
+        tag = f"edit {idx}: " if len(edit_list) > 1 else ""
+        if not os_:
+            return f"Error: {tag}old_string is empty. No edits applied."
+        if os_ == ns_:
+            return f"Error: {tag}old_string and new_string are identical — nothing to change. No edits applied."
+        cnt = working.count(os_)
+        if cnt == 0:
+            return (f"Error: {tag}old_string not found (after applying any earlier edits). Copy the exact "
+                    f"text verbatim from the content you have; for multiple edits target DISTINCT, "
+                    f"non-overlapping regions. No edits applied.")
+        if cnt > 1 and not ra_:
+            return (f"Error: {tag}old_string occurs {cnt} times — not unique. Add surrounding context to "
+                    f"target one spot, or set replace_all=true for this edit. No edits applied.")
+        working = working.replace(os_, ns_) if ra_ else working.replace(os_, ns_, 1)
+        total_repl += cnt if ra_ else 1
+
+    if working == content:
+        return "Error: edits produced no change."
     if description is None:
         description = _existing_description(directory, filename) or "Patched via edit_script."
-    result = _commit_script(directory, filename, new_content, description, error_context)
+    result = _commit_script(directory, filename, working, description, error_context)
     if result.startswith("Successfully"):
-        n = count if replace_all else 1
-        return f"Patched {filename} ({n} replacement{'s' if n != 1 else ''}). {result}"
+        ne = len(edit_list)
+        return (f"Patched {filename}: {ne} edit{'s' if ne != 1 else ''}, "
+                f"{total_repl} replacement{'s' if total_repl != 1 else ''} — one new version. {result}")
     return result
 
 
