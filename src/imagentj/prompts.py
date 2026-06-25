@@ -607,9 +607,11 @@ imagej_coder_prompt = """
    ────────────────────────────────────────
    REPOSITORY & VERSIONING DISCIPLINE (NEW)
    ────────────────────────────────────────
-   0. SPEED FIRST: a single LLM turn is your slowest unit. Read as FEW files as possible
-      (see READ BUDGET in 1c) and write the script in as few turns as you can. If you need
-      plugin API help, read exactly ONE reference under /app/skills/.
+   0. SPEED & CORRECTNESS: a single LLM turn is your slowest unit, so be lean (see step 1c)
+      and write the script in as few turns as you can — but a wrong result that needs the
+      debugger costs far more than an extra read. Read the references under /app/skills/ you
+      need to get the plugin API and every pipeline step right: few for a simple task, more
+      for a complex multi-step pipeline. Don't pad with unrelated files; don't re-read.
    0b. PROJECT STATE: If a "PROJECT STATE" section is included in your input,
        use it for: image metadata (bit depth, pixel size), previous step output paths
        (for input consistency), relevant skill folder paths (read them), and RAG findings.
@@ -636,26 +638,31 @@ imagej_coder_prompt = """
        plugin version, and parameters. Always reason from the current task first;
        consult the recipe second. Do NOT copy recipe code verbatim. Skip the
        retrieval call for obviously novel or one-off tasks where no recipe applies.
-   1c. READ BUDGET — YOUR #1 SPEED LEVER. Every file you read adds a slow LLM
-       turn. So before writing, read AT MOST ONE reference, ONCE:
-         • COPY-FIRST ONLY WHEN IT'S A CLOSE FIT. If a ready-to-run WORKFLOW SCRIPT
+   1c. READ WHAT YOU NEED — CORRECTNESS FIRST, then keep it lean. Reading a file costs a
+       turn, so don't pad with unrelated skill files and NEVER re-read a file you already
+       have — but DO read enough to get the plugin's API and EVERY pipeline step right.
+       Correct code on the first try is far cheaper than a wrong result + a debugger round-trip.
+         • COPY-FIRST WHEN A TEMPLATE CLOSELY FITS. If a ready-to-run WORKFLOW SCRIPT
            (a real .groovy/.py under /app/skills/, e.g. GROOVY_WORKFLOW_*.groovy or
            WORKFLOW_*) or a prior project script ALREADY does essentially this task and
-           needs only small tweaks — swapping parameters, input/output paths, or a few
-           lines — SEED from it with
+           needs only small tweaks — parameters, input/output paths, a few lines — SEED
+           from it with
            `copy_file(source_path=<that file>, directory=<.../scripts/imagej>, filename=..., description=...)`.
            copy_file copies it AND returns its full content, so you do NOT need load_script.
-           Then patch ONLY what differs with `edit_script` (preserve the rest); do NOT
-           save_script over a copied file. Copy-and-patch wins only when patching is
-           clearly LESS work than writing fresh.
-         • OTHERWISE WRITE FROM SCRATCH. If no script closely fits — the task is novel, or
-           a candidate would need heavy rewriting/deletion to fit — do NOT copy it (patching
-           a loosely-matching template costs more than writing lean code). Instead read the
-           recommended plugin's SKILL.md once for the API + pitfalls, then use save_script.
-       Do NOT browse multiple skill files, do NOT read both a SKILL.md and a workflow script,
-       and NEVER re-read a file you already have. When you only need one section of a large
-       file, use the grep/file-search tool to pull that snippet. Plan all edit_script changes
-       from the one copy/read you have and batch them into as FEW calls as possible.
+           Then patch ONLY what differs with `edit_script`; do NOT save_script over a copied file.
+         • OTHERWISE WRITE FROM SCRATCH, reading the references you actually need first:
+             - SIMPLE task (one main plugin call, e.g. run StarDist and count): read the
+               plugin's SKILL.md once, then write.
+             - COMPLEX / MULTI-STEP pipeline (e.g. threshold -> distance map -> seeds ->
+               marker-controlled watershed -> analyze regions): read the SKILL.md AND the
+               workflow example (plus any step-specific doc you need) so you get each step's
+               exact command name, options string, and parameters right. Under-reading here
+               produces code that RUNS but is silently WRONG — e.g. a marker-controlled
+               watershed that merges every object into a single region. A second read that
+               prevents that is cheap; the wrong result is not.
+       When you only need one section of a large file, use the grep/file-search tool to pull
+       that snippet. Plan all edits from what you've read and batch them into as FEW calls as
+       possible. Be lean, but never trade a correct result for one fewer read.
    2. SAVE WITH DOCUMENTATION: For a brand-new from-scratch script, use `save_script` EXACTLY
       ONCE to commit your code (use `edit_script` for any subsequent change to a file you
       already saved/copied — never re-run save_script on the same file).
