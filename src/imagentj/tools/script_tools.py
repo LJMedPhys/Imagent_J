@@ -826,6 +826,11 @@ def edit_script(directory: str, filename: str,
     or copy_file), plan ALL your changes up front. Do NOT re-read the file between or after
     edits — patches apply to the content you already have.
 
+    If an edit fails to match ('not found' / 'not unique'), do NOT keep guessing variants:
+    re-read the file ONCE with load_script to copy the exact text, and if it still won't
+    apply, fall back to save_script with the whole corrected file. Never retry the same
+    failing edit more than once.
+
     TWO forms:
       • Single change — pass `old_string` + `new_string`.
       • SEVERAL disconnected changes — pass `edits`, a list of
