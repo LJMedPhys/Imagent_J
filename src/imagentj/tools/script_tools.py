@@ -5,6 +5,8 @@ from langchain.tools import tool
 from imagentj.imagej_context import get_ij
 import os
 import json
+import subprocess
+import signal as _signal
 from .analyst_tools import run_python_code
 import datetime
 import shutil
@@ -539,6 +541,40 @@ def _truncate(s: str, max_bytes: int = 2048) -> str:
     return f"{head}\n...[truncated {remaining_lines} more lines]"
 
 
+_ABORT_PROP = "imagentj.abort"
+
+# Groovy preamble that installs an abort-checking OutputStream wrapper.
+# Runs synchronously before the user script. The wrapper checks the JVM system
+# property "imagentj.abort" on every write to System.out/err; when Python sets
+# that property (on user Stop), the next println() in the script throws
+# RuntimeException("IMAGENTJ_ABORT") which unwinds the Groovy call stack and
+# kills the JVM thread — no need for the script to call any ImageJ API.
+# RuntimeException propagates through PrintStream (only IOException is caught).
+_ABORT_STREAM_PREAMBLE = """\
+class __ImaGentJAbortStream extends java.io.OutputStream {
+    private final java.io.OutputStream delegate
+    __ImaGentJAbortStream(java.io.OutputStream d) { this.delegate = d }
+    private void checkAbort() {
+        if ("true".equals(System.getProperty("imagentj.abort"))) {
+            // Throw Error, NOT RuntimeException/Exception — Groovy scripts commonly
+            // have broad 'catch (Exception e)' blocks (e.g. per-image loops) that
+            // would silently swallow a RuntimeException and keep processing.
+            // Error is NOT a subclass of Exception, so it bypasses those catches
+            // and unwinds the entire call stack immediately.
+            throw new ThreadDeath()
+        }
+    }
+    @Override void write(int b) { checkAbort(); delegate.write(b) }
+    @Override void write(byte[] b, int off, int len) { checkAbort(); delegate.write(b, off, len) }
+    @Override void flush() { delegate.flush() }
+    @Override void close() { delegate.close() }
+}
+System.clearProperty("imagentj.abort")
+System.setOut(new java.io.PrintStream(new __ImaGentJAbortStream(System.out), true, "UTF-8"))
+System.setErr(new java.io.PrintStream(new __ImaGentJAbortStream(System.err), true, "UTF-8"))
+"""
+
+
 def run_groovy_script(script: str, ij) -> str:
     """
     Execute a Groovy script in ImageJ/Fiji, capturing all output channels
@@ -554,6 +590,14 @@ def run_groovy_script(script: str, ij) -> str:
     original_err = System.err
     System.setOut(PrintStream(out_stream))
     System.setErr(PrintStream(err_stream))
+
+    # Install the abort-checking stream wrapper. Runs synchronously (fast —
+    # just a class definition + two System.set* calls). After this, every
+    # write to System.out/err goes through __ImaGentJAbortStream.checkAbort().
+    try:
+        ij.py.run_script("Groovy", _ABORT_STREAM_PREAMBLE)
+    except Exception:
+        pass  # non-fatal: fall back to existing IJ escape / interrupt signals
 
     ij_log_before  = get_ij_log_content()
     frames_before  = _get_open_frames()
@@ -600,7 +644,22 @@ def run_groovy_script(script: str, ij) -> str:
         while script_thread.is_alive():
             script_thread.join(timeout=0.1)
             if stop_signal.is_set() and script_thread.is_alive():
-                IJ.setEscapePressed(True)
+                # 1. Primary: abort-stream — fires on the script's next write to
+                #    System.out/err (e.g. println). Throws ThreadDeath which is an
+                #    Error, NOT Exception, so broad 'catch (Exception e)' blocks in
+                #    the Groovy script cannot swallow it.
+                try:
+                    System.setProperty(_ABORT_PROP, "true")
+                except Exception:
+                    pass
+                # 2. Secondary: IJ escape flag — cooperative check inside ImageJ
+                #    plugins. Wrapped individually because JPype can fail to resolve
+                #    the static method in some thread contexts (see logs).
+                try:
+                    IJ.setEscapePressed(True)
+                except Exception:
+                    pass
+                # 3. Tertiary: JVM thread interrupt — unblocks sleep/IO waits.
                 with _script_state_lock:
                     jt = _active_java_thread[0]
                 if jt is not None:
@@ -609,10 +668,47 @@ def run_groovy_script(script: str, ij) -> str:
                     except Exception:
                         pass
                 script_thread.join(timeout=3.0)
-                IJ.setEscapePressed(False)
+                if script_thread.is_alive():
+                    # Thread still alive — keep all three signals firing until it exits.
+                    def _abort_watchdog(st=script_thread, java_t=jt) -> None:
+                        try:
+                            sys_cls = jpype.JClass("java.lang.System")
+                            ij_cls  = jpype.JClass("ij.IJ")
+                            while st.is_alive():
+                                try:
+                                    sys_cls.setProperty(_ABORT_PROP, "true")
+                                except Exception:
+                                    pass
+                                try:
+                                    ij_cls.setEscapePressed(True)
+                                except Exception:
+                                    pass
+                                if java_t is not None:
+                                    try:
+                                        java_t.interrupt()
+                                    except Exception:
+                                        pass
+                                st.join(timeout=0.5)
+                        finally:
+                            try:
+                                jpype.JClass("ij.IJ").setEscapePressed(False)
+                            except Exception:
+                                pass
+                    threading.Thread(
+                        target=_abort_watchdog, daemon=True, name="script-abort-watchdog"
+                    ).start()
+                else:
+                    try:
+                        IJ.setEscapePressed(False)
+                    except Exception:
+                        pass
                 raise StopRequested("Groovy script cancelled by user")
 
+        # If stop was requested and the script died (e.g. from the abort stream
+        # throwing IMAGENTJ_ABORT), treat it as a clean user cancellation.
         if _script_exc[0] is not None:
+            if stop_signal.is_set():
+                raise StopRequested("Groovy script cancelled by user")
             raise _script_exc[0]
 
         result = _script_result[0]
@@ -722,6 +818,10 @@ def run_groovy_script(script: str, ij) -> str:
         return "\n".join(parts)
 
     finally:
+        try:
+            System.clearProperty(_ABORT_PROP)
+        except Exception:
+            pass
         System.setOut(original_out)
         System.setErr(original_err)
 
@@ -932,14 +1032,103 @@ def execute_script(directory: str, filename: str) -> str:
 
     # Route based on extension
     if filename.endswith('.py'):
-        # Calls your existing run_python_code function
         return run_python_code(code_content, directory)
 
     elif filename.endswith('.groovy'):
-        # Calls your existing run_script_safe function
-        return run_script_safe(language="groovy", code=code_content)
+        return _run_groovy_subprocess(full_path)
 
     return f"Error: File extension of {filename} is not supported for execution."
+
+
+def _run_groovy_subprocess(script_path: str) -> str:
+    """Run a Groovy script as an isolated Fiji subprocess.
+
+    This is the only approach that allows instant, reliable cancellation:
+    the subprocess is registered with the global kill registry so the Stop
+    button sends SIGKILL, which terminates the JVM immediately regardless of
+    what plugin code is executing.  The embedded JVM (used by run_groovy_script
+    for interactive work) is unaffected.
+    """
+    fiji_bin = os.path.join(os.environ.get("FIJI_PATH", "/opt/Fiji.app"), "fiji")
+    if not os.path.isfile(fiji_bin):
+        return f"STATUS: ERROR\nSUMMARY: Fiji binary not found at {fiji_bin}"
+
+    # Run with the VNC display so AWT initialises fully.
+    # --headless breaks plugins like Coloc2 whose showDialog() calls
+    # getCheckboxes() on a never-rendered GenericDialog → NullPointerException.
+    # With DISPLAY=:1, AWT dialogs can be created; ImageJ auto-dismisses them
+    # when IJ.run() is called from a script (macro-options mode).
+    # --allow-multiple: don't try to reuse the existing embedded Fiji instance.
+    # --no-splash:      suppress the splash screen window.
+    # --run:            execute the script file directly.
+    # JAVA_TOOL_OPTIONS cleared to avoid inheriting unwanted JVM flags.
+    env = {**os.environ, "DISPLAY": ":1", "JAVA_TOOL_OPTIONS": ""}
+
+    proc = subprocess.Popen(
+        [fiji_bin, "--allow-multiple", "--no-splash", "--run", script_path],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        env=env,
+        # Put Fiji and its spawned JVM child in a new process group so
+        # os.killpg() kills the whole tree at once.  proc.kill() alone only
+        # kills the Jaunch launcher; the JVM child becomes an orphan, keeps
+        # running, and holds the stdout pipe open so communicate() never returns.
+        start_new_session=True,
+    )
+
+    def _pgkill() -> None:
+        """Watchdog: kill the entire Fiji process group when stop is requested."""
+        while proc.poll() is None:
+            if stop_signal.is_set():
+                try:
+                    os.killpg(os.getpgid(proc.pid), _signal.SIGKILL)
+                except Exception:
+                    pass
+                return
+            time.sleep(0.1)
+
+    threading.Thread(target=_pgkill, daemon=True, name="fiji-pgkill-watchdog").start()
+
+    try:
+        stdout, _ = proc.communicate(timeout=600)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), _signal.SIGKILL)
+        except Exception:
+            pass
+        proc.communicate()
+        return "STATUS: ERROR\nSUMMARY: Script timed out after 600 seconds."
+
+    if stop_signal.is_set():
+        raise StopRequested("Groovy script cancelled by user")
+
+    output = (stdout or "").strip()
+    rc = proc.returncode
+
+    # Heuristic: Java stack traces in stdout indicate a runtime error even if
+    # the exit code is 0 (Fiji sometimes exits 0 after an uncaught exception).
+    has_java_trace = any(
+        kw in output.lower()
+        for kw in ("\tat ", "caused by:", "exception in thread", "exception:")
+    )
+
+    if rc != 0 or has_java_trace:
+        summary_line = next(
+            (l for l in output.splitlines() if "exception" in l.lower() or "error" in l.lower()),
+            f"exit code {rc}",
+        )
+        return (
+            f"STATUS: ERROR\n"
+            f"SUMMARY: {summary_line[:200]}\n"
+            f"STDOUT:\n{_truncate(output, 3000)}"
+        )
+
+    return (
+        f"STATUS: SUCCESS\n"
+        f"SUMMARY: Script completed successfully\n"
+        f"STDOUT:\n{_truncate(output, 3000)}"
+    )
 
 @tool("get_script_info")
 def get_script_info(directory: str, filename: str) -> str:
