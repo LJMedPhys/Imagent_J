@@ -607,18 +607,13 @@ imagej_coder_prompt = """
    ────────────────────────────────────────
    REPOSITORY & VERSIONING DISCIPLINE (NEW)
    ────────────────────────────────────────
-   0. SPEED & CORRECTNESS: a single LLM turn is your slowest unit, so be lean (see step 1c)
-      and write the script in as few turns as you can — but a wrong result that needs the
-      debugger costs far more than an extra read. Read the references under /app/skills/ you
-      need to get the plugin API and every pipeline step right: few for a simple task, more
-      for a complex multi-step pipeline. Don't pad with unrelated files; don't re-read.
+   0. Before writing any script, check /app/skills/ for relevant examples or API guides
    0b. PROJECT STATE: If a "PROJECT STATE" section is included in your input,
        use it for: image metadata (bit depth, pixel size), previous step output paths
        (for input consistency), relevant skill folder paths (read them), and RAG findings.
        The TASK description takes priority for what to do — the project state is supplementary context.
    0c. RESPECT THE RECOMMENDED PLUGIN: If PROJECT STATE contains a "RECOMMENDED PLUGIN",
-       you MUST use that plugin (read its SKILL.md ONCE for the API if you need it — see
-       the READ BUDGET in step 1c).
+       you MUST use that plugin (and read its SKILL.md from the skill folder).
        Do NOT silently substitute an alternative — e.g., if TurboReg is recommended,
        do not use SIFT/mpicbg or write a custom registration; if StarDist is recommended,
        do not fall back to manual thresholding + watershed.
@@ -626,9 +621,7 @@ imagej_coder_prompt = """
        the plugin is 2D-only, or the plugin is not installed and cannot be installed),
        state the concrete reason in the save_script `description` field, then choose
        the next-best option. Never deviate without an explicit reason.
-   1. CONSULT HISTORY (only when revising): If you are revising or fixing an EXISTING script
-      in this directory, call `get_script_history` once to avoid repeating a logged failure.
-      For a brand-new script (the normal case), SKIP it — do not call it just to hear "no history".
+   1. CONSULT HISTORY: Before writing a script, call `get_script_history`. If previous versions exist, analyze the "failure_reason" to ensure your new code solves the previous issues.
    1b. RECIPES (query yourself when useful): For common, well-defined bioimage
        workflows (counting, segmentation, registration, intensity measurement,
        stitching, etc.), call `rag_retrieve_recipes(task=<short description>,
@@ -638,33 +631,16 @@ imagej_coder_prompt = """
        plugin version, and parameters. Always reason from the current task first;
        consult the recipe second. Do NOT copy recipe code verbatim. Skip the
        retrieval call for obviously novel or one-off tasks where no recipe applies.
-   1c. READ WHAT YOU NEED — CORRECTNESS FIRST, then keep it lean. Reading a file costs a
-       turn, so don't pad with unrelated skill files and NEVER re-read a file you already
-       have — but DO read enough to get the plugin's API and EVERY pipeline step right.
-       Correct code on the first try is far cheaper than a wrong result + a debugger round-trip.
-         • COPY-FIRST WHEN A TEMPLATE CLOSELY FITS. If a ready-to-run WORKFLOW SCRIPT
-           (a real .groovy/.py under /app/skills/, e.g. GROOVY_WORKFLOW_*.groovy or
-           WORKFLOW_*) or a prior project script ALREADY does essentially this task and
-           needs only small tweaks — parameters, input/output paths, a few lines — SEED
-           from it with
-           `copy_file(source_path=<that file>, directory=<.../scripts/imagej>, filename=..., description=...)`.
-           copy_file copies it AND returns its full content, so you do NOT need load_script.
-           Then patch ONLY what differs with `edit_script` — when several disconnected spots
-           change (e.g. input path, output path, a parameter), pass them all as the `edits`
-           list in ONE edit_script call (atomic, one version); do NOT save_script over a copied file.
-         • OTHERWISE WRITE FROM SCRATCH, reading the references you actually need first:
-             - SIMPLE task (one main plugin call, e.g. run StarDist and count): read the
-               plugin's SKILL.md once, then write.
-             - COMPLEX / MULTI-STEP pipeline (e.g. threshold -> distance map -> seeds ->
-               marker-controlled watershed -> analyze regions): read the SKILL.md AND the
-               workflow example (plus any step-specific doc you need) so you get each step's
-               exact command name, options string, and parameters right. Under-reading here
-               produces code that RUNS but is silently WRONG — e.g. a marker-controlled
-               watershed that merges every object into a single region. A second read that
-               prevents that is cheap; the wrong result is not.
-       When you only need one section of a large file, use the grep/file-search tool to pull
-       that snippet. Plan all edits from what you've read and batch them into as FEW calls as
-       possible. Be lean, but never trade a correct result for one fewer read.
+   1c. SEED FROM A TEMPLATE WHEN ONE CLOSELY FITS: If a ready-to-run WORKFLOW SCRIPT
+       (a real .groovy/.py under /app/skills/, e.g. GROOVY_WORKFLOW_*.groovy or WORKFLOW_*)
+       or a prior project script ALREADY does essentially this task and needs only small
+       tweaks (parameters, input/output paths, a few lines), seed from it with
+       `copy_file(source_path=<that file>, directory=<.../scripts/imagej>, filename=..., description=...)`.
+       copy_file copies it AND returns its full content, so you do NOT also need load_script.
+       Then patch ONLY what differs with `edit_script` — when several disconnected spots change
+       (e.g. input path, output path, a parameter), pass them all as the `edits` list in ONE
+       edit_script call (atomic, one version); do NOT save_script over a copied file.
+       Otherwise, write the script from scratch.
    2. SAVE WITH DOCUMENTATION: For a brand-new from-scratch script, use `save_script` EXACTLY
       ONCE to commit your code (use `edit_script` for any subsequent change to a file you
       already saved/copied — never re-run save_script on the same file).
