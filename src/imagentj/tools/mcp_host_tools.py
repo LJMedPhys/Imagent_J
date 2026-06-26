@@ -330,15 +330,32 @@ def _client_for_server(server_name: str, server_config: dict[str, Any]) -> Any:
         return client
 
 
+def _evict_client(server_name: str, server_config: dict[str, Any]) -> None:
+    """Remove a stale client from the cache so the next call spawns a fresh one."""
+    key = _client_key(server_name, server_config)
+    with _CLIENT_LOCK:
+        _CLIENTS.pop(key, None)
+
+
 async def _list_server_tools(server_name: str, server_config: dict[str, Any]) -> dict:
-    client = _client_for_server(server_name, server_config)
-    async with client:
-        tools = await client.list_tools()
-    return {
-        "status": "ok",
-        "server_name": server_name,
-        "tools": [_tool_to_dict(item) for item in tools],
-    }
+    last_exc: Exception | None = None
+    for attempt in range(2):
+        try:
+            client = _client_for_server(server_name, server_config)
+            async with client:
+                tools = await client.list_tools()
+            return {
+                "status": "ok",
+                "server_name": server_name,
+                "tools": [_tool_to_dict(item) for item in tools],
+            }
+        except Exception as exc:
+            last_exc = exc
+            if attempt == 0:
+                # The server process likely died (e.g. napari window closed).
+                # Evict the stale client so the next attempt spawns a fresh process.
+                _evict_client(server_name, server_config)
+    raise last_exc  # type: ignore[misc]
 
 
 async def _call_server_tool(
@@ -348,9 +365,20 @@ async def _call_server_tool(
     arguments: dict[str, Any],
 ) -> dict:
     call_arguments, path_translations = _translate_arguments(arguments)
-    client = _client_for_server(server_name, server_config)
-    async with client:
-        result = await client.call_tool(tool_name, call_arguments)
+    last_exc: Exception | None = None
+    for attempt in range(2):
+        try:
+            client = _client_for_server(server_name, server_config)
+            async with client:
+                result = await client.call_tool(tool_name, call_arguments)
+            break
+        except Exception as exc:
+            last_exc = exc
+            if attempt == 0:
+                # Server process died (e.g. napari window closed); evict and retry.
+                _evict_client(server_name, server_config)
+            else:
+                raise last_exc from exc  # type: ignore[misc]
     payload = {
         "status": "ok",
         "server_name": server_name,
