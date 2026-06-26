@@ -1061,6 +1061,20 @@ NAPARI VISUALISATION (optional MCP tools — names start with mcp__napari_mcp__)
   error and do not retry identical arguments.
 - mcp_list_servers / mcp_list_tools / mcp_call_tool are diagnostics only.
 
+MICRO-SAM SEGMENTATION (run_microsam_segmentation):
+- Runs SAM-based automatic instance segmentation headlessly — no napari window
+  opened. Input: any image TIFF/PNG. Output: label TIFF where each integer is
+  a unique instance. Use when the user asks to segment cells/objects with SAM.
+- model_type: "vit_b" (default, ~375 MB), "vit_b_lm" (finetuned for light
+  microscopy — best for fluorescence/phase-contrast), "vit_l"/"vit_l_lm" for
+  higher quality at the cost of speed.
+- segmentation_mode: "amg" works with any model; "ais" is faster but requires
+  a finetuned micro-sam model (vit_b_lm, vit_l_lm, etc.).
+- First call downloads model weights to ~/.cache/micro_sam (persisted via
+  Docker volume). Subsequent calls reuse cached weights.
+- After segmentation, optionally call mcp__napari_mcp__add_layer twice to
+  visualise both the raw image and the label overlay in napari.
+
 STATE LEDGER — your persistent project memory:
 - set_ledger_metadata(project_root, ...): Record scientific goal, pipeline plan, key decisions, image metadata, skill paths, and RAG findings. Call during Phases 1-2 and after each RAG retrieval.
 - update_state_ledger(project_root, phase, step, status, details, ...): Log a completed/failed step with its script path, outputs, and parameters. Call AFTER every significant action.
