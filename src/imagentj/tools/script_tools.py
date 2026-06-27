@@ -5,6 +5,7 @@ from langchain.tools import tool
 from imagentj.imagej_context import get_ij
 import os
 import json
+import re
 import subprocess
 import signal as _signal
 from .analyst_tools import run_python_code
@@ -574,6 +575,32 @@ System.setOut(new java.io.PrintStream(new __ImaGentJAbortStream(System.out), tru
 System.setErr(new java.io.PrintStream(new __ImaGentJAbortStream(System.err), true, "UTF-8"))
 """
 
+# Abort check injected as its own line before each long-running IJ call.
+# ThreadDeath is an Error (not Exception), so broad 'catch (Exception e)' blocks
+# inside batch scripts cannot swallow it — it always unwinds the call stack.
+_ABORT_CHECK_LINE = (
+    "if ('true'.equals(System.getProperty('imagentj.abort'))) { throw new ThreadDeath() }"
+)
+
+# IJ methods that dominate execution time in batch workflows.  Only matched
+# when they appear as the first non-whitespace token on a line (i.e. a
+# standalone statement), never inside expressions, assignments, or arguments.
+# This avoids breaking: `def r = IJ.run(...)`, `return IJ.run(...)`,
+# `foo(IJ.run(...))`, inline comments containing "IJ.run(", etc.
+_ABORT_INJECT_RE = re.compile(
+    r'^([ \t]*)(IJ\.run\(|IJ\.openImage\(|IJ\.openVirtual\()',
+    re.MULTILINE,
+)
+
+
+def _inject_abort_checks(script: str) -> str:
+    """Insert an abort-check line before each standalone IJ operation."""
+    def _replacer(m: re.Match) -> str:
+        indent, call = m.group(1), m.group(2)
+        return f"{indent}{_ABORT_CHECK_LINE}\n{indent}{call}"
+
+    return _ABORT_INJECT_RE.sub(_replacer, script)
+
 
 def run_groovy_script(script: str, ij) -> str:
     """
@@ -626,7 +653,7 @@ def run_groovy_script(script: str, ij) -> str:
         with _script_state_lock:
             _active_java_thread[0] = Thread.currentThread()
         try:
-            _script_result[0] = ij.py.run_script("Groovy", script)
+            _script_result[0] = ij.py.run_script("Groovy", _inject_abort_checks(script))
         except Exception as e:
             _script_exc[0] = e
         finally:
@@ -1041,27 +1068,24 @@ def execute_script(directory: str, filename: str) -> str:
 
 
 def _run_groovy_subprocess(script_path: str) -> str:
-    """Run a Groovy script as an isolated Fiji subprocess.
+    """Run a Groovy script as an isolated Fiji subprocess with instant-kill support.
 
-    This is the only approach that allows instant, reliable cancellation:
-    the subprocess is registered with the global kill registry so the Stop
-    button sends SIGKILL, which terminates the JVM immediately regardless of
-    what plugin code is executing.  The embedded JVM (used by run_groovy_script
-    for interactive work) is unaffected.
+    Process isolation is the only reliable way to stop a CPU-bound Java plugin
+    (e.g. Coloc2 doing FFTs) because Java 21 removed Thread.stop() and
+    thread.interrupt() only unblocks sleep/IO, not CPU-bound code.
+
+    The subprocess and its JVM child are placed in a new process group so a
+    single os.killpg(SIGKILL) terminates the whole tree — proc.kill() alone
+    only kills the Jaunch launcher, orphaning the JVM child.
+
+    Error detection goes beyond exit-code/stack-trace checks: we also scan for
+    the script-level FAIL/FAILURE/ERROR markers that batch scripts emit via
+    println() when internal per-image exceptions are caught and logged.
     """
     fiji_bin = os.path.join(os.environ.get("FIJI_PATH", "/opt/Fiji.app"), "fiji")
     if not os.path.isfile(fiji_bin):
         return f"STATUS: ERROR\nSUMMARY: Fiji binary not found at {fiji_bin}"
 
-    # Run with the VNC display so AWT initialises fully.
-    # --headless breaks plugins like Coloc2 whose showDialog() calls
-    # getCheckboxes() on a never-rendered GenericDialog → NullPointerException.
-    # With DISPLAY=:1, AWT dialogs can be created; ImageJ auto-dismisses them
-    # when IJ.run() is called from a script (macro-options mode).
-    # --allow-multiple: don't try to reuse the existing embedded Fiji instance.
-    # --no-splash:      suppress the splash screen window.
-    # --run:            execute the script file directly.
-    # JAVA_TOOL_OPTIONS cleared to avoid inheriting unwanted JVM flags.
     env = {**os.environ, "DISPLAY": ":1", "JAVA_TOOL_OPTIONS": ""}
 
     proc = subprocess.Popen(
@@ -1070,15 +1094,10 @@ def _run_groovy_subprocess(script_path: str) -> str:
         stderr=subprocess.STDOUT,
         text=True,
         env=env,
-        # Put Fiji and its spawned JVM child in a new process group so
-        # os.killpg() kills the whole tree at once.  proc.kill() alone only
-        # kills the Jaunch launcher; the JVM child becomes an orphan, keeps
-        # running, and holds the stdout pipe open so communicate() never returns.
         start_new_session=True,
     )
 
     def _pgkill() -> None:
-        """Watchdog: kill the entire Fiji process group when stop is requested."""
         while proc.poll() is None:
             if stop_signal.is_set():
                 try:
@@ -1106,21 +1125,41 @@ def _run_groovy_subprocess(script_path: str) -> str:
     output = (stdout or "").strip()
     rc = proc.returncode
 
-    # Heuristic: Java stack traces in stdout indicate a runtime error even if
-    # the exit code is 0 (Fiji sometimes exits 0 after an uncaught exception).
+    # Java stack traces indicate a crash even when exit code is 0.
     has_java_trace = any(
         kw in output.lower()
         for kw in ("\tat ", "caused by:", "exception in thread", "exception:")
     )
 
-    if rc != 0 or has_java_trace:
+    # Scripts that use per-image try/catch (e.g. batch loops) absorb exceptions
+    # internally and exit 0, but mark failures via println. Detect those here so
+    # they are reported as ERROR rather than silently treated as SUCCESS.
+    output_lines = output.splitlines()
+    script_level_error = any(
+        line.lstrip().startswith(("FAILURE:", "FAIL:", "ERROR:", "PARTIAL"))
+        for line in output_lines
+    )
+    # A batch that reports only FAILs and no OKs is a total failure.
+    has_any_ok = any(line.lstrip().startswith("OK:") or "SUCCESS" in line for line in output_lines)
+    all_failed = script_level_error and not has_any_ok
+
+    if rc != 0 or has_java_trace or all_failed:
         summary_line = next(
-            (l for l in output.splitlines() if "exception" in l.lower() or "error" in l.lower()),
+            (l.strip() for l in output_lines
+             if any(k in l.lower() for k in ("exception", "error", "fail", "failure"))),
             f"exit code {rc}",
         )
         return (
             f"STATUS: ERROR\n"
             f"SUMMARY: {summary_line[:200]}\n"
+            f"STDOUT:\n{_truncate(output, 3000)}"
+        )
+
+    # Partial success: some images failed but at least one succeeded.
+    if script_level_error and has_any_ok:
+        return (
+            f"STATUS: WARNING\n"
+            f"SUMMARY: Batch completed with some failures — check STDOUT for details\n"
             f"STDOUT:\n{_truncate(output, 3000)}"
         )
 
