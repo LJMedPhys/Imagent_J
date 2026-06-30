@@ -374,25 +374,81 @@ _plugin_agent = create_agent(
 # ---------------------------------------------------------------------------
 # LangGraph's default recursion_limit is 1000 super-steps (~500 turns), so a tool
 # loop (e.g. an analyst re-verifying after it already committed) can burn credits
-# unbounded. We cap every subagent. Legit runs use ~3-8 turns (~6-18 super-steps),
-# so 30 leaves generous headroom while turning a runaway into a bounded ~15-turn stop.
-_RECURSION_LIMIT = int(os.environ.get("AGENT_RECURSION_LIMIT", "30"))
+# unbounded. We cap every subagent. Legit runs use ~3-8 turns, but a heavy
+# supervisor-driven task (recommended-plugin SKILL.md reads + several inspect_java_class
+# checks) can reach ~12-16 turns (~24-32 super-steps), so 30 was too tight and could
+# clip a legitimate run. 45 (~22 turns) keeps generous headroom while still turning a
+# true runaway into a bounded stop. When the cap IS hit, _on_cap below salvages any
+# saved script (success=True) so the Supervisor executes it — the artifact is usually
+# complete; the agent merely failed to emit a final handoff. So the cap is now a
+# graceful "stop and hand back what you have", not a hard failure.
+_RECURSION_LIMIT = int(os.environ.get("AGENT_RECURSION_LIMIT", "45"))
 
 
-def _newest_script(directory: str) -> str:
-    """Best-effort: the most recently modified .py/.groovy under `directory` (recursive)."""
-    newest, newest_mtime = "", -1.0
+def _salvage_or_fail_script(script_path, kind):
+    """Build a graceful ScriptHandoff for a subagent that hit the recursion cap.
+
+    If a non-empty script was saved, hand it back as success=True so the Supervisor
+    runs it through execute_script (ground truth) instead of discarding it — most caps
+    happen AFTER a complete save, while the agent loops on self-verification. If nothing
+    was saved, fail cleanly with a retry hint and NO internal 'recursion' wording.
+    """
+    has_script = bool(script_path) and os.path.isfile(script_path) and os.path.getsize(script_path) > 0
+    if has_script:
+        return ScriptHandoff(
+            script_path=script_path,
+            description=(
+                f"{kind} produced a script but did not emit a final handoff. It is most "
+                "likely complete — execute it to confirm; if it errors, send it to imagej_debugger."
+            ),
+            success=True,
+        )
+    return ScriptHandoff(
+        script_path="",
+        description=f"{kind} could not produce a usable script for this task.",
+        success=False,
+        error_message="No script was generated — re-issue the request once with a simpler, more explicit task.",
+    )
+
+
+def _snapshot_scripts(directory: str) -> dict:
+    """Map {path: mtime} of every .py/.groovy under `directory` (recursive), taken BEFORE
+    a subagent runs. Lets the cap salvage tell a script THIS run produced from a stale one
+    left by an earlier task — these project folders accumulate many scripts over time."""
+    snap = {}
     try:
         for root, _dirs, files in os.walk(directory):
             for fn in files:
                 if fn.lower().endswith((".py", ".groovy")):
                     p = os.path.join(root, fn)
                     try:
-                        mt = os.path.getmtime(p)
+                        snap[p] = os.path.getmtime(p)
                     except OSError:
                         continue
-                    if mt > newest_mtime:
-                        newest, newest_mtime = p, mt
+    except Exception:
+        pass
+    return snap
+
+
+def _newest_script_since(directory: str, pre: dict) -> str:
+    """The most recently modified .py/.groovy under `directory` that was CREATED or MODIFIED
+    after the `pre` snapshot — i.e. produced during THIS run. Returns "" if nothing changed,
+    so the caller fails cleanly instead of salvaging (and executing) a stale script from an
+    earlier task."""
+    newest, newest_mtime = "", -1.0
+    try:
+        for root, _dirs, files in os.walk(directory):
+            for fn in files:
+                if not fn.lower().endswith((".py", ".groovy")):
+                    continue
+                p = os.path.join(root, fn)
+                try:
+                    mt = os.path.getmtime(p)
+                except OSError:
+                    continue
+                # new file (absent from pre), or existing file whose mtime advanced this run
+                if mt > pre.get(p, -1.0) and mt > newest_mtime:
+                    newest, newest_mtime = p, mt
     except Exception:
         pass
     return newest
@@ -439,14 +495,12 @@ def imagej_coder(task: str, project_root: str) -> ScriptHandoff:
 
     agent = _make_coder_agent(model, "imagej_coder", imagej_coder_prompt)
 
+    scripts_dir = os.path.join(project_root, "scripts", "imagej")
+    pre_scripts = _snapshot_scripts(scripts_dir)
+
     def _on_cap():
-        path = _newest_script(os.path.join(project_root, "scripts", "imagej"))
-        return ScriptHandoff(
-            script_path=path,
-            description="Coder stopped at the recursion cap (likely a tool loop); any saved script may be incomplete.",
-            success=False,
-            error_message=f"Hit the {_RECURSION_LIMIT}-step recursion cap before returning a handoff.",
-        )
+        path = _newest_script_since(scripts_dir, pre_scripts)
+        return _salvage_or_fail_script(path, "The coder")
 
     return _run_capped(
         agent,
@@ -477,12 +531,7 @@ def imagej_debugger(script_path: str, error_message: str, project_root: str = ""
             sections.insert(1, f"PROJECT STATE (for context):\n{ledger_ctx}")
 
     def _on_cap():
-        return ScriptHandoff(
-            script_path=script_path,
-            description="Debugger stopped at the recursion cap (likely a tool loop); the fix may be incomplete.",
-            success=False,
-            error_message=f"Hit the {_RECURSION_LIMIT}-step recursion cap before returning a handoff.",
-        )
+        return _salvage_or_fail_script(script_path, "The debugger")
 
     return _run_capped(
         agent,
@@ -521,13 +570,23 @@ def python_data_analyst(task: str, input_csv: str, output_dir: str, project_root
             sections.append(f"PROJECT STATE (use for axis labels, units, and context):\n{ledger_ctx}")
     sections.append(f"TASK: {task}")
 
+    pre_scripts = _snapshot_scripts(output_dir)
+
     def _on_cap():
-        path = _newest_script(output_dir)
+        path = _newest_script_since(output_dir, pre_scripts)
+        has = bool(path) and os.path.isfile(path) and os.path.getsize(path) > 0
+        if has:
+            return AnalystHandoff(
+                script_path=path,
+                description=("The analyst produced a script but did not emit a final handoff. "
+                            "It is most likely complete — execute it to confirm."),
+                success=True,
+            )
         return AnalystHandoff(
-            script_path=path,
-            description="Analyst stopped at the recursion cap (likely a post-commit verify loop); any saved script was not confirmed.",
+            script_path="",
+            description="The analyst could not produce a usable script for this task.",
             success=False,
-            error_message=f"Hit the {_RECURSION_LIMIT}-step recursion cap before returning a handoff.",
+            error_message="No script was generated — re-issue the request once with a simpler, more explicit task.",
         )
 
     return _run_capped(
