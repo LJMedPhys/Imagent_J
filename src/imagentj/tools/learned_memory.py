@@ -33,6 +33,7 @@ HOW IT WORKS:
 """
 import os
 import re
+import math
 import hashlib
 import datetime
 import threading
@@ -137,6 +138,18 @@ def _hash_of(block: str) -> str:
 def _kw(block: str) -> set:
     m = re.search(r"\bkw:([^>]*)-->", block)
     return {k.strip().lower() for k in m.group(1).split(",")} - {""} if m else set()
+
+def _norm_kw(keywords) -> str:
+    """Normalise a Librarian-supplied alias list (comma/semicolon/list) into a clean,
+    deduped, lowercase, comma-joined string (bounded to 8) for the kw: tag."""
+    if isinstance(keywords, (list, tuple, set)):
+        keywords = ",".join(str(k) for k in keywords)
+    out, seen = [], set()
+    for k in re.split(r"[,;]", keywords or ""):
+        k = k.strip().lower()
+        if k and k not in seen:
+            seen.add(k); out.append(k)
+    return ",".join(out[:8])
 
 def _body(block: str) -> str:
     return block.split("-->", 1)[1].strip("\n")
@@ -281,8 +294,23 @@ def core_recipes(language: str = "Groovy") -> str:
             "the code, then ADAPT it, do not copy verbatim):\n" + body)
 
 def _scored(query_tokens: set, blocks: List[str]) -> List[str]:
-    rows = [(len(query_tokens & _match_tokens(b)), _seen(b), _body(b)) for b in blocks]
-    rows = [r for r in rows if r[0]]
+    """Rank by IDF-weighted token overlap (a BM25-lite): a matched token is worth
+    log(1 + N/df), so RARE/distinctive terms dominate and common ones (image, save,
+    channel) stop crowding results as the library grows — preserving specificity at
+    scale. seen breaks ties. Matches body tokens + Librarian keyword aliases."""
+    toks = [_match_tokens(b) for b in blocks]
+    n = len(blocks)
+    df = {}
+    for ts in toks:
+        for t in ts:
+            df[t] = df.get(t, 0) + 1
+    rows = []
+    for b, ts in zip(blocks, toks):
+        common = query_tokens & ts
+        if not common:
+            continue
+        score = sum(math.log(1 + n / (1 + df.get(t, 0))) for t in common)
+        rows.append((score, _seen(b), _body(b)))
     rows.sort(key=lambda t: (t[0], t[1]), reverse=True)
     return [body for _, _, body in rows]
 
@@ -378,11 +406,13 @@ def _enforce_core_cap(language: str, kind: str) -> None:
 @tool("library_add_pitfall")
 def library_add_pitfall(language: str, rule: str, snippet: str = "",
                         error_type: str = "Logic", class_involved: str = "",
-                        core: bool = False) -> str:
+                        core: bool = False, keywords: str = "") -> str:
     """Add a verified error->fix lesson to the wiki. `rule` is one imperative line
-    (symptom AND fix); `snippet` is a minimal working fix (optional). Set core=True
-    ONLY for a broadly-useful, recurring/high-severity trap (plugin/environment-
-    specific lessons are forced to the regular library regardless)."""
+    (symptom AND fix); `snippet` is a minimal working fix (optional). `keywords` is a
+    comma-separated list of 5-8 SEARCH ALIASES a future task/error would use to find
+    this (synonyms, paraphrases, the class/method/error names) — they make recall
+    robust to wording. Set core=True ONLY for a broadly-useful, recurring/high-severity
+    trap (plugin/environment-specific lessons are forced to the regular library)."""
     rule = (rule or "").strip()
     if not rule:
         return "skipped: empty rule"
@@ -391,7 +421,7 @@ def library_add_pitfall(language: str, rule: str, snippet: str = "",
     scope = "plugin" if _is_plugin(rule, error_type, class_involved) else "general"
     to_core = bool(core) and scope != "plugin"
     block = (f"<!--p:{h} seen:1 lang:{language} type:{error_type or 'Logic'} "
-             f"class:{class_involved or ''} scope:{scope} kw:-->\n- {rule}")
+             f"class:{class_involved or ''} scope:{scope} kw:{_norm_kw(keywords)}-->\n- {rule}")
     if snippet:
         block += "\n" + "\n".join("    " + ln for ln in snippet.strip().splitlines())
     target = _core_pitfall_page(language) if to_core else _pitfall_page(language)
@@ -404,12 +434,15 @@ def library_add_pitfall(language: str, rule: str, snippet: str = "",
 
 @tool("library_add_recipe")
 def library_add_recipe(language: str, name: str, description: str, inputs: str,
-                       source_path: str, core: bool = False) -> str:
+                       source_path: str, core: bool = False, keywords: str = "") -> str:
     """File a VERIFIED, just-run script as a recipe. `source_path` is the path to the
     working script (its code is copied into the store). Write a short reusable `name`,
-    a 1-3 sentence `description`, and the `inputs` it expects. Set core=True only for
-    a broadly-reusable workflow a future, different task could adapt; one-offs go to
-    the regular library (core=False) — still saved, just not featured."""
+    a 1-3 sentence `description`, and the `inputs` it expects. `keywords` is a comma-
+    separated list of 5-8 SEARCH ALIASES a future, differently-worded task would use to
+    find this recipe (synonyms and paraphrases of the operation, the plugins/methods
+    involved) — they make recall robust to vocabulary. Set core=True only for a broadly-
+    reusable workflow a future, different task could adapt; one-offs go to the regular
+    library (core=False) — still saved, just not featured."""
     name = (name or "").strip()
     if not name or not source_path or not os.path.isfile(source_path):
         return "skipped: need a name and an existing source_path"
@@ -432,7 +465,7 @@ def library_add_recipe(language: str, name: str, description: str, inputs: str,
     except OSError:
         return "skipped: could not write recipe code"
     h = _hash(name)
-    block = (f"<!--r:{h} seen:1 lang:{language} chash:{chash} kw:-->\n"
+    block = (f"<!--r:{h} seen:1 lang:{language} chash:{chash} kw:{_norm_kw(keywords)}-->\n"
              f"- {name}  [inputs: {inputs}]\n  {description}\n  SCRIPT: {code_path}")
     target = _core_recipe_page(language) if core else _recipe_page(language)
     with _LOCK:
@@ -620,17 +653,20 @@ def _librarian_bg(language, full, recipe_ok, desc, pending, mode) -> None:
     if lint:
         parts.append(
             "DEDUP/REBALANCE RUN. DO: (1) file each NEW candidate above that is genuinely "
-            "novel (skip true duplicates). (2) DEDUP within the shard shown above (it is "
-            "sorted so similar entries are adjacent): near-duplicate recipes (same "
-            "operation/workflow) or pitfalls (same root cause + fix) -> KEEP the clearest/"
-            "most-seen one and library_remove the redundant others, preferring the more "
-            "robust variant. (3) REBALANCE CORE for pitfalls and recipes with "
-            "library_set_core: promote the most broadly-reusable, high-value entries and "
-            "demote stale/narrow ones, within the caps. Only act on entries shown above.")
+            "novel (skip true duplicates), giving it `keywords` (5-8 search aliases). "
+            "(2) DEDUP within the shard shown above (it is sorted so similar entries are "
+            "adjacent): near-duplicate recipes (same operation/workflow) or pitfalls (same "
+            "root cause + fix) -> KEEP the clearest/most-seen one and library_remove the "
+            "redundant others, preferring the more robust variant. (3) REBALANCE CORE for "
+            "pitfalls and recipes with library_set_core: promote the most broadly-reusable, "
+            "high-value entries and demote stale/narrow ones, within the caps. Only act on "
+            "entries shown above.")
     else:
         parts.append(
             "DO: file each NEW candidate above that is genuinely novel (skip a true "
-            "duplicate of an existing entry). Do NOT audit/remove existing entries or "
+            "duplicate of an existing entry), and give it `keywords` — 5-8 search aliases "
+            "(synonyms/paraphrases + plugin/class/method names) a future, differently-"
+            "worded task would use to find it. Do NOT audit/remove existing entries or "
             "rebalance CORE this run; only set core=True when a new entry is clearly, "
             "broadly reusable.")
     try:

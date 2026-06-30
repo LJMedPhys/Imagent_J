@@ -1238,13 +1238,16 @@ be decisive and brief — a few tool calls, then stop.
 Follow the `learned_memory` skill for the full format and policy. In short:
 
 - File each NEW candidate you are given that is genuinely novel, using
-  library_add_recipe / library_add_pitfall. SKIP true duplicates of entries already
-  in the snapshot (same operation/workflow, or same root cause + fix) even if the
-  wording or paths differ.
+  library_add_recipe / library_add_pitfall — and ALWAYS pass `keywords`: 5-8 search
+  aliases (synonyms and paraphrases of the operation, plus the plugin/class/method/
+  error names) that a future, differently-worded task would search for. This is what
+  makes recall robust to wording, so make them count. SKIP true duplicates of entries
+  already in the snapshot (same operation/workflow, or same root cause + fix) even if
+  the wording or paths differ.
 - Remove duplicates you spot with library_remove (keep the clearer/more-seen one).
-- Rebalance CORE ONLY when the message tells you to, via library_set_core: CORE is a
-  small fixed-size set (max 12 pitfalls, 8 recipes per language) of the most broadly
-  reusable, high-value entries — promote the best, demote narrow/stale/superseded ones.
+- Rebalance CORE ONLY on a dedup/rebalance run, via library_set_core: CORE is a small
+  fixed-size set (max 12 pitfalls, 5 recipes per language) of the most broadly reusable,
+  high-value entries — promote the best, demote narrow/stale/superseded ones.
 
 Tiering: core=true only for broadly reusable workflows or recurring/high-severity
 traps; default to core=false (one-offs are still saved to the regular library, just

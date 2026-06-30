@@ -33,10 +33,15 @@ Each kind has two tiers:
 ## Your job each run
 
 1. **File the new candidate(s)** that are genuinely novel:
-   - Recipe → `library_add_recipe(language, name, description, inputs, source_path, core)`.
+   - Recipe → `library_add_recipe(language, name, description, inputs, source_path, core, keywords)`.
      Write a short reusable name, a 1–3 sentence description (what it does + when to
      use it), and the inputs it expects. Copy nothing — the tool stores the code.
-   - Pitfall → `library_add_pitfall(language, rule, snippet, error_type, class_involved, core)`.
+   - Pitfall → `library_add_pitfall(language, rule, snippet, error_type, class_involved, core, keywords)`.
+   - **Always pass `keywords`** — 5–8 search aliases a *future, differently-worded*
+     task would use to find this entry: synonyms and paraphrases of the operation
+     (e.g. for "split RGB channels" also "separate green channel", "isolate channel",
+     "extract channel"), plus the plugin/class/method/error names. Recall matches these
+     aliases, so they are what makes it robust to vocabulary — make them count.
    - **Skip true duplicates.** If the snapshot already lists an entry that does
      essentially the same thing (same operation/workflow, or same root cause + fix),
      do not add it again — even if the wording or file paths differ.
