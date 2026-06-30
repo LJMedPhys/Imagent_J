@@ -33,7 +33,7 @@ from .prompts import (
 from .tools import (
     internet_search, inspect_all_ui_windows, capture_plugin_dialog,
     show_in_imagej_gui, close_imagej_windows,
-    rag_retrieve_docs, inspect_java_class,
+    rag_retrieve_docs, rag_retrieve_mistakes, rag_retrieve_recipes, inspect_java_class,
     inspect_folder_tree,
     smart_file_reader, inspect_csv_header,
     extract_image_metadata, search_fiji_plugins, install_fiji_plugin,
@@ -47,7 +47,7 @@ from .tools import (
     # capture_ij_window, build_compilation, analyze_image,  # VLM disabled
 )
 from .tools.learned_memory import (
-    register_pending_lesson, core_pitfalls, core_recipes, recall,
+    register_pending_lesson, core_pitfalls, core_recipes,
     library_add_pitfall, library_add_recipe, library_remove, library_set_core,
 )
 from imagentj.tracker import UsageMetrics, MetricsSignalBridge, UsageTrackerCallback
@@ -270,7 +270,8 @@ def _make_coder_agent(model, name, system_prompt):
             load_script,
             get_script_history,
             smart_file_reader,
-            recall,
+            rag_retrieve_mistakes,
+            rag_retrieve_recipes,
             inspect_folder_tree,   # lets agent survey /app/skills/ before reading
         ],
         system_prompt=system_prompt,
@@ -304,7 +305,8 @@ _analyst_agent = create_agent(
         load_script,
         get_script_history,
         get_script_info,
-        recall,
+        rag_retrieve_mistakes,
+        rag_retrieve_recipes,
     ],
     system_prompt=python_analyst_prompt,
     response_format=ToolStrategy(schema=AnalystHandoff, handle_errors=True),
@@ -757,7 +759,7 @@ def init_agent(enable_qa: bool = False):
             show_in_imagej_gui,
             close_imagej_windows,
             rag_retrieve_docs,
-            recall,
+            rag_retrieve_recipes,
             inspect_folder_tree,
             smart_file_reader,
             extract_image_metadata,

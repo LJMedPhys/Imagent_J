@@ -1,16 +1,22 @@
 from config.rag_config import (
-    QDRANT_DATA_PATH, DOCS_COLLECTION_NAME, PLUGINS_COLLECTION_NAME,
+    QDRANT_DATA_PATH, DOCS_COLLECTION_NAME, MISTAKES_COLLECTION_NAME,
+    RECIPES_COLLECTION_NAME, PLUGINS_COLLECTION_NAME,
 )
 
-# Lazy single-collection RAG: only the static documentation store. The agent's
-# learning memory (pitfalls + recipes) is file-based in learned_memory.py.
+# Lazy-init vector stores — RAG is optional. Three collections back the learning
+# loop: docs (static reference), mistakes (pitfalls), recipes. The recipe CODE is
+# NOT stored here (it lives as runnable files on disk); the recipe point embeds the
+# description and stores a `path` pointer. The always-injected CORE floor is a
+# derived markdown cache in learned_memory.py, regenerated from these collections.
 vec_store_docs = None
+vec_store_mistakes = None
+vec_store_recipes = None
 _rag_initialized = False
 
 
 def _try_init_vector_stores():
-    """Attempt to initialize the docs vector store. Returns silently if RAG deps are unavailable."""
-    global vec_store_docs, _rag_initialized
+    """Attempt to initialize the vector stores. Returns silently if RAG deps are unavailable."""
+    global vec_store_docs, vec_store_mistakes, vec_store_recipes, _rag_initialized
     if _rag_initialized:
         return
     _rag_initialized = True
@@ -19,10 +25,14 @@ def _try_init_vector_stores():
         from ..qdrant_client_singleton import get_qdrant_client
         client = get_qdrant_client(path=QDRANT_DATA_PATH)
         vec_store_docs = init_vector_store(collection_name=DOCS_COLLECTION_NAME, client=client)
+        vec_store_mistakes = init_vector_store(collection_name=MISTAKES_COLLECTION_NAME, client=client)
+        vec_store_recipes = init_vector_store(collection_name=RECIPES_COLLECTION_NAME, client=client)
         print("RAG system initialized successfully.")
     except Exception as e:
         print(f"RAG system unavailable (running without RAG): {e}")
         vec_store_docs = None
+        vec_store_mistakes = None
+        vec_store_recipes = None
 
 
 def get_vec_store_docs():
@@ -31,10 +41,28 @@ def get_vec_store_docs():
     return vec_store_docs
 
 
+def get_vec_store_mistakes():
+    """Get the mistakes (pitfalls) vector store, initializing on first access."""
+    _try_init_vector_stores()
+    return vec_store_mistakes
+
+
+def get_vec_store_recipes():
+    """Get the recipes vector store, initializing on first access."""
+    _try_init_vector_stores()
+    return vec_store_recipes
+
+
 def is_rag_available():
     """Check if the documentation RAG is available."""
     _try_init_vector_stores()
     return vec_store_docs is not None
+
+
+def is_learning_rag_available():
+    """Check if the learned-memory (mistakes + recipes) collections are available."""
+    _try_init_vector_stores()
+    return vec_store_mistakes is not None and vec_store_recipes is not None
 
 
 def is_plugin_db_available():
@@ -47,8 +75,10 @@ def is_plugin_db_available():
         return False
 
 
-def reset_vector_stores_for_test(docs=None):
-    """Reset the lazy-init globals; tests use this to inject an in-memory store."""
-    global vec_store_docs, _rag_initialized
+def reset_vector_stores_for_test(docs=None, mistakes=None, recipes=None):
+    """Reset the lazy-init globals; tests use this to inject in-memory stores."""
+    global vec_store_docs, vec_store_mistakes, vec_store_recipes, _rag_initialized
     vec_store_docs = docs
+    vec_store_mistakes = mistakes
+    vec_store_recipes = recipes
     _rag_initialized = True
