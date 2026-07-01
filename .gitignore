@@ -34,9 +34,9 @@ checkpoints*
 !/data/environment/container_snapshot.md
 !/data/learned/
 /data/learned/.runcount
+/data/learned/.lintcursor
 # don't push the verified recipe scripts (kept locally); ship only the empty dir
 /data/learned/recipes/code/*
-!/data/learned/recipes/code/.gitkeep
 
 
 .env

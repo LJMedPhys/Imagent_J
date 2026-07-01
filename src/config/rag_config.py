@@ -14,34 +14,11 @@ QDRANT_DATA_PATH = "/app/qdrant_data"
 if not os.path.exists(QDRANT_DATA_PATH) and not QDRANT_DATA_PATH.startswith("/app"):
     os.makedirs(QDRANT_DATA_PATH, exist_ok=True)
 
-# Collection Names. The static documentation + plugin DB are vector-backed, and so
-# is the agent's learned memory: the REGULAR library of pitfalls (mistakes) and
-# recipes lives in Qdrant (semantic recall), while the small always-injected CORE
-# floor is a derived markdown cache in tools/learned_memory.py. Recipe CODE is kept
-# as runnable files on disk (recipes/code/<chash>.<ext>); the Qdrant recipe point
-# embeds only the description and stores a `path` pointer — never the code blob.
+# Collection Names. Only the static documentation collection (and the plugin DB)
+# is vector-backed now; the agent's learning memory (pitfalls + recipes) is the
+# file-based wiki in tools/learned_memory.py — no embeddings, no Qdrant.
 DOCS_COLLECTION_NAME = "BioimageAnalysisDocs"
-MISTAKES_COLLECTION_NAME = "codingerrors_and_solutions"
-RECIPES_COLLECTION_NAME = "code_recipes"
 PLUGINS_COLLECTION_NAME = "fiji_plugins"
-
-# Retrieval thresholds — fused RRF scores below this are considered "no real match".
-# RRF scores from a fusion of N queries with k=60 typically land in [1/61, N/60] ~= [0.016, N*0.017].
-# A single doc with rank-0 in two of three queries scores ~0.033. We treat anything
-# under MIN_RECIPE_SCORE / MIN_MISTAKE_SCORE as too weak to surface.
-MIN_MISTAKE_SCORE = 0.020
-MIN_RECIPE_SCORE = 0.020
-
-# Pre-save dedup similarity threshold (cosine, dense). At/above this the candidate is
-# a near-duplicate and we increment times_seen on the existing point instead of
-# inserting. This is the cheap, exact-ish guard at WRITE time.
-DEDUP_SIMILARITY_THRESHOLD = 0.92
-
-# Gap band for the Librarian's periodic neighbor SWEEP. Pairs whose cosine lands in
-# [GAP_BAND_LOW, DEDUP_SIMILARITY_THRESHOLD) are "similar but not auto-merge" — the
-# write-time guard ignores them, so the background sweep surfaces these clusters for
-# the Librarian to judge-merge. Below GAP_BAND_LOW: left alone.
-GAP_BAND_LOW = 0.82
 
 # Document Ingestion Settings
 # In your docker-compose, you mapped ${IMAGE_DATA_DIR:-./data} to /data

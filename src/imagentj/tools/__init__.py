@@ -2,9 +2,9 @@ import os
 
 # Tools package - re-export all tools for backward compatibility
 from .file_tools import inspect_folder_tree, smart_file_reader, mkdir_copy, setup_analysis_workspace, save_markdown
-from .rag_tools import rag_retrieve_docs, rag_retrieve_mistakes, rag_retrieve_recipes
+from .rag_tools import rag_retrieve_docs
 from .learned_memory import (
-    core_pitfalls, core_recipes, on_success, register_pending_lesson,
+    recall, core_pitfalls, core_recipes, on_success, register_pending_lesson,
     library_add_pitfall, library_add_recipe, library_remove, library_set_core,
 )
 from .script_tools import run_script_safe, save_script, execute_script, get_script_info, load_script, get_script_history
@@ -19,22 +19,19 @@ from .environment_tools import check_environment
 
 # Lazy accessors for vector stores (RAG is optional)
 from .vector_stores import (
-    get_vec_store_docs, get_vec_store_mistakes, get_vec_store_recipes,
-    is_rag_available, is_learning_rag_available, is_plugin_db_available,
+    get_vec_store_docs, is_rag_available, is_plugin_db_available,
 )
 
 __all__ = [
     'inspect_folder_tree', 'smart_file_reader',
-    'rag_retrieve_docs', 'rag_retrieve_mistakes', 'rag_retrieve_recipes',
-    'core_pitfalls', 'core_recipes',
+    'rag_retrieve_docs', 'recall', 'core_pitfalls', 'core_recipes',
     'on_success', 'register_pending_lesson',
     'library_add_pitfall', 'library_add_recipe', 'library_remove', 'library_set_core',
     'run_script_safe', 'ask_user', 'load_image_ij', 'show_in_imagej_gui', 'inspect_all_ui_windows', 'extract_image_metadata', 'capture_plugin_dialog', 'close_imagej_windows',
     'internet_search', 'inspect_java_class',
     'search_fiji_plugins', 'install_fiji_plugin', 'check_plugin_installed',
     'SafeToolLoggerMiddleware', 'TodoDisplayMiddleware', 'NarrationReminderMiddleware', 'PhaseGuardMiddleware',
-    'get_vec_store_docs', 'get_vec_store_mistakes', 'get_vec_store_recipes',
-    'is_rag_available', 'is_learning_rag_available', 'is_plugin_db_available',
+    'get_vec_store_docs', 'is_rag_available', 'is_plugin_db_available',
     'set_dialog_vision_llm',
     'run_python_code', 'inspect_csv_header', 'mkdir_copy','save_script', 'execute_script', 'get_script_info', 'load_script', 'get_script_history',
     'setup_analysis_workspace', 'save_markdown',

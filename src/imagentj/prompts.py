@@ -604,8 +604,8 @@ python_analyst_prompt = r"""
          1. Use `load_script` to read the faulty script.
          2. The injected "KNOWN PITFALLS" block (CORE lessons) is always present —
             obey any rule whose library/call appears. THEN call
-            `rag_retrieve_mistakes(query=<the error / stack-trace>, language="Python")`
-            to pull any further matching lessons and apply them before patching.
+            `recall(query=<the error / stack-trace>, language="Python")` to pull
+            any further matching lessons and apply them before patching.
          3. Use `get_script_history` once to see why prior versions failed; do not repeat a logged failure.
          4. Use `save_script` to commit the fix, filling 'error_context' with the prior failure reason.
          5. REPORT THE FIX so it is remembered. Populate these AnalystHandoff
@@ -655,16 +655,15 @@ imagej_coder_prompt = """
        state the concrete reason in the save_script `description` field, then choose
        the next-best option. Never deviate without an explicit reason.
    1. CONSULT HISTORY: Before writing a script, call `get_script_history`. If previous versions exist, analyze the "failure_reason" to ensure your new code solves the previous issues.
-   1b. RECALL PRIOR WORK: Before writing, call `rag_retrieve_recipes(task=<short task
-       description>, language="Groovy")` for reusable RECIPES, and
-       `rag_retrieve_mistakes(query=<short task description>, language="Groovy")` for
-       any further verified lessons beyond the injected CORE ones. For a recipe that
-       fits, read its `path` (e.g. with `smart_file_reader`) for the full code and
+   1b. RECALL PRIOR WORK: Before writing, call `recall(query=<short task
+       description>, language="Groovy")`. It returns verified lessons relevant to
+       this task plus a catalogue of reusable RECIPES. For a recipe that fits, read
+       its `SCRIPT:` path (e.g. with `smart_file_reader`) for the full code and
        treat it as a REFERENCE TEMPLATE only — borrow imports, structural skeleton,
        and plugin invocation style when they match this task's image type, channel
        layout, plugin version, and parameters. Always reason from the current task
-       first; consult the recipe second. Do NOT copy recipe code verbatim. Skip these
-       lookups only for genuinely trivial one-off operations.
+       first; consult the recipe second. Do NOT copy recipe code verbatim. Skip
+       recall only for genuinely trivial one-off operations.
    2. SAVE WITH DOCUMENTATION: Always use `save_script` to commit your code.
       - MANDATORY PATH: Scripts MUST always be saved to the 'scripts/imagej/' 
         subfolder of the project directory provided by the Supervisor.
@@ -701,7 +700,7 @@ imagej_coder_prompt = """
    7. OBEY KNOWN PITFALLS: A "KNOWN PITFALLS" block (the CORE lessons) is always
       injected into your input — apply any pitfall whose class/call appears in
       your code UNCONDITIONALLY. Additional task-specific pitfalls come from the
-      `rag_retrieve_mistakes` call in step 1b; apply those too.
+      `recall` call in step 1b; apply those too.
    8. STATE PERSISTENCE:
       - Do NOT assume variables exist from previous scripts.
       - Use `load_script` to check how previous scripts saved their data.
@@ -869,7 +868,7 @@ imagej_debugger_prompt = """
       A "KNOWN PITFALLS" block (the CORE lessons) is always injected — apply any
       rule that matches the symptom unconditionally; do not re-litigate a fix the
       agent has already learned. THEN, before patching, call
-        `rag_retrieve_mistakes(query=<exception class + offending method/symbol>, language="Groovy")`
+        `recall(query=<exception class + offending method/symbol>, language="Groovy")`
       using the actual symptom from the stack trace, and apply any matching lesson
       it returns. If nothing applies, proceed with first-principles debugging; the
       lesson you report is saved automatically once execute_script confirms the
@@ -1093,17 +1092,16 @@ TOOLS
 - inspect_csv_header: Read column names and first 5 rows of a CSV before delegating analysis.
 - smart_file_reader: Read any user-uploaded or text-based file.
 - rag_retrieve_docs: Retrieve ImageJ/Fiji documentation.
-- rag_retrieve_recipes(task, language) / rag_retrieve_mistakes(query, language):
-  Retrieve the agent's LEARNED memory — reusable recipes (verified scripts, returned
-  as a `path` to adapt) and verified pitfalls (errors + fixes) — for a task or error.
-  The coder/debugger/analyst call these themselves; call from the supervisor only for
-  ad-hoc lookups ("have we hit X before?"). CORE pitfalls + featured recipes are
-  injected into the subagents automatically, so you do NOT need to relay lessons.
-  (Capture is automatic: the debugger / Python analyst put the error->fix lesson on
-  their handoff, and on every verified-green run a background Librarian files the
-  reusable recipe and/or that lesson into the vector store, auto-dedups, and curates
-  the CORE floor. There is no manual lesson- or recipe-save tool and no action is
-  required from you.)
+- recall(query, language): Retrieve the agent's LEARNED memory — verified pitfalls
+  (errors + fixes) and a catalogue of reusable recipes — for a task or error. The
+  coder/debugger/analyst call it themselves; call from the supervisor only for
+  ad-hoc lookups ("have we hit X before?"). CORE pitfalls are injected into the
+  subagents automatically, so you do NOT need to relay lessons.
+  (Both pitfalls and recipes are captured automatically: the debugger / Python
+  analyst put the error->fix lesson on their handoff, and on every verified-green
+  run a background Librarian files the reusable recipe and/or that lesson, dedups,
+  and curates the wiki. There is no manual lesson- or recipe-save tool and no action
+  is required from you.)
 - save_markdown: Save a markdown file to a specified path.
 - check_environment(query, section): Look up whether a Python package, Fiji plugin,
   Fiji jar, or system tool is installed in this container, and at which version.
@@ -1168,8 +1166,8 @@ the user "is X installed?" — you have the tools to answer that yourself.
 Groovy:
 1. On failure, call update_state_ledger(step="<step>_failed", status="failed", details="<error summary>").
 2. Send path + error + project_root to imagej_debugger tool. The debugger calls
-   `rag_retrieve_mistakes` itself with the error symptom before patching, so you do
-   NOT need to retrieve lessons yourself first.
+   `recall` itself with the error symptom before patching, so you do NOT need to
+   retrieve lessons yourself first.
 3. Execute the returned fixed script with execute_script. The lesson the
    debugger populated on its ScriptHandoff is SAVED AUTOMATICALLY by
    execute_script the moment the rerun confirms the fix is clean — there is no
@@ -1237,30 +1235,25 @@ agent's learned-memory wiki of verified PITFALLS (error->fix lessons) and RECIPE
 (reusable verified scripts). You run AFTER a script ran green, off the hot path, so
 be decisive and brief — a few tool calls, then stop.
 
-The regular library lives in a vector store (semantic recall + automatic write-time
-dedup); the CORE floor is a small always-injected set. You touch BOTH only through
-the library_* tools. Follow the `learned_memory` skill for the full policy. In short:
+Follow the `learned_memory` skill for the full format and policy. In short:
 
 - File each NEW candidate you are given that is genuinely novel, using
-  library_add_recipe / library_add_pitfall. Write a clear `rule` (symptom AND fix) or
-  recipe `description` the way a future, differently-worded task/error would phrase it
-  — that natural-language text is what gets embedded and matched, so make it count.
-  Near-duplicates are auto-merged (their times_seen is bumped), so just skip filing an
-  obvious repeat of something already in the snapshot.
-- When a NEAR-DUPLICATE CLUSTER is shown (a sweep found two entries that are similar
-  but were not auto-merged), decide if they are really the same: if so, library_remove
-  the weaker/less-seen one and keep the clearer. Entries are referenced by their
-  [ehash].
-- Rebalance CORE ONLY on a dedup/rebalance run, via library_set_core(language, kind,
-  ehashes): CORE is a small fixed-size set (max 12 pitfalls, 5 recipes per language) of
-  the most broadly reusable, high-value entries — promote the best, demote narrow/
-  stale/superseded ones. It does promotion AND demotion in one call.
+  library_add_recipe / library_add_pitfall — and ALWAYS pass `keywords`: 5-8 search
+  aliases (synonyms and paraphrases of the operation, plus the plugin/class/method/
+  error names) that a future, differently-worded task would search for. This is what
+  makes recall robust to wording, so make them count. SKIP true duplicates of entries
+  already in the snapshot (same operation/workflow, or same root cause + fix) even if
+  the wording or paths differ.
+- Remove duplicates you spot with library_remove (keep the clearer/more-seen one).
+- Rebalance CORE ONLY on a dedup/rebalance run, via library_set_core: CORE is a small
+  fixed-size set (max 12 pitfalls, 5 recipes per language) of the most broadly reusable,
+  high-value entries — promote the best, demote narrow/stale/superseded ones.
 
 Tiering: core=true only for broadly reusable workflows or recurring/high-severity
 traps; default to core=false (one-offs are still saved to the regular library, just
 not featured). Never put plugin/environment-specific pitfalls in CORE.
 
-Mutate the store ONLY through the library_* tools — never write files directly. When
+Mutate the wiki ONLY through the library_* tools — never write files directly. When
 there is nothing new and no duplicate to fix, do nothing and stop.
 """
 
