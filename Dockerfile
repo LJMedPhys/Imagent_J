@@ -249,6 +249,14 @@ RUN /opt/conda/bin/conda create -n napari-mcp python=3.11 -y \
         "import napari, napari_mcp, fastmcp, micro_sam; print('napari', napari.__version__, '| micro_sam', micro_sam.__version__)" \
     && /opt/conda/bin/conda clean -afy
 
+# Patch napari-mcp for Agent J's persistent, interactive viewer (see
+# patch_napari_mcp/patch_qt_helpers.py): survive the window close button (don't
+# shut the server down) and keep the Qt event pump alive on any viewer reopen
+# (e.g. via add_layer, not just init_viewer) so the reopened window stays
+# responsive to mouse/keyboard. Fails the build if upstream source drifts.
+COPY patch_napari_mcp/patch_qt_helpers.py /tmp/patch_qt_helpers.py
+RUN /opt/conda/envs/napari-mcp/bin/python /tmp/patch_qt_helpers.py && rm /tmp/patch_qt_helpers.py
+
 # napari/vispy fall back to llvmpipe software GL under headless Xvfb (no GPU).
 ENV LIBGL_ALWAYS_SOFTWARE=1
 
