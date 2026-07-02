@@ -171,6 +171,17 @@ COPY bundled_jars/csbdeep-0.6.0.jar           /opt/Fiji.app/jars/
 COPY bundled_jars/StarDist_-0.3.0-scijava.jar /opt/Fiji.app/plugins/
 COPY bundled_jars/Clipper-6.4.2.jar           /opt/Fiji.app/jars/
 
+# ── BIOP Cellpose wrapper (from the PTBIOP update site) ──────────────────────
+# ch.epfl.biop.wrappers.cellpose.* — runs Cellpose directly and returns the
+# label image in-process (cp.cellpose_imp), without TrackMate. We bundle just
+# this one jar (sha256 eb0b10d8686ae32f7364dddacb01c3dae2491eb330a97fbc9bcef37cce9fa842)
+# rather than enabling the whole PTBIOP site, to avoid version drift against the
+# carefully-pinned jars in this image. SciJava discovers the `Cellpose` command
+# from the classpath, so the menu entry (Plugins > BIOP > Cellpose) appears.
+# See skills/cellpose_documentation/. Conda activation relies on BASH_ENV
+# (set in src/imagentj/imagej_context.py) pointing at conda.sh.
+COPY bundled_jars/ijl-utilities-wrappers-0.12.1.jar /opt/Fiji.app/jars/
+
 # ── For aarch64, install CSBDeep linux/arm64 TensorFlow Java single-JAR patch ────────────
 # The upstream CSBDeep Fiji JAR depends on TensorFlow Java 1.x JNI artifacts
 # that do not ship linux/aarch64 native libraries. Use the prebuilt single JAR
@@ -264,6 +275,12 @@ ENV LIBGL_ALWAYS_SOFTWARE=1
 # Omnipose 1.x is built on cellpose 3.x, so they share one env.
 # The micromamba shim routes both '-n cellpose' and '-n omnipose' here.
 # Snapshot (2026-04-30): Python 3.10.20, cellpose 3.1.1.2, omnipose 1.1.4, torch 2.11.0+cpu
+# tifffile is bumped to 2025.5.10 AFTER cellpose installs: cellpose[gui] pins the
+# old 2023.2.28, which calls ndarray.newbyteorder() (removed in NumPy 2.0) when
+# reading the big-endian ('MM') TIFFs that ImageJ/Fiji writes. The BIOP Cellpose
+# wrapper feeds cellpose an ImageJ-written TIFF, so without the bump cellpose
+# crashes on read. Done as a separate pip call so the resolver doesn't fight
+# aicsimageio's stale <2023.3.15 pin (aicsimageio is not on the cellpose read path).
 RUN /opt/conda/bin/conda create -n cellpose python=3.10 -y \
     && if [ "$TARGETARCH" = "arm64" ]; then \
         /opt/conda/envs/cellpose/bin/pip install --no-cache-dir \
@@ -279,6 +296,7 @@ RUN /opt/conda/bin/conda create -n cellpose python=3.10 -y \
         'langchain-core==1.2.16' \
         'langgraph-checkpoint-sqlite==3.0.3' \
         'pydantic==2.12.5' \
+    && /opt/conda/envs/cellpose/bin/pip install --no-cache-dir 'tifffile==2025.5.10' \
     && /opt/conda/envs/cellpose/bin/cellpose --version \
     && /opt/conda/bin/conda clean -afy \
     && printf '#!/bin/bash\nexec /opt/conda/envs/cellpose/bin/cellpose "$@"\n' > /opt/conda/bin/cellpose \
