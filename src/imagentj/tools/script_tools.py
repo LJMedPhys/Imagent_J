@@ -13,6 +13,7 @@ from filelock import FileLock
 import threading
 import time
 from scyjava import jimport
+from .utils import add_line_numbers, strip_line_numbers
 
 # ── Window classification ─────────────────────────────────────────────────
 
@@ -865,7 +866,10 @@ def edit_script(directory: str, filename: str,
     except Exception as e:
         return f"Error reading file: {str(e)}"
 
-    # Normalize both forms into one ordered list of (old, new, replace_all)
+    # Normalize both forms into one ordered list of (old, new, replace_all).
+    # strip_line_numbers defensively removes any "<n><TAB>" prefixes the model copied
+    # from a numbered load_script view — those prefixes aren't in the file, so without
+    # this every such old_string would miss. No-op on normal (unnumbered) text.
     edit_list = []
     if edits:
         if not isinstance(edits, (list, tuple)):
@@ -873,9 +877,10 @@ def edit_script(directory: str, filename: str,
         for e in edits:
             if not isinstance(e, dict) or "old_string" not in e or "new_string" not in e:
                 return "Error: each item in 'edits' must be an object with 'old_string' and 'new_string'."
-            edit_list.append((e["old_string"], e["new_string"], bool(e.get("replace_all", False))))
+            edit_list.append((strip_line_numbers(e["old_string"]), strip_line_numbers(e["new_string"]),
+                              bool(e.get("replace_all", False))))
     elif old_string is not None and new_string is not None:
-        edit_list.append((old_string, new_string, replace_all))
+        edit_list.append((strip_line_numbers(old_string), strip_line_numbers(new_string), replace_all))
     else:
         return "Error: provide either (old_string AND new_string) or a non-empty 'edits' list."
     if not edit_list:
@@ -1054,6 +1059,11 @@ def load_script(directory: str, filename: str) -> str:
     - Read a given file at most ONCE — its content does not change while you work. Do not
       re-load it to 'verify'; use the content you already have.
     - Do not use this tool to 'verify' a script for the Supervisor (use get_script_info instead).
+
+    Each line is shown with a leading "<line-number><TAB>" for reference (e.g. mapping a
+    traceback line to code). These prefixes are display-only — NOT part of the file.
+    You may still copy a line verbatim (prefix and all) into edit_script's old_string;
+    edit_script strips the prefix before matching, so it just works.
     """
     allowed_extensions = ('.py', '.groovy')
     if not filename.lower().endswith(allowed_extensions):
@@ -1067,7 +1077,7 @@ def load_script(directory: str, filename: str) -> str:
     try:
         with open(full_path, 'r', encoding='utf-8') as f:
             content = f.read()
-        return f"--- START OF FILE: {filename} ---\n{content}\n--- END OF FILE ---"
+        return f"--- START OF FILE: {filename} ---\n{add_line_numbers(content)}\n--- END OF FILE ---"
     except Exception as e:
         return f"Error reading file: {str(e)}"
     
