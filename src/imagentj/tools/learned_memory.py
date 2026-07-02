@@ -91,9 +91,14 @@ __all__ = ["register_pending_lesson", "on_success", "core_pitfalls", "core_recip
 # helpers
 # --------------------------------------------------------------------------- #
 def _hash(s: str) -> str:
+    """Short stable id: first 8 hex chars of the SHA-1 of the trimmed string. Used to
+    derive an entry's [HASH] from its rule (pitfall) / name (recipe) and a recipe's
+    content hash (chash) from its code."""
     return hashlib.sha1(s.strip().encode("utf-8")).hexdigest()[:8]
 
 def _read(path: str) -> str:
+    """Read a file's text, returning "" if it does not exist / can't be read (so callers
+    never have to guard for a missing page)."""
     try:
         with open(path, encoding="utf-8") as f:
             return f.read()
@@ -101,40 +106,54 @@ def _read(path: str) -> str:
         return ""
 
 def _tokens(*parts: str) -> set:
+    """Tokenise the given text pieces into a lowercase set of ≥3-char alphanumeric words
+    with stopwords removed. The unit of matching for recall and similarity ranking."""
     text = " ".join(p for p in parts if p)
     return {t.lower() for t in re.findall(r"[A-Za-z][A-Za-z0-9_]{2,}", text)} - _STOP
 
 def _pitfall_page(language: str) -> str:
+    """Path to the regular (recall-searchable) pitfall page for a language."""
     return os.path.join(PITFALLS_DIR, f"{language}.md")
 
 def _recipe_page(language: str) -> str:
+    """Path to the regular (recall-searchable) recipe page for a language."""
     return os.path.join(RECIPES_DIR, f"{language}.md")
 
 def _core_pitfall_page(language: str) -> str:
+    """Path to the always-injected CORE pitfall page for a language."""
     return os.path.join(PITFALLS_DIR, f"CORE.{language}.md")
 
 def _core_recipe_page(language: str) -> str:
+    """Path to the always-injected CORE recipe page for a language."""
     return os.path.join(RECIPES_DIR, f"CORE.{language}.md")
 
 def _blocks(path: str) -> List[str]:
+    """Parse a page into its list of entry blocks (each = the HTML-comment metadata line
+    plus its markdown body), via the _BLOCK_RE splitter. Empty for a missing page."""
     return _BLOCK_RE.findall(_read(path))
 
 def _lang_blocks(path: str, language: str) -> List[str]:
+    """The blocks in a page whose lang: tag matches (defensive filter; pages are already
+    per-language)."""
     return [b for b in _blocks(path) if _lang_of(b) == language]
 
 def _seen(block: str) -> int:
+    """The reinforcement count (seen:N) parsed from a block's metadata; 1 if absent."""
     m = re.search(r"\bseen:(\d+)", block)
     return int(m.group(1)) if m else 1
 
 def _lang_of(block: str) -> str:
+    """The language (lang:L) parsed from a block's metadata, or "" if absent."""
     m = re.search(r"\blang:(\w+)", block)
     return m.group(1) if m else ""
 
 def _hash_of(block: str) -> str:
+    """The entry [HASH] parsed from a block's opening <!--p:HASH / <!--r:HASH marker."""
     m = re.match(r"<!--[pr]:(\w+)", block)
     return m.group(1) if m else ""
 
 def _kw(block: str) -> set:
+    """The Librarian-written search aliases (kw:a,b,c) parsed from a block, as a set."""
     m = re.search(r"\bkw:([^>]*)-->", block)
     return {k.strip().lower() for k in m.group(1).split(",")} - {""} if m else set()
 
@@ -151,27 +170,40 @@ def _norm_kw(keywords) -> str:
     return ",".join(out[:8])
 
 def _body(block: str) -> str:
+    """The human-readable part of a block: everything after the metadata comment (the
+    bullet rule/name + description + snippet/SCRIPT lines)."""
     return block.split("-->", 1)[1].strip("\n")
 
 def _match_tokens(block: str) -> set:
+    """The full token set an entry can be matched on: its body tokens PLUS its keyword
+    aliases. Used by recall scoring and by similarity ranking/clustering."""
     return _tokens(_body(block)) | _kw(block)
 
 def _scope_of(block: str) -> str:
+    """The scope (scope:general|plugin) parsed from a block; "" if absent."""
     m = re.search(r"\bscope:(\S+)", block)
     return m.group(1) if m else ""
 
 def _is_plugin(rule: str, error_type: str, class_involved: str) -> bool:
+    """True if a lesson is plugin/environment-specific (error_type 'plugin', or the rule/
+    class matches _PLUGIN_RE). Such lessons are deployment-specific and never promoted to
+    CORE — they stay recall-only."""
     return ((error_type or "").strip().lower() == "plugin"
             or bool(_PLUGIN_RE.search(" ".join((rule or "", class_involved or "")))))
 
 def _script_path_of(block: str) -> str:
+    """The recipe code path parsed from a recipe block's `SCRIPT: <path>` line; "" if none."""
     m = re.search(r"SCRIPT:\s*(\S+)", block)
     return m.group(1) if m else ""
 
 def _is_recipe(block: str) -> bool:
+    """True if a block is a recipe (<!--r:), False if a pitfall (<!--p:)."""
     return block.lstrip().startswith("<!--r:")
 
 def _append_or_bump(path: str, marker: str, block: str) -> None:
+    """Idempotent write: if an entry with this marker (<!--p:HASH / <!--r:HASH) already
+    exists in the page, increment its seen: count in place; otherwise append the new
+    block. This is how re-encountering the same lesson/recipe reinforces it."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     text = _read(path)
     if marker in text:                                   # idempotent: bump seen
@@ -184,6 +216,8 @@ def _append_or_bump(path: str, marker: str, block: str) -> None:
             f.write(("" if not text or text.endswith("\n") else "\n") + block + "\n")
 
 def _write_blocks(path: str, blocks: List[str]) -> None:
+    """Overwrite a page with exactly this list of blocks (used to rewrite a page after a
+    removal or a CORE promotion/demotion)."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(blocks) + ("\n" if blocks else ""))
@@ -202,6 +236,9 @@ def _move_blocks(src: str, dst: str, hashes: set) -> None:
     _write_blocks(src, keep)
 
 def _log(language: str, kind: str, etype: str, h: str, summary: str) -> None:
+    """Append one audit line to log.md: `ts | language | kind | etype | hash | summary`.
+    Records adds, lint dispatches, dedup removals, and CORE rebalances so the whole
+    lifecycle is observable."""
     os.makedirs(ROOT, exist_ok=True)
     ts = datetime.datetime.utcnow().isoformat(timespec="seconds")
     with open(LOG_PATH, "a", encoding="utf-8") as f:
@@ -222,6 +259,8 @@ def _bump_runcount() -> int:
     return n
 
 def _lint_cursor(language: str) -> int:
+    """Read the persisted per-language position of the full-lint rotating sweep (0 if
+    unset). Lets successive full-lint passes cover the whole library over time."""
     import json
     try:
         return int(json.loads(_read(_LINTCURSOR_PATH) or "{}").get(language, 0))
@@ -229,6 +268,7 @@ def _lint_cursor(language: str) -> int:
         return 0
 
 def _set_lint_cursor(language: str, value: int) -> None:
+    """Persist the full-lint sweep position for a language (advanced after each full pass)."""
     import json
     with _LOCK:
         try:
@@ -241,10 +281,14 @@ def _set_lint_cursor(language: str, value: int) -> None:
             f.write(json.dumps(d))
 
 def _safe_name(name: str) -> str:
+    """Turn a recipe name into a filesystem-safe stem (lowercase, alnum+underscore, ≤50
+    chars) for its code file under recipes/code/."""
     s = re.sub(r"[^A-Za-z0-9]+", "_", (name or "recipe").strip()).strip("_").lower()
     return s[:50] or "recipe"
 
 def _recipe_exists(language: str, chash: str) -> bool:
+    """True if a recipe with this exact code (content hash) is already stored for the
+    language (in either the CORE or regular page) — the exact-duplicate guard."""
     tag = f"chash:{chash}"
     return tag in _read(_core_recipe_page(language)) or tag in _read(_recipe_page(language))
 
@@ -256,6 +300,10 @@ def _recipe_exists(language: str, chash: str) -> bool:
 def register_pending_lesson(script_path: str, *, language: str, rule: str,
                             failed_code: str = "", working_code: str = "",
                             error_type: str = "Logic", class_involved: str = "") -> None:
+    """Buffer a debugger/analyst error->fix lesson, keyed by the script it fixed. The
+    debugger cannot verify its own fix, so it does NOT save directly; it registers the
+    lesson here and on_success commits it (via the Librarian) once execute_script confirms
+    the rerun is green. No-op if there's no script path or empty rule."""
     if not script_path or not (rule or "").strip():
         return
     _PENDING[os.path.abspath(script_path)] = {
@@ -265,6 +313,8 @@ def register_pending_lesson(script_path: str, *, language: str, rule: str,
     }
 
 def _run_succeeded(out: str) -> bool:
+    """Whether an execute_script output represents a verified-green run (SUCCESS/WARNING
+    and no ERROR) — the gate before anything is learned."""
     if not out or "STATUS: ERROR" in out:
         return False
     return ("STATUS: SUCCESS" in out or "STATUS: WARNING" in out
@@ -341,9 +391,16 @@ def recall(query: str, language: str = "Groovy") -> str:
     return _deep_recall(query, want, language) if DEEP_RECALL else ""
 
 def _loose(a: str, b: str) -> bool:
+    """Fuzzy token match (shared 4-char prefix or substring), used only to GATE the LLM
+    fallback: it decides whether any stored entry is 'near enough' to be worth an LLM
+    check, so no LLM call is made when nothing is even lexically close."""
     return len(a) >= 4 and len(b) >= 4 and (a[:4] == b[:4] or a in b or b in a)
 
 def _deep_recall(query: str, want: set, language: str, cap: int = 8) -> str:
+    """Gated LLM fallback for recall: only runs when exact scoring found nothing AND a
+    lexically-near candidate exists (_loose). Shows the curator LLM the near candidates
+    and asks which genuinely apply, returning those. Returns "" if nothing is near or no
+    LLM is configured — so the common path stays LLM-free."""
     candidates = []
     for page in (_pitfall_page(language), _recipe_page(language)):
         for b in _blocks(page):
@@ -533,6 +590,9 @@ def library_set_core(language: str, kind: str, core_hashes: str) -> str:
 # DISPATCH — fire the background Librarian on a verified-green run. Never blocks.
 # --------------------------------------------------------------------------- #
 def _script_description(directory: str, filename: str) -> str:
+    """Best-effort human description of a just-run script, read from the project's
+    script_dictionary.json; "" if unavailable. Used as the recipe description hint and
+    to seed the similarity ranking of the normal-run snapshot."""
     try:
         import json
         with open(os.path.join(directory, "script_dictionary.json"), encoding="utf-8") as f:
@@ -566,7 +626,13 @@ def on_success(directory: str, filename: str, execute_output: str) -> None:
     threading.Thread(target=_librarian_bg, daemon=True,
                      args=(language, full, recipe_ok, desc, pending, mode)).start()
 
-def _snapshot(language: str) -> str:
+def _snapshot(language: str, cand_tokens: set = None) -> str:
+    """Compact, BOUNDED snapshot for the Librarian (never lists the whole library — at
+    most `n` lines per section). When `cand_tokens` is given (a normal run filing a new
+    entry), regular entries are ranked by SIMILARITY to that new candidate (token
+    overlap), so the entries most likely to be its duplicate are the ones shown — not
+    just the most-seen. Falls back to most-seen ordering when there is no candidate or
+    no overlap, so it degrades gracefully."""
     def one(b):
         # Compact line: pitfall -> the rule; recipe -> name + a SHORT description
         # (enough to spot duplicates without bloating the prompt).
@@ -577,14 +643,17 @@ def _snapshot(language: str) -> str:
             desc = next((ln for ln in lines[1:] if not ln.startswith("SCRIPT:")), "")
             head = f"{name} — {desc[:90]}" if desc else name
         return f"  [{_hash_of(b)} seen:{_seen(b)}] {head[:130]}"
+    def key(b):
+        return (len(cand_tokens & _match_tokens(b)), _seen(b)) if cand_tokens else (_seen(b),)
     def fmt(blocks, n=15):
-        return "\n".join(one(b) for b in sorted(blocks, key=_seen, reverse=True)[:n]) or "  (none)"
+        return "\n".join(one(b) for b in sorted(blocks, key=key, reverse=True)[:n]) or "  (none)"
+    tag = " (most similar to the new candidate first)" if cand_tokens else ""
     return (
         f"LIBRARY SNAPSHOT (language={language})\n"
         f"CORE PITFALLS (cap {CORE_MAX}):\n{fmt(_blocks(_core_pitfall_page(language)))}\n"
-        f"REGULAR PITFALLS:\n{fmt(_blocks(_pitfall_page(language)))}\n"
+        f"REGULAR PITFALLS{tag}:\n{fmt(_blocks(_pitfall_page(language)))}\n"
         f"CORE RECIPES (cap {CORE_RECIPE_MAX}):\n{fmt(_blocks(_core_recipe_page(language)))}\n"
-        f"REGULAR RECIPES:\n{fmt(_blocks(_recipe_page(language)))}"
+        f"REGULAR RECIPES{tag}:\n{fmt(_blocks(_recipe_page(language)))}"
     )
 
 def _full_line(b) -> str:
@@ -637,8 +706,28 @@ def _lint_snapshot(language: str, mode: str) -> str:
     ))
 
 def _librarian_bg(language, full, recipe_ok, desc, pending, mode) -> None:
+    """Background worker (runs in the daemon thread on_success spawns). Builds the
+    Librarian's prompt — a bounded snapshot (similarity-targeted on a normal run; a
+    dedup shard on a lint run) plus the new recipe/pitfall candidate(s) and the
+    mode-specific instructions — then invokes librarian_agent, which mutates the wiki
+    only through the library_* tools. If that agent is unavailable, falls back to a
+    deterministic direct save so a lesson/recipe is never lost. Swallows exceptions:
+    this is off the hot path and must never surface to the task."""
     lint = mode in ("recent", "full")
-    snapshot = _lint_snapshot(language, mode) if lint else _snapshot(language)
+    if lint:
+        snapshot = _lint_snapshot(language, mode)
+    else:
+        # Normal run: rank the (bounded) snapshot by similarity to the NEW candidate,
+        # so likely duplicates surface even when the library is huge.
+        cand = [desc or ""]
+        if recipe_ok:
+            try:
+                cand.append("\n".join(open(full, encoding="utf-8").read().splitlines()[:18]))
+            except OSError:
+                pass
+        if pending:
+            cand += [pending.get("rule", ""), pending.get("class_involved", "")]
+        snapshot = _snapshot(language, _tokens(*cand) or None)
     parts = [f"A script just ran GREEN (verified). Maintain the {language} learned-memory "
              f"wiki, following the learned_memory skill. Act ONLY through the library_* "
              f"tools.", "", snapshot, ""]
