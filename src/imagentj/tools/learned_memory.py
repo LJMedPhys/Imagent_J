@@ -61,7 +61,6 @@ LINT_FULL_EVERY = 10
 LINT_RECENT_N = 10
 LINT_BUDGET = 30
 RECALL_K = 5
-RECIPE_MIN_CHARS = 200    # below this, too trivial to be a reusable recipe
 DEEP_RECALL = os.environ.get("LEARNED_DEEP_RECALL", "1") != "0"
 
 _EXT = {".groovy": "Groovy", ".py": "Python"}
@@ -451,8 +450,6 @@ def library_add_recipe(language: str, name: str, description: str, inputs: str,
         code = open(source_path, encoding="utf-8").read()
     except OSError:
         return "skipped: could not read source_path"
-    if len(code.strip()) < RECIPE_MIN_CHARS:
-        return "skipped: too trivial"
     chash = _hash(code)
     if _recipe_exists(language, chash):
         return f"skipped: duplicate of an existing recipe (chash {chash})"
@@ -502,6 +499,8 @@ def library_remove(entry_hash: str) -> str:
                             pass
                 _write_blocks(path, kept)
                 removed += 1
+    if removed:                                       # log dedup removals (a lint action)
+        _log("-", "remove", "dedup", entry_hash, f"removed from {removed} file(s)")
     return f"removed [{entry_hash}] from {removed} file(s)" if removed else f"no entry [{entry_hash}]"
 
 @tool("library_set_core")
@@ -526,6 +525,7 @@ def library_set_core(language: str, kind: str, core_hashes: str) -> str:
         keepset = set(keep)
         _write_blocks(core_path, [pool[h] for h in keep])
         _write_blocks(reg_path, [b for h, b in pool.items() if h not in keepset])
+    _log(language, "core", kind, "-", f"set to {len(keep)}: {', '.join(keep) or '(none)'}")
     return f"CORE {kind}s for {language} set to {len(keep)} entr(y/ies): {', '.join(keep) or '(none)'}"
 
 
@@ -554,13 +554,14 @@ def on_success(directory: str, filename: str, execute_output: str) -> None:
         code = open(full, encoding="utf-8").read()
     except OSError:
         code = ""
-    recipe_ok = (len(code.strip()) >= RECIPE_MIN_CHARS
-                 and not _recipe_exists(language, _hash(code)))
+    recipe_ok = bool(code.strip()) and not _recipe_exists(language, _hash(code))
     if not recipe_ok and not pending:
         return                                       # nothing new to learn
     n = _bump_runcount()                             # two-tier lint cadence (bounded context)
     mode = ("full" if n % LINT_FULL_EVERY == 0
             else "recent" if n % LINT_RECENT_EVERY == 0 else None)
+    if mode:                                          # make lint passes observable in log.md
+        _log(language, "lint", mode, f"n={n}", "dispatch")
     desc = _script_description(directory, filename)
     threading.Thread(target=_librarian_bg, daemon=True,
                      args=(language, full, recipe_ok, desc, pending, mode)).start()
