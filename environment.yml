@@ -24,6 +24,8 @@ dependencies:
   - matplotlib-base
   - xarray
   - tifffile
+  - imageio
+  - scikit-image
   # LangChain / LangGraph
   - langchain
   - langgraph
@@ -50,6 +52,10 @@ dependencies:
       - anthropic
       - antlr4-python3-runtime
       - beautifulsoup4
+      # scientific image reading used by the bioimage course (chapters 1.5/1.6)
+      - bioio
+      - bioio-ome-tiff
+      - bioio-tifffile
       - click
       - colorlog
       - dataclasses-json
