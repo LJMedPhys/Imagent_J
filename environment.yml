@@ -32,6 +32,8 @@ dependencies:
   # Image analysis / ML (python_coder agent)
   - scikit-image
   - scikit-learn
+  # imageio: used by the bioimage course python demos
+  - imageio
   # LangChain / LangGraph
   - langchain
   - langgraph
@@ -64,6 +66,10 @@ dependencies:
       # `mrc` as its only new transitive dep; every other requirement is a lower bound
       # already satisfied by this env (verified: no downgrades on install).
       - big-fish
+      # scientific image reading used by the bioimage course (chapters 1.5/1.6)
+      - bioio
+      - bioio-ome-tiff
+      - bioio-tifffile
       - click
       - colorlog
       # CellProfiler's measurement engine as a library. MUST come from GitHub —
