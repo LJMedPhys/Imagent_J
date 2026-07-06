@@ -1,5 +1,10 @@
 # Fast Track — Single-Operation Requests
 
+> ⚠️ DEPRECATED / not used by the router. Single self-contained operations are now
+> handled by **quick mode** (`set_mode("quick")`, see `build_quick_prompt`), not by a
+> "fast track" inside the advanced supervisor. Kept for reference only.
+
+
 Use this track when the user wants ONE self-contained image operation, not a
 study. Examples: "segment the nuclei in this image", "threshold this", "count
 the cells", "apply a median filter", "convert these to 8-bit", "register this
