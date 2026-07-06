@@ -155,6 +155,16 @@ def show_in_imagej_gui(path: str) -> str:
     Returns:
         A short status string: success message or human-readable error.
     """
+    return open_in_imagej_gui(path)
+
+
+def open_in_imagej_gui(path: str, title: str | None = None) -> str:
+    """Open a file in the Fiji/ImageJ GUI. Plain helper (not a tool) so other
+    tools can reuse the exact same behaviour. Never raises — returns a status
+    string that starts with "Opened" on success, or a human-readable error.
+
+    If `title` is given, the newly opened image window is renamed to it (so the
+    caller can refer to the window by a stable, human-readable label)."""
     if not isinstance(path, str) or not path.strip():
         return "Could not open file: empty or invalid path."
 
@@ -172,6 +182,14 @@ def show_in_imagej_gui(path: str) -> str:
         from scyjava import jimport
         IJ = jimport('ij.IJ')
         IJ.open(abs_path)
+        if title:
+            try:
+                WindowManager = jimport('ij.WindowManager')
+                imp = WindowManager.getCurrentImage()  # the just-opened image
+                if imp is not None:
+                    imp.setTitle(str(title))
+            except Exception:
+                pass  # renaming is best-effort; opening already succeeded
     except Exception as e:
         return f"Could not open file in ImageJ GUI ({abs_path}): {e!s}"
 

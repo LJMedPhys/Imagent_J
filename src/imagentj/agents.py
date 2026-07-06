@@ -24,6 +24,8 @@ from .prompts import (
     imagej_coder_prompt,
     imagej_debugger_prompt,
     build_supervisor_prompt,
+    build_quick_prompt,
+    build_tutor_prompt,
     python_analyst_prompt,
     qa_reporter_prompt,
     plugin_manager_prompt,
@@ -44,6 +46,10 @@ from .tools import (
     update_state_ledger, read_state_ledger, set_ledger_metadata, get_ledger_context,
     check_environment,
     set_dialog_vision_llm,
+    # multi-mode: tutor tools + mode routing
+    list_curriculum, load_chapter, load_track, show_figure, list_sample_images,
+    list_practicals, reveal_solution, update_course_progress, set_course_plan, set_mode,
+    ModeMiddleware, ModeSpec,
     # capture_ij_window, build_compilation, analyze_image,  # VLM disabled
 )
 from imagentj.tracker import UsageMetrics, MetricsSignalBridge, UsageTrackerCallback
@@ -638,6 +644,83 @@ def init_agent():
 
     set_dialog_vision_llm(llm_nano)
 
+    # ── Advanced mode = the full pipeline toolset (current behaviour) ────────
+    advanced_tools = [
+        # subagents as tools (return typed JSON)
+        *subagent_tools,
+        plugin_manager,
+        # supervisor's own tools
+        internet_search,
+        inspect_all_ui_windows,
+        capture_plugin_dialog,
+        show_in_imagej_gui,
+        close_imagej_windows,
+        rag_retrieve_docs,
+        save_coding_experience,
+        rag_retrieve_mistakes,
+        rag_retrieve_recipes,
+        save_recipe,
+        inspect_folder_tree,
+        smart_file_reader,
+        extract_image_metadata,
+        mkdir_copy,
+        inspect_csv_header,
+        execute_script,
+        get_script_info,
+        setup_analysis_workspace,
+        save_markdown,
+        check_environment,
+        # state ledger (persistent project memory)
+        update_state_ledger,
+        read_state_ledger,
+        set_ledger_metadata,
+    ]
+
+    # ── Tool sets per mode ───────────────────────────────────────────────────
+    tutor_tools = [
+        list_curriculum, load_chapter, load_track, show_figure, list_sample_images,
+        list_practicals, reveal_solution, update_course_progress, set_course_plan,
+    ]
+    # Demos reuse the EXISTING execution path: execute_script runs a saved .py
+    # (→ python) or .groovy (→ ImageJ in the GUI), and save_script writes it
+    # first. No pipeline tools (workspace/coder/plugin/ledger), so education can
+    # demonstrate a concept but not run the student's analysis project.
+    demo_tools = [save_script, execute_script, show_in_imagej_gui, inspect_all_ui_windows, close_imagej_windows]
+
+    quick_tools = [
+        imagej_coder, imagej_debugger, plugin_manager, execute_script, save_script, load_script,
+        get_script_history, smart_file_reader, inspect_folder_tree,
+        extract_image_metadata, setup_analysis_workspace, inspect_all_ui_windows,
+        show_in_imagej_gui, close_imagej_windows, rag_retrieve_docs, mkdir_copy,
+        check_environment, set_mode,
+    ]
+    education_tools = tutor_tools + [set_mode] + demo_tools
+
+    # Register the UNION of every mode's tools (deduped by identity). The
+    # ModeMiddleware only NARROWS what each mode is offered — it cannot inject a
+    # tool that isn't registered on the graph.
+    def _dedup(tools):
+        seen, out = set(), []
+        for t in tools:
+            if id(t) not in seen:
+                seen.add(id(t))
+                out.append(t)
+        return out
+    registered_tools = _dedup(advanced_tools + quick_tools + education_tools)
+
+    # ── Mode registry ────────────────────────────────────────────────────────
+    #   advanced  → pass-through: deep-agent-composed supervisor prompt + full tools.
+    #   quick     → lean single-operation prompt + a minimal tool subset.
+    #   education → tutor prompt (with live per-chat progress) + tutor/demo tools.
+    # advanced offers the deep-agent's full toolset EXCEPT the education/tutor
+    # tools (hidden by name so the injected builtins + advanced tools + set_mode
+    # all survive). quick/education replace the toolset outright.
+    modes = {
+        "advanced":  ModeSpec(exclude_tools=[t.name for t in tutor_tools]),
+        "quick":     ModeSpec(prompt=build_quick_prompt(), tools=quick_tools),
+        "education": ModeSpec(prompt=build_tutor_prompt, tools=education_tools, model=llm_analyst),
+    }
+
     supervisor_middleware = [
         ContextEditingMiddleware(
             edits=[
@@ -660,40 +743,13 @@ def init_agent():
         ),
         NarrationReminderMiddleware(),
         PhaseGuardMiddleware(),
+        # Innermost user middleware: final say on system prompt + offered tools.
+        ModeMiddleware(modes),
     ]
 
     supervisor = create_deep_agent(
         name="ImageJ_Supervisor",
-        tools=[
-            # ── subagents as tools (return typed JSON) ──────────────────────
-            *subagent_tools,
-            plugin_manager,
-            # ── supervisor's own tools ───────────────────────────────────────
-            internet_search,
-            inspect_all_ui_windows,
-            capture_plugin_dialog,
-            show_in_imagej_gui,
-            close_imagej_windows,
-            rag_retrieve_docs,
-            save_coding_experience,
-            rag_retrieve_mistakes,
-            rag_retrieve_recipes,
-            save_recipe,
-            inspect_folder_tree,
-            smart_file_reader,
-            extract_image_metadata,
-            mkdir_copy,
-            inspect_csv_header,
-            execute_script,
-            get_script_info,
-            setup_analysis_workspace,
-            save_markdown,
-            check_environment,
-            # ── state ledger (persistent project memory) ─────────────────────
-            update_state_ledger,
-            read_state_ledger,
-            set_ledger_metadata,
-        ],
+        tools=registered_tools,
         system_prompt=build_supervisor_prompt(enable_qa=True),
         subagents=[],
         middleware=supervisor_middleware,
