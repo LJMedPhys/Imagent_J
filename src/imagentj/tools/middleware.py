@@ -1,4 +1,6 @@
 import re
+from dataclasses import dataclass
+from typing import Any, Callable, Optional
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ToolCallRequest, AgentState
@@ -12,30 +14,52 @@ except ImportError:  # pragma: no cover
     from typing_extensions import NotRequired
 
 
+# ── mode helpers ────────────────────────────────────────────────────────────
+# The supervisor runs in one of several modes (advanced | quick | education),
+# stored per-chat in graph state. "advanced" (or unset) is the full pipeline.
+
+DEFAULT_MODE = "advanced"
+
+
+def _state_mode(state) -> str:
+    """Read the active mode from an agent state dict/object; default advanced."""
+    if state is None:
+        return DEFAULT_MODE
+    if isinstance(state, dict):
+        return state.get("mode") or DEFAULT_MODE
+    return getattr(state, "mode", None) or DEFAULT_MODE
+
+
+def _request_mode(request) -> str:
+    return _state_mode(getattr(request, "state", None))
+
+
+def _tool_name(t) -> str:
+    """Best-effort name of a tool object / schema dict."""
+    n = getattr(t, "name", None)
+    if isinstance(n, str) and n:
+        return n
+    if isinstance(t, dict):
+        return t.get("name") or (t.get("function") or {}).get("name") or ""
+    return ""
+
+
 class NarrationReminderMiddleware(AgentMiddleware):
     # Keeps the narration rule in the most-recent position on every turn so it
     # doesn't drift out of attention as tool history grows. Not persisted to state.
+    # Only meaningful for the full pipeline, so it no-ops outside advanced mode.
     REMINDER = (
-        """Reminder: before this turn's tool call(s), emit ONE short 
-        biologist-friendly sentence describing your intent. If a tool just 
-        returned, briefly acknowledge what came back in the same sentence 
+        """Reminder: before this turn's tool call(s), emit ONE short
+        biologist-friendly sentence describing your intent. If a tool just
+        returned, briefly acknowledge what came back in the same sentence
         (combine result + next intent — don't add a separate after-message)."""
     )
 
     def wrap_model_call(self, request, handler):
+        if _request_mode(request) != "advanced":
+            return handler(request)
         request = request.override(messages=list(request.messages) + [SystemMessage(content=self.REMINDER)])
         return handler(request)
-
-
-def _tool_name(tool) -> str:
-    """Return a tool name from a LangChain tool object or tool-schema dict."""
-    name = getattr(tool, "name", None)
-    if isinstance(name, str) and name:
-        return name
-    if isinstance(tool, dict):
-        return tool.get("name") or (tool.get("function") or {}).get("name") or ""
-    return ""
-
 
 class VisionOptionState(AgentState):
     """Per-chat Vision Judge setting persisted by the graph checkpointer."""
@@ -117,6 +141,86 @@ class VisionOptionMiddleware(AgentMiddleware):
         return handler(request.override(**overrides))
 
 
+# ── Multi-mode routing ──────────────────────────────────────────────────────
+
+class AgentModeState(AgentState):
+    """State fields for multi-mode operation, persisted per-chat (thread)."""
+    mode: NotRequired[str]                 # "advanced" | "quick" | "education"
+    course_plan: NotRequired[list]         # education: ordered chapter-id playlist
+    course_progress: NotRequired[dict]     # education: {current, completed, notes}
+
+
+@dataclass
+class ModeSpec:
+    """How one mode differs from the base graph. Any field left None is kept as-is.
+
+    prompt: a system-prompt string, or a callable(state)->str (so the prompt can
+            embed live state, e.g. the student's progress). None => keep the
+            deep-agent-composed prompt (used by "advanced").
+    tools:  the exact tool subset to expose this turn. None => keep the full
+            registered tool set. Tools MUST be registered on the graph at build;
+            this only narrows what the model is offered.
+    model:  an alternate chat model for this mode. None => keep the default.
+    """
+    prompt: Optional[Callable[[dict], str] | str] = None
+    tools: Optional[list] = None
+    model: Any = None
+    # Tool NAMES to drop from whatever is offered this turn, WITHOUT replacing the
+    # whole set — so deepagents-injected tools (todos, filesystem, skills) and every
+    # other tool are preserved. Used by "advanced" to hide the education tools while
+    # keeping its own tools + builtins. Ignored when `tools` is also set.
+    exclude_tools: Optional[list] = None
+
+
+class ModeMiddleware(AgentMiddleware):
+    """Routes each model call to a ModeSpec based on state['mode'].
+
+    Sits in the user-middleware slot, which is *inner* to the deep-agent's
+    prompt-composing base middleware — so overriding `system_message` here
+    replaces the composed prompt for non-advanced modes, and overriding `tools`
+    narrows the offered tools. "advanced" (the default) typically passes through
+    untouched, preserving the current behaviour exactly.
+    """
+
+    state_schema = AgentModeState
+
+    def __init__(self, modes: dict[str, ModeSpec], default: str = DEFAULT_MODE):
+        super().__init__()
+        self.modes = modes
+        self.default = default
+
+    def wrap_model_call(self, request, handler):
+        mode = _request_mode(request)
+        spec = self.modes.get(mode) or self.modes.get(self.default)
+        if spec is None:
+            return handler(request)
+
+        overrides: dict = {}
+        if spec.prompt is not None:
+            state = getattr(request, "state", {}) or {}
+            prompt = spec.prompt(state) if callable(spec.prompt) else spec.prompt
+            if prompt:
+                overrides["system_message"] = SystemMessage(content=prompt)
+        if spec.tools is not None:
+            overrides["tools"] = spec.tools
+        if spec.model is not None:
+            overrides["model"] = spec.model
+
+        # Name-based exclusion: filter the CURRENTLY offered tools instead of
+        # replacing them, so builtins and everything else survive. If the offered
+        # list can't be read (empty), skip rather than blanking the toolset.
+        if spec.exclude_tools and spec.tools is None:
+            current = list(getattr(request, "tools", None) or [])
+            drop = set(spec.exclude_tools)
+            kept = [t for t in current if _tool_name(t) not in drop]
+            if kept and len(kept) != len(current):
+                overrides["tools"] = kept
+
+        if overrides:
+            request = request.override(**overrides)
+        return handler(request)
+
+
 class SafeToolLoggerMiddleware(AgentMiddleware):
      def wrap_tool_call(self, request: ToolCallRequest, handler):
         print(f"[TOOL LOG] Calling tool: {request.tool_call['name']}")
@@ -196,6 +300,10 @@ class PhaseGuardMiddleware(AgentMiddleware):
     _TRACK_RE = re.compile(r"TRACK:\s*([a-z]+)", re.IGNORECASE)
 
     def before_model(self, state, runtime=None):
+        # Numbered pipeline phases only exist in the full analysis pipeline;
+        # stay silent in quick/education modes.
+        if _state_mode(state) != "advanced":
+            return None
         msgs = list(state.get("messages", []))
         already = list(state.get("phase_reminders_sent") or [])
 
