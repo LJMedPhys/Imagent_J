@@ -20,8 +20,6 @@ from .environment_tools import check_environment
 # Generic MCP host adapter — exposes configured MCP servers (e.g. napari-mcp)
 # as mcp__<server>__<tool> LangChain tools, plus raw diagnostics.
 from .mcp_host_tools import get_mcp_tools, mcp_list_servers, mcp_list_tools, mcp_call_tool
-# micro-sam: headless automatic instance segmentation via SAM
-from .microsam_tools import run_microsam_segmentation
 
 # Lazy accessors for vector stores (RAG is optional)
 from .vector_stores import (
@@ -46,5 +44,4 @@ __all__ = [
     'update_state_ledger', 'read_state_ledger', 'set_ledger_metadata', 'get_ledger_context',
     'check_environment',
     'get_mcp_tools', 'mcp_list_servers', 'mcp_list_tools', 'mcp_call_tool',
-    'run_microsam_segmentation',
 ]

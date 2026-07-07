@@ -45,7 +45,6 @@ from .tools import (
     check_environment,
     set_dialog_vision_llm,
     get_mcp_tools,
-    run_microsam_segmentation,
     # capture_ij_window, build_compilation, analyze_image,  # VLM disabled
 )
 from imagentj.tracker import UsageMetrics, MetricsSignalBridge, UsageTrackerCallback
@@ -691,7 +690,6 @@ def init_agent():
             setup_analysis_workspace,
             save_markdown,
             check_environment,
-            run_microsam_segmentation,
             # ── dynamically-discovered MCP server tools (e.g. in-container ───
             #    napari-mcp). Discovered at startup; the napari viewer itself
             #    opens lazily on the first napari tool call. Discovery failures

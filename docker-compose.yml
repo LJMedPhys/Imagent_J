@@ -63,9 +63,6 @@ services:
       # in /home/imagentj/.cellpose/models inside the image; the named volume
       # seeds from there on first start and persists downloaded models across restarts.
       - cellpose_models:/home/imagentj/.cellpose/models
-      # micro-sam SAM model weights (~375 MB for default ViT-B, larger for ViT-L/H).
-      # Downloaded on first use; persisted here so they survive container restarts.
-      - micro_sam_models:/home/imagentj/.cache/micro_sam
       # Folder for skills
       - ./skills:/app/skills:ro
       # Entrypoint bind-mount so changes take effect without rebuilding
@@ -107,7 +104,6 @@ volumes:
   appose_envs:
   imagentj_home:
   cellpose_models:
-  micro_sam_models:
 
 networks:
   imagent_net:

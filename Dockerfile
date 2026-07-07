@@ -236,28 +236,13 @@ RUN /opt/conda/envs/local_imagent_J/bin/pip install --no-cache-dir "fastmcp>=2.1
 # stdio server (entry point napari_mcp.server:main) creates its napari Viewer
 # LAZILY via ensure_viewer() — only when a napari tool is first called — so this
 # env stays idle (no window) until the agent actually uses napari.
-# micro-sam (micro_sam) is installed here as a napari plugin: its interactive
-# SAM-based annotation widgets appear in the napari GUI automatically, and its
-# Python API is importable in this env for programmatic use. PyTorch is pinned
-# CPU-only (matching the cellpose envs) to avoid pulling in CUDA packages.
-# SAM model weights are NOT pre-downloaded; they are fetched on first use to
-# ~/.cache/micro_sam (inside the container, so ephemeral unless /root is mounted).
 RUN /opt/conda/bin/conda create -n napari-mcp python=3.11 -y \
-    && if [ "$TARGETARCH" = "arm64" ]; then \
-        /opt/conda/envs/napari-mcp/bin/pip install --no-cache-dir \
-            'torch==2.11.0' 'torchvision==0.26.0'; \
-    else \
-        /opt/conda/envs/napari-mcp/bin/pip install --no-cache-dir \
-            'torch==2.11.0' 'torchvision==0.26.0' \
-            --index-url https://download.pytorch.org/whl/cpu; \
-    fi \
     && /opt/conda/envs/napari-mcp/bin/pip install --no-cache-dir \
         "napari[pyqt6]" \
         "napari-mcp" \
         "fastmcp>=2.10.3,<3" \
-        "micro_sam" \
     && QT_QPA_PLATFORM=offscreen /opt/conda/envs/napari-mcp/bin/python -c \
-        "import napari, napari_mcp, fastmcp, micro_sam; print('napari', napari.__version__, '| micro_sam', micro_sam.__version__)" \
+        "import napari, napari_mcp, fastmcp; print('napari', napari.__version__)" \
     && /opt/conda/bin/conda clean -afy
 
 # Patch napari-mcp for Agent J's persistent, interactive viewer (see
