@@ -17,6 +17,9 @@ from .middleware import SafeToolLoggerMiddleware, TodoDisplayMiddleware, Narrati
 # from .vision_tools import capture_ij_window, build_compilation, analyze_image, set_vision_llm  # VLM disabled
 from .state_ledger import update_state_ledger, read_state_ledger, set_ledger_metadata, get_ledger_context
 from .environment_tools import check_environment
+# Generic MCP host adapter — exposes configured MCP servers (e.g. napari-mcp)
+# as mcp__<server>__<tool> LangChain tools, plus raw diagnostics.
+from .mcp_host_tools import get_mcp_tools, mcp_list_servers, mcp_list_tools, mcp_call_tool
 
 # Lazy accessors for vector stores (RAG is optional)
 from .vector_stores import (
@@ -39,5 +42,6 @@ __all__ = [
     'setup_analysis_workspace', 'save_markdown',
     'set_vision_llm', 'capture_ij_window', 'build_compilation', 'analyze_image',
     'update_state_ledger', 'read_state_ledger', 'set_ledger_metadata', 'get_ledger_context',
-    'check_environment'
+    'check_environment',
+    'get_mcp_tools', 'mcp_list_servers', 'mcp_list_tools', 'mcp_call_tool',
 ]

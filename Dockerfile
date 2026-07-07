@@ -18,8 +18,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     x11-xserver-utils\
     # Java AWT / Fiji display
     libxtst6 libxi6 libxrender1 libxt6 libxext6 libx11-6 \
-    # OpenGL
-    libopengl0 libglx0 \
+    # OpenGL — libgl1-mesa-dri provides the llvmpipe software renderer that
+    # napari/vispy need under headless Xvfb (no GPU); paired with
+    # LIBGL_ALWAYS_SOFTWARE=1 set below.
+    libopengl0 libglx0 libgl1-mesa-dri \
     # OpenCL CPU backend (required by CLIJ2 / BioVoxxel 3D Box without a GPU)
     # pocl-opencl-icd   — POCL software OpenCL device (CPU execution)
     # ocl-icd-libopencl1 — ICD loader runtime (libOpenCL.so.1)
@@ -219,6 +221,40 @@ RUN conda env create -f /tmp/environment.yml \
 # Put the conda env on PATH so it's active by default
 ENV PATH=/opt/conda/envs/local_imagent_J/bin:$PATH
 ENV CONDA_DEFAULT_ENV=local_imagent_J
+
+# ── fastmcp client for the generic MCP host adapter ──────────────────────────
+# src/imagentj/tools/mcp_host_tools.py runs INSIDE this app env and speaks MCP
+# (stdio/HTTP) to configured servers via `from fastmcp import Client`. It needs
+# the fastmcp *client* here; the napari *server* gets its own fastmcp in the
+# isolated env below. Separate RUN keeps the heavy env-create layer cache-stable.
+RUN /opt/conda/envs/local_imagent_J/bin/pip install --no-cache-dir "fastmcp>=2.10.3,<3" \
+    && /opt/conda/bin/conda clean -afy
+
+# ── Conda env: napari-mcp  (in-container MCP visualisation server) ────────────
+# Isolated like the cellpose/stardist envs so napari's large, version-pinned
+# dependency tree cannot conflict with the py3.13 app env. The `napari-mcp`
+# stdio server (entry point napari_mcp.server:main) creates its napari Viewer
+# LAZILY via ensure_viewer() — only when a napari tool is first called — so this
+# env stays idle (no window) until the agent actually uses napari.
+RUN /opt/conda/bin/conda create -n napari-mcp python=3.11 -y \
+    && /opt/conda/envs/napari-mcp/bin/pip install --no-cache-dir \
+        "napari[pyqt6]" \
+        "napari-mcp" \
+        "fastmcp>=2.10.3,<3" \
+    && QT_QPA_PLATFORM=offscreen /opt/conda/envs/napari-mcp/bin/python -c \
+        "import napari, napari_mcp, fastmcp; print('napari', napari.__version__)" \
+    && /opt/conda/bin/conda clean -afy
+
+# Patch napari-mcp for Agent J's persistent, interactive viewer (see
+# patch_napari_mcp/patch_qt_helpers.py): survive the window close button (don't
+# shut the server down) and keep the Qt event pump alive on any viewer reopen
+# (e.g. via add_layer, not just init_viewer) so the reopened window stays
+# responsive to mouse/keyboard. Fails the build if upstream source drifts.
+COPY patch_napari_mcp/patch_qt_helpers.py /tmp/patch_qt_helpers.py
+RUN /opt/conda/envs/napari-mcp/bin/python /tmp/patch_qt_helpers.py && rm /tmp/patch_qt_helpers.py
+
+# napari/vispy fall back to llvmpipe software GL under headless Xvfb (no GPU).
+ENV LIBGL_ALWAYS_SOFTWARE=1
 
 # ── Conda env: cellpose  (PyTorch + Cellpose + Omnipose, served by TrackMate-Cellpose and TrackMate-Omnipose) ───
 # Omnipose 1.x is built on cellpose 3.x, so they share one env.

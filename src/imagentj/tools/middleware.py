@@ -23,7 +23,7 @@ class NarrationReminderMiddleware(AgentMiddleware):
     )
 
     def wrap_model_call(self, request, handler):
-        request.messages = list(request.messages) + [SystemMessage(content=self.REMINDER)]
+        request = request.override(messages=list(request.messages) + [SystemMessage(content=self.REMINDER)])
         return handler(request)
 
 

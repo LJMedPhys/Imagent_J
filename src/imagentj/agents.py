@@ -44,6 +44,7 @@ from .tools import (
     update_state_ledger, read_state_ledger, set_ledger_metadata, get_ledger_context,
     check_environment,
     set_dialog_vision_llm,
+    get_mcp_tools,
     # capture_ij_window, build_compilation, analyze_image,  # VLM disabled
 )
 from imagentj.tracker import UsageMetrics, MetricsSignalBridge, UsageTrackerCallback
@@ -689,6 +690,11 @@ def init_agent():
             setup_analysis_workspace,
             save_markdown,
             check_environment,
+            # ── dynamically-discovered MCP server tools (e.g. in-container ───
+            #    napari-mcp). Discovered at startup; the napari viewer itself
+            #    opens lazily on the first napari tool call. Discovery failures
+            #    are non-fatal (the adapter returns only diagnostics tools).
+            *get_mcp_tools(),
             # ── state ledger (persistent project memory) ─────────────────────
             update_state_ledger,
             read_state_ledger,
