@@ -656,14 +656,20 @@ imagej_coder_prompt = """
        the next-best option. Never deviate without an explicit reason.
    1. CONSULT HISTORY: Before writing a script, call `get_script_history`. If previous versions exist, analyze the "failure_reason" to ensure your new code solves the previous issues.
    1b. RECALL PRIOR WORK: Before writing, call `recall(query=<short task
-       description>, language="Groovy")`. It returns verified lessons relevant to
-       this task plus a catalogue of reusable RECIPES. For a recipe that fits, read
-       its `SCRIPT:` path (e.g. with `smart_file_reader`) for the full code and
-       treat it as a REFERENCE TEMPLATE only — borrow imports, structural skeleton,
-       and plugin invocation style when they match this task's image type, channel
-       layout, plugin version, and parameters. Always reason from the current task
-       first; consult the recipe second. Do NOT copy recipe code verbatim. Skip
-       recall only for genuinely trivial one-off operations.
+       description>, language="Groovy")`. It returns verified lessons plus reusable
+       RECIPES. How you use a recipe depends on how well it matches:
+       - STRONG MATCH — a recipe tagged `[STRONG MATCH]`, OR one that clearly does the
+         SAME operation as your task (e.g. the task is "segment X with Cellpose" and a
+         Cellpose-segmentation recipe exists): READ its `SCRIPT:` path with
+         `smart_file_reader` and REUSE IT VERBATIM. Copy the working script and change
+         ONLY the concrete inputs — file paths, output directory, and any parameter the
+         task explicitly specifies. Do NOT restructure it, rename variables, reorder
+         setup, or "clean it up". A verbatim reuse of a verified script is the goal:
+         rewriting a known-good script re-introduces the very bugs it already solved.
+       - RELATED (not strong) — treat it as a REFERENCE TEMPLATE only: borrow imports,
+         skeleton, and plugin-invocation style, adapting to your task's image type,
+         channel layout, plugin version, and parameters. Reason from the current task.
+       Skip recall only for genuinely trivial one-off operations.
    2. SAVE WITH DOCUMENTATION: Always use `save_script` to commit your code.
       - MANDATORY PATH: Scripts MUST always be saved to the 'scripts/imagej/' 
         subfolder of the project directory provided by the Supervisor.

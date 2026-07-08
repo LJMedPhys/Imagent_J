@@ -61,11 +61,20 @@ LINT_FULL_EVERY = 10
 LINT_RECENT_N = 10
 LINT_BUDGET = 30
 RECALL_K = 5
+# A recipe whose tokens cover at least this fraction of the (de-noised) task query is a
+# STRONG match — the SAME operation the task describes — so it should be reused VERBATIM
+# (only inputs swapped) rather than rewritten. Below it, a recipe is merely RELATED and
+# is adapted as a template. Deliberately not too high: task queries carry file-name noise.
+RECIPE_STRONG_COVER = 0.5
 DEEP_RECALL = os.environ.get("LEARNED_DEEP_RECALL", "1") != "0"
 
 _EXT = {".groovy": "Groovy", ".py": "Python"}
+# Stopwords stripped before matching: structural/filler words plus conversational verbs
+# ("help", "please", "using", …) that would otherwise dilute the STRONG-match coverage.
 _STOP = {"the", "and", "for", "with", "from", "this", "that", "image", "images",
-         "script", "data", "use", "via", "into", "run", "all", "new", "get", "set"}
+         "script", "data", "use", "via", "into", "run", "all", "new", "get", "set",
+         "help", "please", "using", "make", "create", "want", "need", "would", "like",
+         "file", "files", "generate", "write", "code", "you", "can", "the"}
 _LOCK = threading.Lock()
 _PENDING: Dict[str, dict] = {}    # script_path -> buffered failure->fix lesson
 _RUNCOUNT_PATH = os.path.join(ROOT, ".runcount")    # persisted dispatch counter (survives restarts)
@@ -363,14 +372,40 @@ def _scored(query_tokens: set, blocks: List[str]) -> List[str]:
     rows.sort(key=lambda t: (t[0], t[1]), reverse=True)
     return [body for _, _, body in rows]
 
+def _scored_recipes(query_tokens: set, blocks: List[str]):
+    """Like _scored, but for recipes: also flag STRONG matches. `cover` is the fraction
+    of the query's tokens the recipe covers — high cover means the recipe does the SAME
+    operation the task describes, so it should be REUSED VERBATIM (only inputs swapped)
+    rather than rewritten (rewriting a known-good script reintroduces bugs it solved).
+    Returns [(body, is_strong), ...] ordered by IDF score."""
+    toks = [_match_tokens(b) for b in blocks]
+    n = len(blocks)
+    df = {}
+    for ts in toks:
+        for t in ts:
+            df[t] = df.get(t, 0) + 1
+    rows = []
+    for b, ts in zip(blocks, toks):
+        common = query_tokens & ts
+        if not common:
+            continue
+        score = sum(math.log(1 + n / (1 + df.get(t, 0))) for t in common)
+        cover = len(common) / max(1, len(query_tokens))
+        strong = cover >= RECIPE_STRONG_COVER and len(common) >= 2
+        rows.append((score, _seen(b), _body(b), strong))
+    rows.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    return [(body, strong) for _, _, body, strong in rows]
+
 @tool("recall")
 def recall(query: str, language: str = "Groovy") -> str:
     """Pull verified lessons and reusable recipes relevant to the work at hand.
 
     Call this BEFORE writing or fixing a script: pass the TASK description (coder /
     analyst) or the ERROR / stack-trace (debugger). Returns relevant pitfalls beyond
-    the CORE ones already in your context, plus recipes (featured first) — read a
-    recipe's SCRIPT path for the full code, then ADAPT it. Empty when nothing matches.
+    the CORE ones already in your context, plus recipes. A recipe tagged [STRONG MATCH]
+    does the SAME operation as your task — read its SCRIPT and reuse it VERBATIM (swap
+    only inputs); a merely related recipe is a template to adapt. Empty when nothing
+    matches.
     """
     want = _tokens(query)
     if not want:
@@ -380,12 +415,25 @@ def recall(query: str, language: str = "Groovy") -> str:
     if pit:
         out.append("RELEVANT PITFALLS (apply where the same call appears):\n"
                    + "\n".join(pit[:RECALL_K]))
-    rec_core = _scored(want, _blocks(_core_recipe_page(language)))
-    rec_reg = [r for r in _scored(want, _blocks(_recipe_page(language))) if r not in rec_core]
+    rec_core = _scored_recipes(want, _blocks(_core_recipe_page(language)))
+    core_bodies = {b for b, _ in rec_core}
+    rec_reg = [(b, s) for (b, s) in _scored_recipes(want, _blocks(_recipe_page(language)))
+               if b not in core_bodies]
     rec = rec_core + rec_reg
     if rec:
-        out.append("AVAILABLE RECIPES (featured first — read the SCRIPT path for "
-                   "code, then ADAPT, do not copy verbatim):\n" + "\n".join(rec[:3]))
+        lines = []
+        for body, strong in rec[:3]:
+            if strong:
+                lines.append(
+                    "[STRONG MATCH — this recipe does the SAME operation as your task. "
+                    "Read its SCRIPT and REUSE IT VERBATIM: copy the script and change "
+                    "ONLY concrete input/output paths and task-specified parameters. Do "
+                    "NOT restructure, rename, or 'improve' it.]\n" + body)
+            else:
+                lines.append(body)
+        out.append("AVAILABLE RECIPES (featured first — read the SCRIPT path for the "
+                   "code. Reuse a STRONG MATCH verbatim; adapt a merely related one "
+                   "as a template):\n" + "\n".join(lines))
     if out:
         return "\n\n".join(out)
     return _deep_recall(query, want, language) if DEEP_RECALL else ""
