@@ -1,40 +1,19 @@
-# GPU override for amd64 hosts with an NVIDIA GPU (named 'nvidia' runtime path).
+# GPU override for Agentic-J (amd64, NVIDIA GPU via CDI).
 #
-# Requirements:
-#   • NVIDIA driver 560+ (for the default CUDA 12.6 tag) installed on the host
-#   • nvidia-container-toolkit installed and configured, with the 'nvidia' runtime
-#     registered in the Docker daemon
-#     (https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
+# The GPU is provided through the Container Device Interface (CDI) — the portable path
+# supported by modern nvidia-container-toolkit, rootless Docker/Podman, and Docker 25+
+# with `features: { "cdi": true }` in /etc/docker/daemon.json. Verify the host first:
+#   docker info | grep -iA2 'CDI spec'    # must list the CDI spec directories
+#   nvidia-ctk cdi list                    # must enumerate nvidia.com/gpu=all, =0, ...
+# If those are empty, enable CDI on the host:
+#   sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+#   add  "features": { "cdi": true }  to /etc/docker/daemon.json, then restart docker.
 #
-# Verify the host BEFORE deploying to a new machine:
-#   docker info | grep -i runtime        # must list 'nvidia' among Runtimes
-#   If it does not, register it and restart Docker:
-#     sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker
-#   If your host instead only supports the CDI / `--gpus` path (no named 'nvidia'
-#   runtime — i.e. `docker run --gpus all ...` works but the command above does not
-#   list 'nvidia'), use docker-compose.gpu-cdi.yml instead of this file.
+# Build:  docker compose -f docker-compose.yml -f docker-compose.gpu.yml build
+# Run:    docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
 #
-# Build the GPU image:
-#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml build
-#
-# Run:
-#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up
-#
-# To target a different CUDA version set CUDA_TAG in your environment before building:
-#   CUDA_TAG=cu128 docker compose -f docker-compose.yml -f docker-compose.gpu.yml build
-#   torch==2.11.0 wheels exist ONLY for cu126 and cu128 — older tags (cu118/cu121/cu124)
-#   top out at torch 2.6.0 and fail the build.
-#   Driver requirements: cu126 → 560+, cu128 → 570+
-#   tensorflow[and-cuda]==2.15.1 bundles CUDA 12.2 (driver 535+), so the effective
-#   driver minimum is set by the torch CUDA tag (560+ by default).
-#
-# To scope the container to specific GPUs on a shared node, set NVIDIA_VISIBLE_DEVICES
-# in your environment before `up` (default 'all' exposes every GPU on the host):
-#   NVIDIA_VISIBLE_DEVICES=0           docker compose ... up    # only GPU 0
-#   NVIDIA_VISIBLE_DEVICES=0,3         docker compose ... up    # GPUs 0 and 3
-#   NVIDIA_VISIBLE_DEVICES=GPU-<uuid>  (pin by UUID from `nvidia-smi -L`)
-# NOTE: this controls visibility, not reservation — the container can fully use
-# whatever GPUs it can see; it does not stop other containers from using them too.
+# CUDA_TAG: cu126 default; torch 2.11.0 wheels exist only for cu126 (driver 560+)
+# and cu128 (driver 570+).
 
 services:
   imagentj:
@@ -43,13 +22,17 @@ services:
       args:
         USE_GPU: "true"
         CUDA_TAG: ${CUDA_TAG:-cu126}
-    # Expose the host GPUs via the nvidia container runtime. This project uses
-    # `runtime: nvidia` + NVIDIA_VISIBLE_DEVICES rather than deploy.resources.devices,
-    # which would otherwise merge with the cpu/memory `deploy` block in the base
-    # compose file and is not honored by `docker compose up` the same way.
-    runtime: nvidia
-    environment:
-      # Expose host GPUs to the container runtime. Override NVIDIA_VISIBLE_DEVICES
-      # (e.g. '0' or '0,3') to scope to specific GPUs on a shared node; default 'all'.
-      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    # Use the plain OCI runtime and let CDI inject the GPU — this is what makes the
+    # file portable to hosts that have no named 'nvidia' runtime. On a host whose
+    # default runtime is 'nvidia', this also avoids double-injection.
+    runtime: runc
+    deploy:
+      resources:
+        reservations:
+          devices:
+            # CDI device request. To scope to specific GPUs on a shared node, replace
+            # 'nvidia.com/gpu=all' with e.g. 'nvidia.com/gpu=0' (see `nvidia-ctk cdi list`).
+            - driver: cdi
+              device_ids:
+                - nvidia.com/gpu=all
+              capabilities: [gpu]
