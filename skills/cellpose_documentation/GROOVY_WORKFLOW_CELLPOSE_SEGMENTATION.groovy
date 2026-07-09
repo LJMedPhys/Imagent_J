@@ -32,7 +32,7 @@ def model     = "cyto3"                             // or "nuclei", "cyto2", "ti
 float diameter = 30f                                // expected object diameter in px; 0f = auto (cyto* only)
 int   ch1     = 0                                   // channel to segment (0 = grayscale)
 int   ch2     = 0                                   // optional nucleus channel (0 = none)
-def   flags   = ""                                  // e.g. "--use_gpu" if a GPU is available (this image is CPU-only)
+def   flags   = "--use_gpu"                          // use the GPU when present; cellpose falls back to CPU automatically if none
 // ─────────────────────────────────────────────────────────────────────────────
 
 boolean success = false

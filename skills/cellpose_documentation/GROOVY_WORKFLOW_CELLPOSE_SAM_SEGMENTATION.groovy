@@ -41,7 +41,7 @@ import ij.process.ImageConverter
 def imagePath = "/app/data/.../input.tif"          // "" to use the currently active image
 def outputDir = "/app/data/.../cpsam_out"
 def envPath   = "/opt/conda/envs/cellpose4"         // cellpose 4.1.1 (cpsam)
-def flags     = ""                                  // "--use_gpu" if a GPU is available (this image is CPU-only)
+def flags     = "--use_gpu"                          // use the GPU when present; cellpose falls back to CPU automatically if none
 // ─────────────────────────────────────────────────────────────────────────────
 
 boolean success = false

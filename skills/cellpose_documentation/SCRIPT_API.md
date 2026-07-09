@@ -41,9 +41,13 @@ With `verbose = TRUE` the wrapper logs, e.g.:
 
 ```
 Running [-m, cellpose, --dir, /tmp/cellpose<rand>, --pretrained_model, cyto3,
-         --chan, 0, --chan2, 0, --diameter, 30.0, --verbose, --save_tif, --no_npy]
+         --chan, 0, --chan2, 0, --diameter, 30.0, --use_gpu, --verbose, --save_tif, --no_npy]
 [bash -c /opt/conda/envs/cellpose/bin/python -m cellpose --dir /tmp/cellpose<rand> ...]
 ```
+
+The `--use_gpu` flag comes from `additional_flags` (the templates set it by default). With a GPU
++ CUDA torch, cellpose logs `** TORCH CUDA version installed and working. **` / `>>>> using GPU (CUDA)`;
+with no GPU it silently falls back to CPU.
 
 It writes `imp` to a temp dir as a TIFF, runs cellpose in the conda env, reads the
 `*_cp_masks.tif` back, and assigns it to `cellpose_imp`. **You never touch the temp dir** —
