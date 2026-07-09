@@ -841,13 +841,24 @@ def execute_script(directory: str, filename: str) -> str:
     # Route based on extension
     if filename.endswith('.py'):
         # Calls your existing run_python_code function
-        return run_python_code(code_content, directory)
-
+        output = run_python_code(code_content, directory)
     elif filename.endswith('.groovy'):
         # Calls your existing run_script_safe function
-        return run_script_safe(language="groovy", code=code_content)
+        output = run_script_safe(language="groovy", code=code_content)
+    else:
+        return f"Error: File extension of {filename} is not supported for execution."
 
-    return f"Error: File extension of {filename} is not supported for execution."
+    # On a verified-green run, hand the result to the background Librarian: it files
+    # the reusable recipe and/or the debugger's buffered error->fix lesson, dedups,
+    # and (periodically) rebalances CORE — all off the hot path, so the task never
+    # waits. Lazy import avoids any import cycle with the agents/RAG layer.
+    try:
+        from .learned_memory import on_success
+        on_success(directory, filename, output)
+    except Exception:
+        pass
+
+    return output
 
 @tool("get_script_info")
 def get_script_info(directory: str, filename: str) -> str:
