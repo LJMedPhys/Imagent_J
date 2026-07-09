@@ -403,12 +403,26 @@ if [ -z "$OPENAI_API_KEY" ] && [ -z "$OPEN_ROUTER_API_KEY" ]; then
 fi
 
 # ── GPU availability check ───────────────────────────────────────────────────
+# Log the device (informational), then do the AUTHORITATIVE check: can the
+# cellpose env's PyTorch actually use CUDA? That is the true signal for whether
+# Cellpose/StarDist will run on the GPU — a device can be visible without a
+# CUDA-enabled torch build, and the container may be started without a GPU at
+# all. Export IMAGENTJ_GPU so the running agent reflects the real state:
+# environment_tools.check_environment overlays it onto the snapshot's CUDA row,
+# which is what the supervisor reads.
 if command -v nvidia-smi &>/dev/null; then
-    echo "[entrypoint] NVIDIA GPU detected:"
+    echo "[entrypoint] NVIDIA GPU device visible:"
     nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader 2>/dev/null \
         | sed 's/^/  /' || echo "  (nvidia-smi query failed)"
 else
-    echo "[entrypoint] No NVIDIA GPU detected — running on CPU"
+    echo "[entrypoint] No NVIDIA GPU device visible."
+fi
+if /opt/conda/envs/cellpose/bin/python -c "import torch,sys; sys.exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
+    export IMAGENTJ_GPU=true
+    echo "[entrypoint] GPU acceleration ACTIVE — cellpose PyTorch sees CUDA (IMAGENTJ_GPU=true)"
+else
+    export IMAGENTJ_GPU=false
+    echo "[entrypoint] GPU acceleration INACTIVE — running on CPU (IMAGENTJ_GPU=false)"
 fi
 
 # ── Launch the application ───────────────────────────────────────────────────
