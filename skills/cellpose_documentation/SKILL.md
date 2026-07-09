@@ -5,21 +5,25 @@ description: Cellpose (BIOP wrapper) is a Fiji/ImageJ plugin for deep-learning i
 
 # Cellpose (BIOP wrapper) — Documentation Index
 
-This is the **direct** Cellpose path: the BIOP wrapper (`ch.epfl.biop.wrappers.cellpose`)
-runs Cellpose and hands you the label image **in-process**. It replaces the old
-workaround of routing single-image segmentation through TrackMate-Cellpose (which runs a
-full tracking pipeline just to segment, then recovers masks from a random `/tmp` directory).
+The **direct** Cellpose path: the BIOP wrapper (`ch.epfl.biop.wrappers.cellpose`) runs Cellpose and hands you the label image **in-process** as `cp.cellpose_imp` — no TrackMate, no scraping masks from `/tmp`.
 
-**When to use this skill vs. alternatives**
-- **Cellpose (this skill)** — cytoplasm / whole cells / bright-field / irregular (non-star-convex) objects, 2D, single image. The pre-downloaded models cover most cases.
-- **StarDist** — star-convex **nuclei** in fluorescence or H&E. Faster, no conda subprocess.
-- **TrackMate-Cellpose** — only when you need to **link objects across time frames** (tracking). Not for a still image.
+**When to use this vs. alternatives**
+- **Cellpose (this skill)** — cytoplasm / whole cells / bright-field / irregular (non-star-convex) 2D objects, single image.
+- **StarDist** — star-convex **nuclei** (fluorescence / H&E); faster, no conda subprocess.
+- **TrackMate-Cellpose** — only to **link objects across time** (tracking), not for a still image.
 
-## Scripting in Groovy — The Only Pattern You Need
+## Which model — decide by GPU first
 
-Cellpose is **not** driven by `IJ.run()` parameter strings. In Groovy, instantiate the
-BIOP command, inject the SciJava context, set fields, call `run()`, and read the
-output label image off the command object.
+Check the GPU state (`check_environment`, query `"cuda"` → the **CUDA** row), then choose:
+
+- **GPU active → prefer `cpsam` (Cellpose-SAM / Cellpose 4).** It is the most accurate, most general model. Use the **`CellposeSAM` command + `cellpose4` env** (see the Cellpose-SAM section).
+- **CPU only → prefer a v3 model (`cyto3`, `nuclei`, …).** cpsam is far too slow on CPU. Use the **`Cellpose` command + `cellpose` env** (the main template below).
+
+In one line: **cpsam is the default whenever the GPU is on; v3 (cyto3/nuclei) is the fallback** — and the preferred choice on CPU-only deployments.
+
+## The one pattern you need — copy it, keep it linear
+
+> **DO NOT** wrap the cellpose call in a helper method, add GPU→CPU fallback branches, or depend on a pre-opened window. Every past failure came from exactly these. `--use_gpu` already falls back to CPU on its own. Keep the call in the **main script body**; if a run fails, simplify *toward* this template — don't add structure.
 
 ```groovy
 #@ Context ctx
@@ -28,105 +32,86 @@ import ch.epfl.biop.wrappers.cellpose.ij2commands.Cellpose
 import ij.IJ
 import ij.process.ImageConverter
 
-def imp = IJ.getImage()                       // or IJ.openImage("/path/to.tif")
+def imp = IJ.openImage("/app/data/your_image.tif")   // robust for scripts; use IJ.getImage() only for the active window
+if (imp == null) { println("FINAL STATUS: FAILURE - could not open image"); return }
 
 def cp = new Cellpose()
-ctx.inject(cp)                                // REQUIRED — injects LogService/PlatformService
+ctx.inject(cp)                                        // REQUIRED — injects LogService/PlatformService
 cp.imp              = imp
-cp.env_path         = new File("/opt/conda/envs/cellpose")  // cellpose v3.1.1.2 env (conda)
+cp.env_path         = new File("/opt/conda/envs/cellpose")  // cellpose 3.1.1.2 (v3 models: cyto3, nuclei, ...)
 cp.env_type         = "conda"
-cp.model            = "cyto3"                  // a pre-downloaded model in ~/.cellpose/models
-cp.diameter         = 30f                      // float; expected object diameter in px (0f = auto-estimate, cyto* only)
-cp.ch1              = 0                         // channel to segment (0 = grayscale / single channel)
-cp.ch2              = 0                         // optional nucleus channel (0 = none)
-cp.additional_flags = ""                       // e.g. "--use_gpu" if a GPU is present (this image is CPU-only)
-cp.verbose          = Boolean.TRUE             // set TRUE — null would NPE; also logs the exact cellpose command
-cp.run()                                       // blocks; runs cellpose as a conda subprocess
+cp.model            = "cyto3"                          // v3 model (CPU-preferred). On GPU, prefer cpsam — see Cellpose-SAM below
+cp.diameter         = 30f                              // px; 0f = auto-estimate (cyto* only)
+cp.ch1              = 0                                // channel to segment (0 = grayscale)
+cp.ch2              = 0                                // optional nucleus channel (0 = none)
+cp.additional_flags = "--use_gpu"                     // GPU when present; auto CPU fallback
+cp.verbose          = Boolean.TRUE                    // MUST set (nullable → NPE); also logs the exact cellpose command
+cp.run()
 
-def labels = cp.cellpose_imp                   // <-- the instance label image (NO /tmp scraping)
-if (labels.getBitDepth() == 32) {              // labels come back 32-bit float (values 1..N)
-    ImageConverter.setDoScaling(false)         // CRITICAL: don't rescale, or label IDs get mapped to 0..65535
+def labels = cp.cellpose_imp
+if (labels == null) {                                 // cellpose subprocess failed — read the verbose log above
+    println("FINAL STATUS: FAILURE - cellpose returned null (see cellpose log)")
+    return
+}
+if (labels.getBitDepth() == 32) {                     // 32-bit float labels → 16-bit WITHOUT scaling,
+    ImageConverter.setDoScaling(false)                // else IDs are remapped to 0..65535 and destroyed
     IJ.run(labels, "16-bit", "")
     ImageConverter.setDoScaling(true)
 }
-labels.setCalibration(imp.getCalibration())
+labels.setCalibration(imp.getCalibration())           // cellpose drops calibration
 labels.show()
+println("FINAL STATUS: SUCCESS")
 ```
 
-`cp.cellpose_imp` is a label image where background = 0 and each object = a unique integer
-1..N. The number of objects is the max pixel value. There is no ROI Manager step unless you
-want one (`IJ.run(labels, "Label image to ROIs", "")`, provided by the same BIOP jar).
+`cp.cellpose_imp` is a label image: background = 0, each object a unique integer 1..N (max pixel value = object count). For ROIs: `IJ.run(labels, "Label image to ROIs", "")` (same BIOP jar).
 
-## Using your OWN / pre-downloaded custom model
+## GPU vs CPU
 
-To use a custom model file (e.g. one you trained or downloaded as a single file), set
-`model_path` and leave `model` empty:
+`additional_flags` selects it: `"--use_gpu"` (default) uses the GPU when present and **falls back to CPU automatically**; `""` forces CPU (use to avoid GPU contention on a shared node). Safe to leave `--use_gpu` on everywhere. To confirm the container's actual state, call `check_environment` (query `"cuda"`) and read the **CUDA** row. On GPU, cellpose logs `>>>> using GPU (CUDA)`.
 
+**Speed & model choice:** GPU ≈ seconds → **prefer cpsam** there. On CPU, cyto3 is ~minutes per ~1 MP image (flow-dynamics dominates) and **cpsam is far too slow** (many minutes even for a small crop) → **prefer `cyto3`/`nuclei`** on CPU.
+
+## Custom / pre-downloaded models
+
+Set `model_path`, leave `model` empty:
 ```groovy
-cp.model      = ""
-cp.model_path = new File("/home/imagentj/.cellpose/models/my_custom_model")
+cp.model = ""
+cp.model_path = new File("/home/imagentj/.cellpose/models/my_model")
 ```
+Built-ins live in `/home/imagentj/.cellpose/models`: `cyto3`, `cyto2`, `nuclei`, `tissuenet_cp3`, `livecell_cp3`, `bact_*`, `cpsam`, … (full list + which env each needs → `SCRIPT_API.md`). Note: cyto3/nuclei expect microscopy images — on a non-cell image (e.g. a photo) they legitimately find ~0 objects; that is not a failure.
 
-The built-in pre-downloaded models (used via `cp.model = "<name>"`) live in
-`/home/imagentj/.cellpose/models`: `cyto3`, `cyto2`, `nuclei`, `general`, `tissuenet_cp3`,
-`livecell_cp3`, `bact_fluor_cp3`, `bact_phase_cp3`, `deepbacs_cp3`, `cpsam`, and more.
-See `SCRIPT_API.md` for the full list and which env each needs.
+## Cellpose-SAM (cpsam) — newest, most general model (prefer this when the GPU is active)
 
-## Cellpose-SAM (cpsam) — newest, highest-accuracy model
-
-`cpsam` is the Cellpose 4 (Cellpose-SAM) model — a SAM-based transformer that generally
-gives the best, most general segmentation. It uses a **different command and env**:
-
+The default choice on a GPU deployment. Use the **`CellposeSAM` command + `cellpose4` env** (cellpose 4.1.1), NOT the v3 `Cellpose`:
 ```groovy
 import ch.epfl.biop.wrappers.cellpose.ij2commands.CellposeSAM
-
 def cp = new CellposeSAM()
 ctx.inject(cp)
 cp.imp              = imp
-cp.env_path         = new File("/opt/conda/envs/cellpose4")   // cellpose 4.1.1 (NOT the v3 env)
+cp.env_path         = new File("/opt/conda/envs/cellpose4")
 cp.env_type         = "conda"
 cp.model            = "cpsam"
-cp.additional_flags = ""                                     // "--use_gpu" if a GPU is present
+cp.additional_flags = "--use_gpu"
 cp.verbose          = Boolean.TRUE
 cp.run()
-def labels = cp.cellpose_imp
+def labels = cp.cellpose_imp   // then null-guard + 16-bit convert exactly as in the main template
 ```
+Differences from v3: **no `ch1`/`ch2`** (channel-agnostic — setting them throws) and **`diameter` ignored** (dropped in v4). GPU strongly preferred.
 
-Differences from the v3 `Cellpose` command:
-- **No `ch1`/`ch2`** — Cellpose-SAM is channel-agnostic and segments using all channels;
-  the `CellposeSAM` command does not expose channel fields (don't set them).
-- **`diameter` is ignored** — Cellpose 4 dropped the diameter concept (it logs that the
-  flag is deprecated). You may leave the default.
-- **Env is `cellpose4`**, which already has a modern tifffile/NumPy 2 stack.
-- **Very slow on CPU.** The SAM transformer is heavy; on this CPU-only image even a small
-  crop takes several minutes. Use a GPU deployment (`--use_gpu`) for cpsam in practice;
-  prefer `cyto3`/`nuclei` (v3) when you only have CPU.
+## Pitfalls (read before generating a script)
 
-Full runnable cpsam pipeline (open → segment → 16-bit labels + CSV):
-`GROOVY_WORKFLOW_CELLPOSE_SAM_SEGMENTATION.groovy`.
+- **No helper methods.** In Fiji's SciJava Groovy runner (`#@`-param scripts) a script-level `def`/`final` — even `@Field` — is NOT reliably visible inside a method body: referencing it throws `MissingPropertyException: No such property: X for class: script`, so `cp.run()` never happens and you get a downstream `cellpose_imp is null` NPE. Keep the call in the main body, or pass everything (`env_path`/`model`/`diameter`/`ch1`/`ch2`/flags) as method arguments.
+- **Always null-guard `cp.cellpose_imp`** before `getBitDepth()` (see template) — a null means the cellpose subprocess failed; check the verbose log, don't NPE.
+- **`cp.verbose` MUST be set** (`Boolean.TRUE`) — it is nullable and null NPEs in `run()`.
+- **32-bit labels → 16-bit WITHOUT scaling** (wrap the conversion in `setDoScaling(false)`/`(true)`), or label IDs are remapped to 0..65535 and destroyed.
+- **Calibration is lost** on the output — re-apply `labels.setCalibration(imp.getCalibration())`.
+- **conda activation** is handled by `BASH_ENV=/opt/conda/etc/profile.d/conda.sh` (set in `src/imagentj/imagej_context.py`); export it yourself only if running Fiji standalone.
+- **Channels** use the wrapper's 1-based convention; `0` = none/grayscale.
 
-## Critical pitfalls (READ before generating a script)
-
-- **conda activation.** The wrapper segments by spawning `bash -c "conda activate <env> && python -m cellpose ..."`. A bare `bash -c` cannot run `conda activate` ("Run 'conda init' first"). In this container that is solved by `BASH_ENV=/opt/conda/etc/profile.d/conda.sh`, set before the JVM starts in `src/imagentj/imagej_context.py`. If you run Fiji standalone for testing, export `BASH_ENV` yourself first.
-- **`cp.verbose` must be set** (`Boolean.TRUE`/`FALSE`). It is a `Boolean` (nullable); leaving it null can NPE in `run()`. TRUE also prints the exact cellpose command + cellpose's own log — invaluable for debugging.
-- **Labels come back 32-bit — convert to 16-bit WITHOUT scaling.** `IJ.run(labels, "16-bit", "")` alone *rescales* pixel values to 0..65535 and destroys the integer label IDs (a verified trap: a 15-object image reported a max label of 65535). Always wrap it: `ImageConverter.setDoScaling(false)` → convert → `setDoScaling(true)`. Needed for MorphoLibJ / Analyze Particles / saving a normal label TIFF.
-- **Calibration is lost** on the cellpose output — re-apply `labels.setCalibration(imp.getCalibration())` before any measurement.
-- **CPU is slow.** cellpose-v3 cyto3 on CPU is ~minutes for a ~1 MP image (the flow-dynamics step dominates). Crop/downsample for quick checks; add `--use_gpu` to `additional_flags` only if the deployment has a GPU. This image (`agenticj:cpu-local`) is CPU-only.
-- **Channels.** `ch1` is the channel to segment; for a single-channel/grayscale image use `0`. For a 2-channel cyto image, `ch1` = cytoplasm channel, `ch2` = nucleus channel (cellpose's 1-based channel convention as exposed by the wrapper; `0` = none/grayscale).
-- **cpsam / Cellpose-SAM** uses a different command (`CellposeSAM`) and env (`cellpose4`) — see the dedicated section above. The `cyto3`/`nuclei` v3 path is the default on CPU; cpsam is GPU-ideal.
-
-## Files — and which workflow to use
-
-**Pick the workflow by model:**
-- **v3 models** (`cyto3`, `nuclei`, `cyto2`, `tissuenet_cp3`, `livecell_cp3`, `bact_*`, custom) →
-  `GROOVY_WORKFLOW_CELLPOSE_SEGMENTATION.groovy` (the `Cellpose` command, `cellpose` env). **Default on CPU.**
-- **cpsam** (Cellpose-SAM, Cellpose 4) →
-  `GROOVY_WORKFLOW_CELLPOSE_SAM_SEGMENTATION.groovy` (the `CellposeSAM` command, `cellpose4` env). Newest/most accurate, **GPU-ideal** — very slow on CPU.
-
-The two are NOT interchangeable: cpsam uses a different command + env, has no `ch1`/`ch2`, and ignores `diameter`. Don't copy v3 fields into the cpsam script (setting `ch1`/`ch2` on `CellposeSAM` throws).
+## Files
 
 | File | What it covers |
 |------|---------------|
-| `SCRIPT_API.md` | Complete Groovy API: every field on the `Cellpose`/`CellposeSAM` commands, env config, the full pre-downloaded model list + which conda env each needs, output handling |
-| `GROOVY_WORKFLOW_CELLPOSE_SEGMENTATION.groovy` | **v3 models.** Verified ready-to-run: open image → BIOP `Cellpose` → 16-bit label image + per-label area/centroid CSV; `FINAL STATUS:` convention; tested to produce 97 objects on a DAPI crop with cyto3 |
-| `GROOVY_WORKFLOW_CELLPOSE_SAM_SEGMENTATION.groovy` | **cpsam (Cellpose-SAM).** Same pipeline via the `CellposeSAM` command + `cellpose4` env; no `ch1`/`ch2`/`diameter`. Verified end-to-end (valid 16-bit label image). GPU strongly recommended — a 256px crop took ~23 min on this CPU-only image |
+| `SCRIPT_API.md` | Full field reference for `Cellpose`/`CellposeSAM`, env config, the complete pre-downloaded model list, output handling |
+| `GROOVY_WORKFLOW_CELLPOSE_SEGMENTATION.groovy` | **v3 models** — verified end-to-end: open → `Cellpose` → 16-bit labels + per-label area/centroid CSV |
+| `GROOVY_WORKFLOW_CELLPOSE_SAM_SEGMENTATION.groovy` | **cpsam** — `CellposeSAM` + `cellpose4` env; no `ch1`/`ch2`/`diameter` |
