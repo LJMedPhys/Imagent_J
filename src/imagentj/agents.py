@@ -16,6 +16,7 @@ from langchain.agents.structured_output import ToolStrategy
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.errors import GraphRecursionError
 from pydantic import BaseModel
 from deepagents.middleware.skills import SkillsMiddleware
 
@@ -37,7 +38,7 @@ from .tools import (
     inspect_folder_tree,
     smart_file_reader, inspect_csv_header,
     extract_image_metadata, search_fiji_plugins, install_fiji_plugin,
-    check_plugin_installed, mkdir_copy, save_script, execute_script,
+    check_plugin_installed, mkdir_copy, save_script, edit_script, copy_file, execute_script,
     get_script_info, load_script, get_script_history,
     setup_analysis_workspace, save_markdown,
     NarrationReminderMiddleware, PhaseGuardMiddleware,
@@ -267,7 +268,9 @@ def _make_coder_agent(model, name, system_prompt):
         tools=[
             internet_search,
             inspect_java_class,
-            save_script,
+            copy_file,             # seed a new script from any existing file (returns its content)
+            save_script,           # full write (from-scratch only)
+            edit_script,           # surgical patch — preferred for fixes + param tweaks
             load_script,
             get_script_history,
             smart_file_reader,
@@ -279,7 +282,12 @@ def _make_coder_agent(model, name, system_prompt):
         name=name,
         middleware=[
             FilesystemFileSearchMiddleware(
-                root_path="/app/skills/",  # scoped to skills only
+                # Scoped to /app/skills/ — the workflow templates / SKILL.md the coder
+                # copies from. Do NOT widen to /app/: /app/data is ~66 GB of images and
+                # a broad glob/grep that descends into it stalls for minutes (looks like
+                # an infinite loop). The project's own scripts live under the project_root
+                # temp dir (outside /app), so widening bought nothing.
+                root_path="/app/skills/",
                 use_ripgrep=True,
             ),
             ContextEditingMiddleware(
@@ -299,12 +307,19 @@ def _make_coder_agent(model, name, system_prompt):
 
 _analyst_agent = create_agent(
     llm_analyst,
+    # NOTE: save_script only — NO edit_script/copy_file. Proven (A/B, same model+prompt):
+    # edit_script triples the loop rate on this agent's model (gpt-5.2 ~50% vs save_script
+    # ~17%). edit_script is a blind patch, so gpt-5.2 re-reads (load_script/inspect) to
+    # "verify" and cascades into a loop — even when edit_script echoes the full result and
+    # says not to. Analyst scripts are tiny, so a full save_script rewrite costs nothing and
+    # the model trusts content it authored itself. edit_script stays on the coder/debugger
+    # (gpt-5.3-codex), which trusts its patches and never loops. get_script_info also removed
+    # (Supervisor-only verify tool that invited the same post-commit cycle).
     tools=[
         inspect_csv_header,
         save_script,
         load_script,
         get_script_history,
-        get_script_info,
         recall,
     ],
     system_prompt=python_analyst_prompt,
@@ -404,6 +419,106 @@ librarian_agent = create_agent(
 # )
 
 
+# ---------------------------------------------------------------------------
+# Recursion cap — bound a runaway tool loop in a stateless subagent
+# ---------------------------------------------------------------------------
+# LangGraph's default recursion_limit is 1000 super-steps (~500 turns), so a tool
+# loop (e.g. an analyst re-verifying after it already committed) can burn credits
+# unbounded. We cap every subagent. Legit runs use ~3-8 turns, but a heavy
+# supervisor-driven task (recommended-plugin SKILL.md reads + several inspect_java_class
+# checks) can reach ~12-16 turns (~24-32 super-steps), so 30 was too tight and could
+# clip a legitimate run. 45 (~22 turns) keeps generous headroom while still turning a
+# true runaway into a bounded stop. When the cap IS hit, _on_cap below salvages any
+# saved script (success=True) so the Supervisor executes it — the artifact is usually
+# complete; the agent merely failed to emit a final handoff. So the cap is now a
+# graceful "stop and hand back what you have", not a hard failure.
+_RECURSION_LIMIT = int(os.environ.get("AGENT_RECURSION_LIMIT", "45"))
+
+
+def _salvage_or_fail_script(script_path, kind):
+    """Build a graceful ScriptHandoff for a subagent that hit the recursion cap.
+
+    If a non-empty script was saved, hand it back as success=True so the Supervisor
+    runs it through execute_script (ground truth) instead of discarding it — most caps
+    happen AFTER a complete save, while the agent loops on self-verification. If nothing
+    was saved, fail cleanly with a retry hint and NO internal 'recursion' wording.
+    """
+    has_script = bool(script_path) and os.path.isfile(script_path) and os.path.getsize(script_path) > 0
+    if has_script:
+        return ScriptHandoff(
+            script_path=script_path,
+            description=(
+                f"{kind} produced a script but did not emit a final handoff. It is most "
+                "likely complete — execute it to confirm; if it errors, send it to imagej_debugger."
+            ),
+            success=True,
+        )
+    return ScriptHandoff(
+        script_path="",
+        description=f"{kind} could not produce a usable script for this task.",
+        success=False,
+        error_message="No script was generated — re-issue the request once with a simpler, more explicit task.",
+    )
+
+
+def _snapshot_scripts(directory: str) -> dict:
+    """Map {path: mtime} of every .py/.groovy under `directory` (recursive), taken BEFORE
+    a subagent runs. Lets the cap salvage tell a script THIS run produced from a stale one
+    left by an earlier task — these project folders accumulate many scripts over time."""
+    snap = {}
+    try:
+        for root, _dirs, files in os.walk(directory):
+            for fn in files:
+                if fn.lower().endswith((".py", ".groovy")):
+                    p = os.path.join(root, fn)
+                    try:
+                        snap[p] = os.path.getmtime(p)
+                    except OSError:
+                        continue
+    except Exception:
+        pass
+    return snap
+
+
+def _newest_script_since(directory: str, pre: dict) -> str:
+    """The most recently modified .py/.groovy under `directory` that was CREATED or MODIFIED
+    after the `pre` snapshot — i.e. produced during THIS run. Returns "" if nothing changed,
+    so the caller fails cleanly instead of salvaging (and executing) a stale script from an
+    earlier task."""
+    newest, newest_mtime = "", -1.0
+    try:
+        for root, _dirs, files in os.walk(directory):
+            for fn in files:
+                if not fn.lower().endswith((".py", ".groovy")):
+                    continue
+                p = os.path.join(root, fn)
+                try:
+                    mt = os.path.getmtime(p)
+                except OSError:
+                    continue
+                # new file (absent from pre), or existing file whose mtime advanced this run
+                if mt > pre.get(p, -1.0) and mt > newest_mtime:
+                    newest, newest_mtime = p, mt
+    except Exception:
+        pass
+    return newest
+
+
+def _run_capped(agent, payload, on_cap):
+    """Run a stateless subagent with a hard recursion cap. On hitting the cap (a runaway
+    tool loop) return on_cap() — a best-effort handoff — instead of raising/looping forever,
+    so the Supervisor still receives a structured result it can act on."""
+    try:
+        result = stop_signal.SubagentRunner(
+            agent.invoke,
+            payload,
+            config={"recursion_limit": _RECURSION_LIMIT},
+        ).run()
+        return result["structured_response"]
+    except GraphRecursionError:
+        return on_cap()
+
+
 @tool
 def imagej_coder(task: str, project_root: str) -> ScriptHandoff:
     """
@@ -435,11 +550,18 @@ def imagej_coder(task: str, project_root: str) -> ScriptHandoff:
 
     agent = _make_coder_agent(model, "imagej_coder", imagej_coder_prompt)
 
-    result = stop_signal.SubagentRunner(
-        agent.invoke,
+    scripts_dir = os.path.join(project_root, "scripts", "imagej")
+    pre_scripts = _snapshot_scripts(scripts_dir)
+
+    def _on_cap():
+        path = _newest_script_since(scripts_dir, pre_scripts)
+        return _salvage_or_fail_script(path, "The coder")
+
+    return _run_capped(
+        agent,
         {"messages": [{"role": "user", "content": "\n\n".join(s for s in sections if s)}]},
-    ).run()
-    return result["structured_response"]
+        _on_cap,
+    )
 
 
 @tool
@@ -468,15 +590,20 @@ def imagej_debugger(script_path: str, error_message: str, project_root: str = ""
     # lessons itself via the recall() tool (keyed on the stack trace).
     sections.append(core_pitfalls("Groovy"))
 
-    result = stop_signal.SubagentRunner(
-        agent.invoke,
+    def _on_cap():
+        return _salvage_or_fail_script(script_path, "The debugger")
+
+    handoff = _run_capped(
+        agent,
         {"messages": [{"role": "user", "content": "\n\n".join(s for s in sections if s)}]},
-    ).run()
-    handoff = result["structured_response"]
+        _on_cap,
+    )
 
     # Buffer the lesson for deterministic capture. The debugger CANNOT verify its
     # own fix; execute_script persists this automatically once the supervisor
     # reruns the repaired script and it passes — no manual save call involved.
+    # On a recursion-cap salvage the handoff carries no lesson/working_code, so
+    # nothing is recorded — a run that never self-confirmed must not teach.
     try:
         if handoff.lesson and handoff.working_code:
             register_pending_lesson(
@@ -529,15 +656,35 @@ def python_data_analyst(task: str, input_csv: str, output_dir: str, project_root
     sections.append(core_pitfalls("Python"))
     sections.append(core_recipes("Python"))
 
-    result = stop_signal.SubagentRunner(
-        _analyst_agent.invoke,
+    pre_scripts = _snapshot_scripts(output_dir)
+
+    def _on_cap():
+        path = _newest_script_since(output_dir, pre_scripts)
+        has = bool(path) and os.path.isfile(path) and os.path.getsize(path) > 0
+        if has:
+            return AnalystHandoff(
+                script_path=path,
+                description=("The analyst produced a script but did not emit a final handoff. "
+                            "It is most likely complete — execute it to confirm."),
+                success=True,
+            )
+        return AnalystHandoff(
+            script_path="",
+            description="The analyst could not produce a usable script for this task.",
+            success=False,
+            error_message="No script was generated — re-issue the request once with a simpler, more explicit task.",
+        )
+
+    handoff = _run_capped(
+        _analyst_agent,
         {"messages": [{"role": "user", "content": "\n\n".join(s for s in sections if s)}]},
-    ).run()
-    handoff = result["structured_response"]
+        _on_cap,
+    )
 
     # Deterministic lesson capture for the Python flow, mirroring imagej_debugger.
     # Populated only when this run fixed a failing script; execute_script commits
-    # it once the rerun is green.
+    # it once the rerun is green. A recursion-cap salvage carries no lesson, so a
+    # run that never self-confirmed records nothing.
     try:
         if handoff.lesson and handoff.working_code:
             register_pending_lesson(

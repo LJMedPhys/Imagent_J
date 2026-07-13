@@ -15,8 +15,20 @@
  *   - command  = CellposeSAM       (NOT Cellpose)
  *   - env_path = /opt/conda/envs/cellpose4   (cellpose 4.1.1, NOT the v3 env)
  *   - model    = "cpsam"
- *   - NO ch1 / ch2 fields          (CellposeSAM is channel-agnostic — setting them throws)
- *   - NO diameter                  (dropped in Cellpose 4; ignored)
+ *   - NO ch1 / ch2 fields          (declared on the v3 Cellpose class only -> MissingPropertyException)
+ *   - LEAVE diameter ALONE         (inherited from the shared parent; the wrapper always forwards
+ *                                   "--diameter 30.0". Cellpose 4 uses it to rescale to its 30 px
+ *                                   training diameter, so the default is a no-op -- but a non-30
+ *                                   value DOES change the result. It is not ignored.)
+ *
+ * FLAGS: `additional_flags` is split on COMMAS ONLY. Every flag AND every value is its own
+ * comma-separated token. A space-separated string becomes a single argv token; cellpose exits
+ * with "unrecognized arguments", cellpose_imp comes back null, and the next access throws
+ * NullPointerException on "cellpose_t_imp". See SCRIPT_API.md.
+ *
+ * BRIGHT-FIELD: cellpose expects objects BRIGHTER than the background. If your background is
+ * bright (dark cells), invert in ImageJ first: IJ.run(imp, "Invert", ""). You CANNOT use
+ * "--invert" here -- it is deprecated and silently ignored in cellpose >= 4.0.1.
  *
  * Outputs:
  *   <outputDir>/cpsam_labels.tif    16-bit instance label image (0 = bg, 1..N = objects)
@@ -41,7 +53,11 @@ import ij.process.ImageConverter
 def imagePath = "/app/data/.../input.tif"          // "" to use the currently active image
 def outputDir = "/app/data/.../cpsam_out"
 def envPath   = "/opt/conda/envs/cellpose4"         // cellpose 4.1.1 (cpsam)
-def flags     = "--use_gpu"                          // use the GPU when present; cellpose falls back to CPU automatically if none
+// COMMA-separated flags AND values — never spaces. "" forces CPU.
+// To tune: lower cellprob_threshold => more/larger masks; raise flow_threshold => looser QC (more masks).
+//   "--use_gpu, --cellprob_threshold, -1.0, --flow_threshold, 0.4"   <- correct
+//   "--use_gpu --cellprob_threshold -1.0 --flow_threshold 0.4"       <- WRONG, yields null labels
+def flags     = "--use_gpu"                         // GPU when present; cellpose falls back to CPU automatically
 // ─────────────────────────────────────────────────────────────────────────────
 
 boolean success = false
@@ -61,7 +77,8 @@ try {
     cp.model            = "cpsam"
     cp.additional_flags = flags
     cp.verbose          = Boolean.TRUE
-    // NOTE: do NOT set cp.ch1 / cp.ch2 (don't exist on CellposeSAM) or cp.diameter (ignored).
+    // NOTE: cp.ch1 / cp.ch2 don't exist on CellposeSAM (setting them throws). Leave cp.diameter
+    // at its default — it is forwarded as "--diameter 30.0" and a non-30 value rescales the image.
     IJ.log("[INFO] running Cellpose-SAM (cpsam, env=${envPath}) — VERY slow on CPU, GPU recommended")
     cp.run()
 

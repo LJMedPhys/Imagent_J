@@ -5,7 +5,7 @@ import pymupdf4llm
 import pymupdf
 from langchain.tools import tool
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from .utils import walk, sanitize_filename
+from .utils import walk, sanitize_filename, add_line_numbers
 from imagentj.rag.loaders import get_smart_splitter, load_and_split_ipynb
 from .vector_stores import get_vec_store_docs, is_rag_available
 import threading
@@ -163,7 +163,9 @@ def smart_file_reader(file_path: str):
             print("Action: Injecting directly into Context (Fastest)")
             if len(content) > MAX_CONTEXT_CHARS:
                 content = content[:MAX_CONTEXT_CHARS] + "\n\n[... content truncated (RAG unavailable) ...]"
-            return {"type": "context", "content": content}
+            # Number code/text lines for reference (display-only prefixes). Not applied to
+            # the RAG-indexed branch below — numbering would pollute the embedded chunks.
+            return {"type": "context", "content": add_line_numbers(content)}
         else:
             print("Action: Large file detected. Indexing into RAG...")
             splitter = get_smart_splitter(ext)

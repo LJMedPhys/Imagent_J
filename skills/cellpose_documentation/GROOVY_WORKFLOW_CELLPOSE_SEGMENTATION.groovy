@@ -7,6 +7,15 @@
  *
  * Verified: cyto3 on a 1024x1024 DAPI crop (CPU) -> 97 instance labels.
  *
+ * FLAGS: `additional_flags` is split on COMMAS ONLY. Every flag AND every value is its own
+ * comma-separated token. A space-separated string becomes a single argv token; cellpose exits
+ * with "unrecognized arguments", cellpose_imp comes back null, and the next access throws
+ * NullPointerException on "cellpose_t_imp". See SCRIPT_API.md.
+ *
+ * BRIGHT-FIELD: cellpose expects objects BRIGHTER than the background. If your background is
+ * bright (dark cells), invert first: IJ.run(imp, "Invert", "") -- or add "--invert" to flags
+ * (v3 only; it is a silent no-op on cpsam).
+ *
  * Outputs:
  *   <outputDir>/cellpose_labels.tif   16-bit instance label image (0 = bg, 1..N = objects)
  *   <outputDir>/cellpose_objects.csv  per-label area (px) + centroid
@@ -32,7 +41,11 @@ def model     = "cyto3"                             // or "nuclei", "cyto2", "ti
 float diameter = 30f                                // expected object diameter in px; 0f = auto (cyto* only)
 int   ch1     = 0                                   // channel to segment (0 = grayscale)
 int   ch2     = 0                                   // optional nucleus channel (0 = none)
-def   flags   = "--use_gpu"                          // use the GPU when present; cellpose falls back to CPU automatically if none
+// COMMA-separated flags AND values — never spaces. "" forces CPU.
+// To tune: lower cellprob_threshold => more/larger masks; raise flow_threshold => looser QC (more masks).
+//   "--use_gpu, --cellprob_threshold, -1.0, --flow_threshold, 0.4"   <- correct
+//   "--use_gpu --cellprob_threshold -1.0 --flow_threshold 0.4"       <- WRONG, yields null labels
+def   flags   = "--use_gpu"                         // GPU when present; cellpose falls back to CPU automatically
 // ─────────────────────────────────────────────────────────────────────────────
 
 boolean success = false

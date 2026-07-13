@@ -13,8 +13,12 @@ All identifiers below are verified against the installed jar
 The verified, primary path is the `Cellpose` command with `cyto3`/`nuclei` in the
 `cellpose` env. `CellposeSAM` inherits the same fields (`imp`, `env_path`, `env_type`,
 `model`, `model_path`, `verbose`, `cellpose_imp`) but targets the `cellpose4` env + `cpsam`
-model, and **does not use `ch1`/`ch2` (channel-agnostic) or `diameter` (dropped in
-Cellpose 4)** — don't set them. Cellpose-SAM is heavy on CPU; prefer a GPU. See SKILL.md.
+model. It has **no `ch1`/`ch2`** (channel-agnostic — setting them throws
+`MissingPropertyException`). It *does* inherit `diameter`, and the wrapper always forwards it
+(`--diameter 30.0` by default). Cellpose 4 uses `--diameter` to rescale the image to the
+training diameter of 30 px, so the default is a no-op but a non-30 value **does** change the
+result — leave it alone unless you mean to rescale. Cellpose-SAM is heavy on CPU; prefer a
+GPU. See SKILL.md.
 
 ## Fields on the `Cellpose` command
 
@@ -31,9 +35,64 @@ Set as plain Groovy properties (`cp.field = value`). Inject the SciJava context 
 | `diameter` | `float` | expected object diameter in px. `0f` = auto-estimate (cyto* only, needs a `size_*.npy`) |
 | `ch1` | `int` | channel to segment (`0` = grayscale/single channel) |
 | `ch2` | `int` | optional second/nucleus channel (`0` = none) |
-| `additional_flags` | `String` | comma- or space-separated extra cellpose CLI flags, e.g. `"--use_gpu"`, `"--cellprob_threshold, -1"`, `"--flow_threshold, 0.6"` |
+| `additional_flags` | `String` | **comma-separated** extra cellpose CLI flags. See [Passing flags](#passing-flags-additional_flags) — a space-separated string silently breaks the run |
 | `verbose` | `Boolean` | **set this** (`Boolean.TRUE`/`FALSE`). Nullable → can NPE if left null. TRUE logs the exact command + cellpose output |
 | `cellpose_imp` | `ij.ImagePlus` | **Output** label image, populated after `run()`. 32-bit; background 0, objects 1..N |
+
+## Passing flags (`additional_flags`)
+
+The wrapper does `additional_flags.split(",")`, trims each token, and passes the tokens
+straight to the cellpose CLI as argv. **It splits on commas only — never on whitespace.**
+Every flag *and every value* is its own comma-separated token:
+
+```groovy
+// CORRECT — 5 argv tokens
+cp.additional_flags = "--use_gpu, --cellprob_threshold, -1.0, --flow_threshold, 0.4"
+
+// WRONG — 1 argv token containing spaces
+cp.additional_flags = "--use_gpu --cellprob_threshold -1.0 --flow_threshold 0.4"
+```
+
+The wrong form fails in a way that does not point at the flags. cellpose's argparse rejects
+the single blob with `error: unrecognized arguments` and exits, so no `*_cp_masks.tif` is
+written, `cp.cellpose_imp` comes back **null**, and the next field access throws a
+`NullPointerException` on `cellpose_t_imp`. A lone `"--use_gpu"` happens to work because it
+contains no spaces — so a script can look fine until the day a second flag is added.
+
+`flow_threshold` and `cellprob_threshold` are **not** settable fields on the command
+(`cp.flow_threshold = 0.6` throws `MissingPropertyException`). They exist only as flags here.
+
+### Threshold semantics — the directions are not symmetric
+
+| Flag | Default | Range | Effect |
+|------|---------|-------|--------|
+| `--cellprob_threshold` | `0` | ~`-6`…`6` | **Decrease** → more and larger masks. **Increase** → fewer, smaller masks |
+| `--flow_threshold` | `0.4` | `0`…~`1` | Flow-error QC. **Increase** → *more* masks pass QC (looser). **Decrease** → fewer (stricter). `0` disables the QC step |
+
+A common mistake is to raise both, believing both are "stricter". Raising
+`cellprob_threshold` tightens; raising `flow_threshold` *loosens*. To suppress spurious
+background objects: raise `cellprob_threshold`, lower `flow_threshold`. To fix cells that
+are split or clipped: lower `cellprob_threshold`.
+
+`--norm_percentile` takes two values, so it needs three tokens:
+`"--use_gpu, --norm_percentile, 1, 99"`.
+
+### Brightfield / bright-background images
+
+Cellpose expects objects **brighter** than their background. On bright-field data with a
+bright background (dark cells) it will happily segment the background instead of the cells —
+this is the classic cause of "cellpose found the background".
+
+| Command / env | How to flip polarity |
+|---|---|
+| `Cellpose` (v3, cellpose 3.1.1.2) | either `IJ.run(imp, "Invert", "")` in ImageJ, **or** pass `"--use_gpu, --invert"` — v3's CLI still implements `--invert` ("invert grayscale channel") |
+| `CellposeSAM` (v4, cellpose 4.1.1) | **ImageJ only.** `--invert` is *"Deprecated in v4.0.1+, not used."* — passing it is silently ignored |
+
+So the portable answer is to invert in ImageJ *before* assigning `cp.imp`.
+
+Likewise, ImageJ's `Subtract Background...` assumes a dark background unless you pass the
+`light` option — on bright-background data, omitting it estimates the background envelope
+from the cells themselves and erases them.
 
 ## What `run()` actually does (for debugging)
 
