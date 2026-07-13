@@ -366,6 +366,35 @@ RUN /opt/conda/envs/stardist/bin/python -c \
 # TrackMate-StarDist looks for a Python executable via this env var
 ENV SCIJAVA_PYTHON=/opt/conda/envs/stardist/bin/python
 
+# ── BrainGlobe environment ───────────────────────────────────────────────────
+# Isolated because the full brainglobe meta-package drags in napari[all] +
+# PyQt6 + vtk + keras (7.2 GB), which collides with the main env's PySide6 GUI
+# and forces further downgrades. We install the HEADLESS subset instead (1.3 GB):
+# atlas access + whole-brain registration, no 3D viewer, no cellfinder.
+#
+# The python_coder selects this env with a first-line magic comment:
+#     # imagentj-env: brainglobe
+# See _CONDA_ENVS in src/imagentj/tools/analyst_tools.py.
+RUN /opt/conda/bin/conda create -n brainglobe python=3.12 -y \
+    && /opt/conda/envs/brainglobe/bin/pip install --no-cache-dir \
+        brainglobe-atlasapi \
+        brainglobe-space \
+        brainglobe-utils \
+        brainreg \
+    && /opt/conda/bin/conda clean -afy
+
+# Verify the BrainGlobe stack imports correctly
+RUN /opt/conda/envs/brainglobe/bin/python -c \
+    "import brainglobe_atlasapi, brainglobe_space, brainglobe_utils, brainreg; \
+     from brainglobe_atlasapi.list_atlases import get_all_atlases_lastversions; \
+     print('[OK] BrainGlobe stack:', brainglobe_atlasapi.__version__, \
+           len(get_all_atlases_lastversions()), 'atlases available')"
+
+# Atlases (hundreds of MB each) download on first use to brainglobe's default
+# $HOME/.brainglobe (config in $HOME/.config/brainglobe). $HOME is the
+# imagentj_home named volume, so they persist across restarts without being
+# baked into the image. No env var needed — the defaults already land there.
+
 # ── DeepImageJ / APPOSE environment configuration ────────────────────────────
 # DeepImageJ 3.x uses APPOSE (via dl-modelrunner) to run Python inference.
 # APPOSE creates ONE environment per framework (TF, PyTorch) stored under

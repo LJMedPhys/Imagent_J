@@ -113,7 +113,7 @@ class AnalystHandoff(BaseModel):
     """Returned by python_data_analyst."""
     script_path: str
     description: str
-    stage: str = "unknown"              # "statistics" | "plotting"
+    stage: str = "unknown"              # "measurement" | "statistics" | "plotting"
     inputs: list[str] = []
     outputs: list[str] = []
     stats_csv_path: Optional[str] = None  # Stage 1 only
@@ -305,6 +305,16 @@ def _make_coder_agent(model, name, system_prompt):
     )
 
 
+# Python skills backend — scoped to /app/skills/python/ so the analyst sees only the
+# Python library + standards skills, not the ~26 Groovy/Fiji plugin doc skills.
+# SkillsMiddleware's scan is one level deep (it looks for <source>/<skill>/SKILL.md),
+# so /app/skills/python/ is invisible to the plugin_manager's /app/skills/ scan and
+# vice versa — the two skill sets stay cleanly separated.
+_python_skills_backend = FilesystemBackend(
+    root_dir="/app/",
+    virtual_mode=False,
+)
+
 _analyst_agent = create_agent(
     llm_analyst,
     # NOTE: save_script only — NO edit_script/copy_file. Proven (A/B, same model+prompt):
@@ -321,11 +331,19 @@ _analyst_agent = create_agent(
         load_script,
         get_script_history,
         recall,
+        # SkillsMiddleware lists skill metadata and tells the agent to read the full
+        # SKILL.md on demand; it ships no reader of its own, so these two supply it.
+        smart_file_reader,
+        inspect_folder_tree,
     ],
     system_prompt=python_analyst_prompt,
     response_format=ToolStrategy(schema=AnalystHandoff, handle_errors=True),
     name="python_data_analyst",
     middleware=[
+        SkillsMiddleware(
+            backend=_python_skills_backend,
+            sources=["/app/skills/python/"],
+        ),
         ContextEditingMiddleware(
             edits=[
                 ClearToolUsesEdit(
@@ -623,24 +641,30 @@ def imagej_debugger(script_path: str, error_message: str, project_root: str = ""
 
 
 @tool
-def python_data_analyst(task: str, input_csv: str, output_dir: str, project_root: str) -> AnalystHandoff:
+def python_data_analyst(task: str, input_path: str, output_dir: str, project_root: str) -> AnalystHandoff:
     """
-    Run statistical analysis or generate publication-quality plots from ImageJ CSV data.
+    The Python allrounder: measure images, run statistics, or generate publication figures.
 
-    Call TWICE — once per stage, never combined:
-      Stage 1 (statistics): task describes hypothesis testing. Returns stats_csv_path.
-      Stage 2 (plotting):   task describes plot types. Call only after Stage 1 CSV exists.
+    Call ONCE PER STAGE, never combined:
+      Stage 0 (measurement): task describes segmentation / feature extraction from an image
+                             or label mask (scikit-image, cp_measure, OpenCV, scikit-learn,
+                             brainglobe). Outputs a per-object CSV.
+      Stage 1 (statistics):  task describes hypothesis testing. Returns stats_csv_path.
+      Stage 2 (plotting):    task describes plot types. Call only after Stage 1 CSV exists.
 
     Args:
-        task:         What to do — describe the hypothesis, groups to compare, or plot types.
-        input_csv:    Absolute path to the CSV file to analyze (raw measurements or Statistics_Results.csv).
+        task:         What to do — the measurement to extract, the hypothesis and groups to
+                      compare, or the plot types.
+        input_path:   Absolute path to the input for THIS stage: an image or label mask for
+                      Stage 0, a raw measurement CSV for Stage 1, Statistics_Results.csv for
+                      Stage 2.
         output_dir:   Absolute path to the directory where scripts and outputs should be saved.
-        project_root: Absolute path to the project folder. 
+        project_root: Absolute path to the project folder.
 
     Returns an AnalystHandoff with script_path, outputs, stats_csv_path or figure_paths.
     """
     sections = [
-        f"INPUT CSV: {input_csv}",
+        f"INPUT PATH: {input_path}",
         f"OUTPUT DIR: {output_dir}",
     ]
     # Inject ledger so the analyst knows the scientific goal (for axis labels),
