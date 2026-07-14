@@ -22,6 +22,11 @@ dependencies:
   - seaborn
   - matplotlib
   - matplotlib-base
+  # Grammar-of-graphics plotting (ggplot2-style) — the 'plotnine' skill. statsmodels
+  # backs geom_smooth(method="lm"/"lowess"); scikit-misc backs method="loess".
+  - plotnine
+  - statsmodels
+  - scikit-misc
   - xarray
   - tifffile
   # Image analysis / ML (python_coder agent)
