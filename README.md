@@ -10,6 +10,10 @@ Prerequisites:
 - ~8 GB RAM and ~30 GB free disk
 - An OpenAI **or** OpenRouter API key
 
+> The optional VLM Judge uses `google/gemini-3.5-flash` when
+> `OPEN_ROUTER_API_KEY` is set (including when both keys are present). OpenAI-only
+> setups use `gpt-5.6-luna` with high reasoning through the Responses API.
+
 ### Run the published image without cloning the repository
 
 Use this path if you only want to run Agentic-J with Docker and do not need the source code locally.
@@ -21,7 +25,7 @@ cd Agentic-J-run
 
 # 2. Start Agentic-J from the published Docker Compose artifact
 docker compose \
-  -f oci://docker.io/mmvlab/agenticj-compose:latest \
+  -f oci://docker.io/mmvlab/agenticj-compose:your-hardware \
   run \
   -d \
   --service-ports \
@@ -30,7 +34,7 @@ docker compose \
   imagentj
 ```
 
-Replace `your-openrouter-api-key` with your key, or set it to an empty string (`OPEN_ROUTER_API_KEY=""`) to enter the key in the browser setup wizard instead.
+Replace `your-hardware` with `cpu` or `gpu`. Replace `your-openrouter-api-key` with your key, or set it to an empty string (`OPEN_ROUTER_API_KEY=""`) to enter the key in the browser setup wizard instead.
 
 Then open <http://localhost:6080/vnc.html> in your browser. Fiji and the Agentic-J chat panel run inside the virtual desktop.
 
