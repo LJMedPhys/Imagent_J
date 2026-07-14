@@ -316,18 +316,21 @@ _python_skills_backend = FilesystemBackend(
 )
 
 _analyst_agent = create_agent(
-    llm_analyst,
-    # NOTE: save_script only — NO edit_script/copy_file. Proven (A/B, same model+prompt):
-    # edit_script triples the loop rate on this agent's model (gpt-5.2 ~50% vs save_script
-    # ~17%). edit_script is a blind patch, so gpt-5.2 re-reads (load_script/inspect) to
-    # "verify" and cascades into a loop — even when edit_script echoes the full result and
-    # says not to. Analyst scripts are tiny, so a full save_script rewrite costs nothing and
-    # the model trusts content it authored itself. edit_script stays on the coder/debugger
-    # (gpt-5.3-codex), which trusts its patches and never loops. get_script_info also removed
-    # (Supervisor-only verify tool that invited the same post-commit cycle).
+    # Codex model (gpt-5.3-codex) — same one the coder/debugger run on. The analyst
+    # was previously on gpt-5.2, where an A/B test showed edit_script tripled the tool-loop
+    # rate (~50% vs ~17% for save_script): gpt-5.2 treated a surgical patch as a blind write
+    # and re-read (load_script/inspect) to "verify", cascading into a loop. That was a gpt-5.2
+    # pathology, not an edit_script one — the codex model trusts its own patches and never
+    # loops, which is exactly why edit_script has always been safe on the coder/debugger.
+    # Moving the analyst onto codex removes that pathology, so edit_script + copy_file are
+    # now enabled here too (surgical fixes/param tweaks + seeding a script from a template),
+    # mirroring the coder. (get_script_info stays off — Supervisor-only verify tool.)
+    llm_worker,
     tools=[
         inspect_csv_header,
-        save_script,
+        copy_file,             # seed a new script from any existing file (returns its content)
+        save_script,           # full write (from-scratch only)
+        edit_script,           # surgical patch — preferred for fixes + param tweaks
         load_script,
         get_script_history,
         recall,
