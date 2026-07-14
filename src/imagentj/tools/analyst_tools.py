@@ -227,7 +227,10 @@ def run_python_code(code: str, output_directory: str):
                 f"CRASH DETECTED IN PYTHON (env='{env}'):\n"
                 f"STDOUT: {stdout}\nSTDERR: {stderr}"
             )
-        return f"SUCCESS (env='{env}'):\n{stdout}"
+        # The leading "SUCCESS:" is load-bearing: learned_memory._run_succeeded gates the
+        # background Librarian on out.lstrip().startswith("SUCCESS:"). Keep the colon
+        # immediately after SUCCESS or Python runs stop being learned as recipes.
+        return f"SUCCESS: (env='{env}')\n{stdout}"
     except Exception as e:
         return f"SYSTEM ERROR: {str(e)}"
     
