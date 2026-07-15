@@ -265,6 +265,40 @@ RUN /opt/conda/bin/conda create -n napari-mcp python=3.11 -y \
 COPY patch_napari_mcp/patch_qt_helpers.py /tmp/patch_qt_helpers.py
 RUN /opt/conda/envs/napari-mcp/bin/python /tmp/patch_qt_helpers.py && rm /tmp/patch_qt_helpers.py
 
+# ── micro_sam ("Segment Anything for Microscopy") into the napari-mcp env ─────
+# Installed INTO the napari env (not a separate one) so it registers as a real
+# napari plugin (GUI: Plugins > Segment Anything for Microscopy) AND is importable
+# by both the interactive viewer (via napari-mcp execute_code) and the headless
+# batch route (python_data_analyst, `# imagentj-env: napari-mcp`). Pulls torch +
+# segment-anything + torch_em + elf via conda-forge. mobile_sam (pip, from git) is
+# only needed for the tiny `vit_t*` backbones — the fastest option on CPU; the
+# base default `vit_b_lm` works without it.
+#
+# GPU: conda-forge's micro_sam pulls a CPU-ONLY torch, so on a GPU build we swap it
+# for the CUDA wheels (same torch/torchvision pin + CUDA_TAG as the cellpose envs) so
+# micro_sam uses the GPU. On a CPU build (USE_GPU=false, the default) or arm64 the
+# working conda CPU torch is left untouched — micro_sam still runs, just on CPU
+# (device auto-selects via torch.cuda.is_available()). The swap pulls torch's
+# nvidia-*-cu12 CUDA runtime wheels as dependencies — do NOT pass --no-deps or torch
+# fails to import with "libcudart.so.12: cannot open shared object file". --force-
+# reinstall is needed so BOTH torch and torchvision move off the conda CPU build. The
+# build-time check asserts it is a CUDA *build*, not that a GPU is present (the build
+# host may have none). Validated: torch 2.11.0+cu126 + torchvision 0.26.0+cu126 import
+# cleanly and micro_sam still imports afterwards.
+RUN CONDA_SOLVER=libmamba /opt/conda/bin/conda install -n napari-mcp -c conda-forge micro_sam -y \
+    && /opt/conda/envs/napari-mcp/bin/pip install --no-cache-dir \
+        "git+https://github.com/ChaoningZhang/MobileSAM.git" \
+    && if [ "$USE_GPU" = "true" ] && [ "$TARGETARCH" != "arm64" ]; then \
+           /opt/conda/envs/napari-mcp/bin/pip install --no-cache-dir --force-reinstall \
+               'torch==2.11.0' 'torchvision==0.26.0' \
+               --index-url https://download.pytorch.org/whl/${CUDA_TAG} \
+           && /opt/conda/envs/napari-mcp/bin/python -c \
+               "import torch; assert torch.version.cuda, 'expected a CUDA torch build in the GPU image'"; \
+       fi \
+    && /opt/conda/envs/napari-mcp/bin/python -c \
+        "import micro_sam, mobile_sam, torch; print('micro_sam', micro_sam.__version__, 'torch', torch.__version__, 'cuda_build', torch.version.cuda)" \
+    && /opt/conda/bin/conda clean -afy
+
 # napari/vispy fall back to llvmpipe software GL under headless Xvfb (no GPU).
 ENV LIBGL_ALWAYS_SOFTWARE=1
 
