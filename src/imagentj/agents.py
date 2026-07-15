@@ -686,7 +686,7 @@ def python_data_analyst(task: str, input_path: str, output_dir: str, project_roo
 
     Call ONCE PER STAGE, never combined:
       Stage 0 (measurement): task describes segmentation / feature extraction from an image
-                             or label mask (scikit-image, cp_measure, OpenCV, scikit-learn,
+                             or label mask (scikit-image, cp_measure, scikit-learn,
                              brainglobe). Outputs a per-object CSV.
       Stage 1 (statistics):  task describes hypothesis testing. Returns stats_csv_path.
       Stage 2 (plotting):    task describes plot types. Call only after Stage 1 CSV exists.

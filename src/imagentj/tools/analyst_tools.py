@@ -13,7 +13,7 @@ import tempfile
 # Conda envs the Python agent may execute in.
 #
 # The main env carries the data-science + measurement stack (pandas, seaborn,
-# scipy, scikit-image, scikit-learn, opencv, cp_measure). brainglobe lives in its
+# scipy, scikit-image, scikit-learn, cp_measure). brainglobe lives in its
 # own env because it drags in napari + PyQt6 + vtk + keras, which collide with the
 # main env's PySide6 GUI and force a pillow downgrade.
 #

@@ -231,7 +231,7 @@ no robust elastic registration.
 
 | File | What it covers |
 |---|---|
-| `SKILL.md` | When to use skimage vs OpenCV vs cp_measure; the pitfalls in brief |
+| `SKILL.md` | When to use skimage vs cp_measure; the pitfalls in brief |
 | `SCRIPT_API.md` | This file — verified signatures, full property lists, threshold menu |
 | `WORKFLOW_SEGMENT_MEASURE.py` | Threshold → clean → watershed → `regionprops_table` → CSV, with μm conversion |
 | `WORKFLOW_REGISTRATION.py` | Rigid drift correction of a stack with `phase_cross_correlation` |
