@@ -10,8 +10,8 @@ description: >-
   regionprops area/perimeter are in PIXELS — pass spacing= or multiply by the PROJECT STATE pixel
   size; regionprops RAISES on a boolean mask, so run measure.label first; filters.gaussian
   rescales to [0,1] unless preserve_range=True; and in 0.26 binary_closing/binary_opening are
-  deprecated and min_size became max_size with a different boundary. Use skimage over OpenCV
-  whenever the input is scientific (float, 16-bit, 3D/ND) data.
+  deprecated and min_size became max_size with a different boundary. Use skimage for scientific
+  (float, 16-bit, 3D/ND) image data.
 ---
 
 # scikit-image — Documentation Index
@@ -22,8 +22,6 @@ main env (`local_imagent_J`) — no env switch, no install. Version **0.26.0**.
 **When to use this vs. alternatives**
 - **scikit-image (this skill)** — scientific images: float or 16-bit data, 3D/ND
   stacks, quantitative measurement. The default choice.
-- **OpenCV** — 8-bit BGR photographic images, contour polygons, feature matching
-  (SIFT/ORB), perspective warps. Faster, but 8-bit-centric and BGR-ordered.
 - **cp_measure** — the full CellProfiler feature battery on a label image (271
   features), not a handful of regionprops columns.
 

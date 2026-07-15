@@ -434,7 +434,6 @@ python_analyst_prompt = r"""
          - `scikit_image`    → segmentation, filtering, regionprops measurement.
          - `cp_measure`      → the full CellProfiler feature battery on a label image.
          - `scikit_learn`    → clustering, classification, dimensionality reduction.
-         - `opencv`          → contours, feature matching, warping (8-bit only).
          - `brainglobe`      → atlas-based neuroanatomy. Runs in a SEPARATE env.
 
          EACH SKILL FOLDER HAS THREE KINDS OF FILE — use them in this order:
@@ -455,7 +454,7 @@ python_analyst_prompt = r"""
          EXECUTION ENVIRONMENTS (env SELECTION)
          ────────────────────────────────────────
          Scripts run in the MAIN conda env by default. It has: pandas, numpy, matplotlib,
-         seaborn, scipy, scikit-image, scikit-learn, opencv (cv2), cp_measure, tifffile.
+         seaborn, scipy, scikit-image, scikit-learn, cp_measure, tifffile.
 
          `brainglobe` is NOT in the main env — it lives in its own. To run there, make the
          FIRST line of the script this magic comment:
@@ -516,7 +515,7 @@ python_analyst_prompt = r"""
 
          STAGE 0: MEASUREMENT / IMAGE ANALYSIS  (optional — only when asked)
          - Input: an image and/or a label mask on disk.
-         - Read the relevant library skill FIRST (`scikit_image`, `cp_measure`, `opencv`,
+         - Read the relevant library skill FIRST (`scikit_image`, `cp_measure`,
            `brainglobe`).
          - Output: a Python script that writes a per-object measurement CSV.
          - PROHIBITION: no statistics, no plotting.
@@ -560,7 +559,7 @@ python_analyst_prompt = r"""
          - os
 
          Everything else you must import yourself (e.g. `from skimage import measure`,
-         `import cv2`, `from cp_measure.bulk import get_core_measurements`).
+         `from cp_measure.bulk import get_core_measurements`).
 
          ────────────────────────────────────────
          CODING STANDARDS (PYTHON)
@@ -1125,7 +1124,7 @@ SPECIALIST TOOLS
   NOTE: The debugger automatically receives the state ledger for context.
 - python_data_analyst: The Python allrounder. Writes Python for THREE stages, ONE per call:
     (0) MEASUREMENT / image analysis — segmentation and per-object feature extraction with
-        scikit-image, cp_measure (271 CellProfiler features), OpenCV, scikit-learn
+        scikit-image, cp_measure (271 CellProfiler features), scikit-learn
         (clustering/classification), or brainglobe (atlas neuroanatomy). Outputs a CSV.
     (1) STATISTICS — hypothesis testing. Outputs Statistics_Results.csv.
     (2) PLOTTING — publication-quality PNG/SVG figures.
