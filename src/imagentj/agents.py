@@ -140,9 +140,34 @@ class QAHandoff(BaseModel):
     success: bool
 
 
+class PipelineStepRecommendation(BaseModel):
+    """One step of a multi-step pipeline, each routed to the best software backend.
+
+    A pipeline can mix backends freely: e.g. register with a Fiji plugin (imagej_coder),
+    segment with micro_sam in napari (napari) or as a batch script (python_data_analyst),
+    then measure with scikit-image/cp_measure (python_data_analyst).
+    """
+    step_name: str                                  # e.g. "registration", "segmentation", "measurement"
+    recommended_tool: Optional[str] = None          # concrete plugin/package/model, e.g. "TurboReg", "StarDist", "micro_sam (vit_b_lm)", "scikit-image"
+    backend: str = "imagej_coder"                   # executor: "imagej_coder" | "python_data_analyst" | "napari" | "core"
+    env: Optional[str] = None                       # for python_data_analyst steps: the `# imagentj-env` value ("main", "napari-mcp", "brainglobe")
+    skill_folder: Optional[str] = None              # skill docs the executor should read (relative to /app/skills/)
+    reasoning: str = ""                             # why this tool/backend for this step
+
+
 class PluginRecommendation(BaseModel):
-    """Returned by plugin_manager."""
+    """Returned by plugin_manager.
+
+    Two shapes, not mutually exclusive:
+      • Single-tool recommendation — the legacy fields (recommended_plugin, skill_folder,
+        installation_status, ...) describe the ONE best tool for a single-operation task.
+      • Multi-step pipeline — `pipeline_steps` routes each step to its own backend/tool.
+        When populated, the single-tool fields describe the PRIMARY/most-critical step so
+        older consumers still get a sensible pointer.
+    """
     recommended_plugin: Optional[str] = None
+    recommended_backend: str = "imagej_coder"       # backend for the primary recommendation
+    recommended_env: Optional[str] = None           # env for the primary recommendation when backend == python_data_analyst
     is_installed: bool = False
     needs_restart: bool = False
     skill_folder: Optional[str] = None
@@ -150,6 +175,7 @@ class PluginRecommendation(BaseModel):
     relevance_reasoning: str = ""
     alternative_plugins: list[str] = []
     installation_status: str = "not_needed"
+    pipeline_steps: list[PipelineStepRecommendation] = []   # per-step routing for multi-step pipelines; empty for single-tool tasks
     success: bool = True
 
 
@@ -196,7 +222,7 @@ def m(name: str) -> str:
 
 
 llm_supervisor = ChatOpenAI(
-    model=m("openai/gpt-5.2"),
+    model=m("openai/gpt-5.6-terra"),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
@@ -206,7 +232,7 @@ llm_supervisor = ChatOpenAI(
 )
 
 llm_worker = ChatOpenAI(
-    model=m("openai/gpt-5.3-codex"),
+    model=m("openai/gpt-5.6-terra"),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
@@ -216,7 +242,7 @@ llm_worker = ChatOpenAI(
 )
 
 llm_analyst = ChatOpenAI(
-    model=m("openai/gpt-5.2"),
+    model=m("openai/gpt-5.6-terra"),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
@@ -345,7 +371,10 @@ _analyst_agent = create_agent(
     middleware=[
         SkillsMiddleware(
             backend=_python_skills_backend,
-            sources=["/app/skills/python/"],
+            # /app/skills/napari/ is included so the analyst can read the micro_sam skill and
+            # run its automatic-segmentation script (with `# imagentj-env: napari-mcp`). The
+            # napari_general skill also lives there but is routing guidance, not a Python API.
+            sources=["/app/skills/python/", "/app/skills/napari/"],
         ),
         ContextEditingMiddleware(
             edits=[
@@ -398,7 +427,14 @@ _plugin_agent = create_agent(
     middleware=[
         SkillsMiddleware(
             backend=_plugin_skills_backend,
-            sources=["/app/skills/"],  # scans /app/skills/ for SKILL.md files
+            # Three skill families, so the manager can route each pipeline step to the
+            # best backend — a Fiji plugin, a Python package, or a napari plugin:
+            #   /app/skills/         → Fiji/ImageJ plugin skills (*_documentation)  → imagej_coder
+            #   /app/skills/python/  → Python library skills (scikit-image, cp_measure, …) → python_data_analyst
+            #   /app/skills/napari/  → napari plugin skills (micro_sam, napari_general) → napari / python_data_analyst
+            # SkillsMiddleware scans one level deep (<source>/<skill>/SKILL.md), so these
+            # three sources stay cleanly separated and none shadows another.
+            sources=["/app/skills/", "/app/skills/python/", "/app/skills/napari/"],
         ),
     ],
 )

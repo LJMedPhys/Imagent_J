@@ -17,6 +17,13 @@ import tempfile
 # own env because it drags in napari + PyQt6 + vtk + keras, which collide with the
 # main env's PySide6 GUI and force a pillow downgrade.
 #
+# napari-mcp is the isolated env that hosts the in-container napari viewer AND the
+# micro_sam ("Segment Anything for Microscopy") stack (torch + segment-anything +
+# micro_sam). The analyst runs micro_sam batch/automatic segmentation scripts here
+# with `# imagentj-env: napari-mcp`; the SAME env backs the interactive napari
+# widget the supervisor drives via mcp__napari_mcp__execute_code, so a mask made in
+# a script and a mask made interactively come from an identical model.
+#
 # A script selects its env with a first-line magic comment:
 #     # imagentj-env: brainglobe
 # Absent the header, the main env is used.
@@ -24,6 +31,7 @@ import tempfile
 _CONDA_ENVS: dict[str, str] = {
     "main": "/opt/conda/envs/local_imagent_J/bin/python",
     "brainglobe": "/opt/conda/envs/brainglobe/bin/python",
+    "napari-mcp": "/opt/conda/envs/napari-mcp/bin/python",
 }
 _DEFAULT_ENV = "main"
 
