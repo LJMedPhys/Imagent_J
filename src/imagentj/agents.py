@@ -222,7 +222,7 @@ def m(name: str) -> str:
 
 
 llm_supervisor = ChatOpenAI(
-    model=m("openai/gpt-5.6-terra"),
+    model=m("openai/gpt-5.2"),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
@@ -232,7 +232,7 @@ llm_supervisor = ChatOpenAI(
 )
 
 llm_worker = ChatOpenAI(
-    model=m("openai/gpt-5.6-terra"),
+    model=m("openai/gpt-5.3-codex"),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
@@ -242,7 +242,7 @@ llm_worker = ChatOpenAI(
 )
 
 llm_analyst = ChatOpenAI(
-    model=m("openai/gpt-5.6-terra"),
+    model=m("openai/gpt-5.2"),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
