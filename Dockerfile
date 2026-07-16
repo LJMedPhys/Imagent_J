@@ -299,6 +299,20 @@ RUN CONDA_SOLVER=libmamba /opt/conda/bin/conda install -n napari-mcp -c conda-fo
         "import micro_sam, mobile_sam, torch; print('micro_sam', micro_sam.__version__, 'torch', torch.__version__, 'cuda_build', torch.version.cuda)" \
     && /opt/conda/bin/conda clean -afy
 
+# Repair a half-finished Pillow upgrade: the torch/torchvision --force-reinstall above
+# pulls Pillow as a torchvision dependency and can leave a metadata-less
+# `pillow-<ver>.dist-info` ghost (only an sboms/ subdir, no METADATA). huggingface_hub
+# probes Pillow's version on import, so importlib.metadata trips over the ghost with
+# `MetadataNotFound` and takes down the whole `micro_sam.sam_annotator` import chain —
+# at RUNTIME, not build (the top-level `import micro_sam` above doesn't exercise it).
+# Delete any Pillow dist-info without a METADATA file, then assert the annotator (the
+# part that crashed for users) actually imports, so a regression fails the build here.
+RUN for d in /opt/conda/envs/napari-mcp/lib/python3.11/site-packages/[Pp]illow-*.dist-info; do \
+        if [ -e "$d" ] && [ ! -s "$d/METADATA" ]; then echo "removing ghost dist-info: $d"; rm -rf "$d"; fi; \
+    done; \
+    QT_QPA_PLATFORM=offscreen /opt/conda/envs/napari-mcp/bin/python -c \
+        "import micro_sam.sam_annotator; from micro_sam.sam_annotator.training_ui import TrainingWidget; print('micro_sam.sam_annotator import OK')"
+
 # napari/vispy fall back to llvmpipe software GL under headless Xvfb (no GPU).
 ENV LIBGL_ALWAYS_SOFTWARE=1
 
