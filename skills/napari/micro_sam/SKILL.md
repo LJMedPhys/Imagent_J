@@ -89,6 +89,12 @@ annotator_2d(img, model_type="vit_b_lm", viewer=viewer)   # opens the micro_sam 
 The plugin is also in the napari GUI: **Plugins → Segment Anything for Microscopy**. After the user
 finishes, save the committed label layer to a TIFF so the next pipeline step can read it.
 
+**Guiding a human through the UI → read `UI_GUIDE.md`.** It covers the annotator end-to-end for a
+napari beginner: Compute Embeddings first (nothing works before it), click a point → `S` to segment →
+`T` to toggle negative prompts for corrections → `C` to commit each object into `committed_objects`
+(the only permanent layer), `Shift+S` to propagate through a 3D volume, plus shortcuts and embedding
+caching.
+
 ## Model selection
 
 `model_type` = a SAM backbone (`vit_t` < `vit_b` < `vit_l` < `vit_h`, bigger = slower + more accurate)
@@ -131,5 +137,6 @@ finetuned decoder) · `"apg"`. Default picks AIS when a decoder model is availab
 
 | File | What it covers |
 |---|---|
+| `UI_GUIDE.md` | **Operating the interactive napari annotator**, written for someone who has never used napari: window/layer orientation, the micro_sam layers (`point_prompts`, `prompts`, `current_object`, `committed_objects`, `auto_segmentation`), the click→`S`→correct→`C` workflow, positive/negative prompts (`T`), 3D `Shift+S` propagation, tracking, keyboard shortcuts, embedding caching, saving results |
 | `SCRIPT_API.md` | Verified signatures (`get_predictor_and_segmenter`, `automatic_instance_segmentation`, the annotator widgets), the full model-name list, and mode semantics |
 | `WORKFLOW_AUTOMATIC_SEGMENTATION.py` | Batch script (`# imagentj-env: napari-mcp`): folder → per-image label TIFF + object counts CSV, model built once, GPU/CPU auto-select |
