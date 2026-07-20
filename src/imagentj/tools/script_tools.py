@@ -4,6 +4,7 @@ from matplotlib import text
 from langchain.tools import tool
 from imagentj.imagej_context import get_ij
 import os
+import re
 import json
 from .analyst_tools import run_python_code
 import datetime
@@ -526,10 +527,16 @@ def _truncate(s: str, max_bytes: int = 2048) -> str:
 #   2. Macro.abort()       — stops the IJ macro interpreter between statements
 #   3. IJ.setKeyDown(ESC)  — long-running IJ ops poll IJ.escapePressed() and bail
 #
-# Verified on this container (JDK 21.0.10, ImageJ 1.54p): a script parked in
-# sleep/IO/an IJ operation does stop; a pure-CPU `while(true){}` does not, and no
-# hard kill exists — JDK 20 degraded Thread.stop() to always throw
-# UnsupportedOperationException.
+# Interrupting only reaches code that checks the interrupt flag, so on its own it
+# cannot stop a pure-CPU `while(true){}` — and there is no hard kill to fall back
+# on, JDK 20 having degraded Thread.stop() to always throw
+# UnsupportedOperationException. That gap is closed by compiling every script with
+# @ThreadInterrupt (see _INTERRUPTIBLE_PREFIX), which injects the missing checks.
+#
+# Verified on this container (JDK 21.0.10, ImageJ 1.54p): sleep/IO/IJ operations
+# and runaway CPU loops all stop. What remains uninterruptible is a blocking call
+# *inside a Java library* that ignores interrupts — the transform instruments the
+# Groovy code, not the plugin it calls into.
 #
 # Crucially we do not have to guess which happened. Future.isDone() returns true
 # the moment cancel() is called even when the thread keeps running, so instead we
@@ -537,6 +544,35 @@ def _truncate(s: str, max_bytes: int = 2048) -> str:
 
 _ESC_KEYCODE = 27           # java.awt.event.KeyEvent.VK_ESCAPE
 _ABORT_GRACE_SECONDS = 5.0  # how long we wait for an abort to actually land
+
+# Groovy's @ThreadInterrupt AST transform injects a
+# Thread.currentThread().isInterrupted() check into every loop iteration and
+# method entry. That is what makes a pure-CPU `while(true){x++}` killable at all:
+# Future.cancel(true) sets the interrupt flag, but code that never blocks would
+# otherwise never look at it.
+#
+# Applied by annotating an import — the documented way to attach a script-level
+# AST transform — and deliberately kept to ONE line, because it shifts every
+# reported error line number by exactly that much (see _fix_line_numbers).
+#
+# Verified on this container: the spin loop dies, and SciJava `#@` parameter
+# injection still resolves behind this line.
+_INTERRUPTIBLE_PREFIX = "@groovy.transform.ThreadInterrupt import groovy.transform.Field\n"
+_PREFIX_LINES = 1
+
+_SCRIPT_LINE_RE = re.compile(r"(script\.groovy:)(\d+)")
+
+
+def _fix_line_numbers(text: str) -> str:
+    """
+    Undo the line shift the @ThreadInterrupt prefix introduces.
+
+    The debugger agent navigates by these numbers, so an uncorrected off-by-one
+    would point it at the wrong line of every failing Groovy script.
+    """
+    return _SCRIPT_LINE_RE.sub(
+        lambda m: f"{m.group(1)}{max(int(m.group(2)) - _PREFIX_LINES, 1)}", text
+    )
 # Backstop for an unwatched run; see the note in analyst_tools for why it is generous.
 _HARD_TIMEOUT_SECONDS = int(os.environ.get("IMAGENTJ_SCRIPT_HARD_TIMEOUT", "7200"))
 
@@ -603,7 +639,9 @@ class _GroovyRunner:
         # Threads already running Groovy (e.g. an earlier detached runaway) must
         # not be mistaken for this run's thread.
         self._baseline = _groovy_thread_ids()
-        self._future = self._ij.script().run("script.groovy", self._script, True)
+        self._future = self._ij.script().run(
+            "script.groovy", _INTERRUPTIBLE_PREFIX + self._script, True
+        )
         return self
 
     def track_thread(self) -> None:
@@ -754,11 +792,13 @@ def _stopped_report(handle, out_stream, ij_log_before, monitor, detached: bool) 
     ]
     if detached:
         parts.append(
-            "IMPORTANT: Groovy runs inside the shared Fiji JVM and cannot be force-killed "
-            "(JDK 21 removed Thread.stop). ImageJ was sent an abort (Macro.abort + ESC + "
-            "thread interrupt) but the script ignored it, so it MAY STILL BE RUNNING in the "
-            "background and could keep writing output or opening windows. Warn the user, and "
-            "if it must be stopped for certain, the Fiji JVM has to be restarted."
+            "IMPORTANT: the abort (Future.cancel + Macro.abort + ESC) did not land. Groovy "
+            "runs inside the shared Fiji JVM and cannot be force-killed (JDK 21 removed "
+            "Thread.stop), so this script MAY STILL BE RUNNING in the background and could "
+            "keep writing output or opening windows. Scripts are compiled with "
+            "@ThreadInterrupt, so a runaway Groovy loop would have stopped — reaching this "
+            "state means it is most likely blocked inside a Java plugin call that ignores "
+            "interrupts. Warn the user; to stop it for certain, Fiji has to be restarted."
         )
     parts.append(f"PARTIAL_STDOUT:\n{partial}" if partial.strip() else "PARTIAL_STDOUT: (none)")
     parts.append(f"PARTIAL_IJ_LOG:\n{ij_log}" if ij_log.strip() else "PARTIAL_IJ_LOG: (none)")
@@ -769,7 +809,14 @@ def run_groovy_script(script: str, ij, purpose: str = "") -> str:
     """
     Execute a Groovy script in ImageJ/Fiji, capturing all output channels
     and classifying windows into errors vs. results vs. info.
+
+    Thin wrapper over _run_groovy_script so the @ThreadInterrupt prefix's line
+    shift is corrected at exactly one place, on every return path.
     """
+    return _fix_line_numbers(_run_groovy_script(script, ij, purpose))
+
+
+def _run_groovy_script(script: str, ij, purpose: str = "") -> str:
     System                = jpype.JClass("java.lang.System")
     ByteArrayOutputStream = jpype.JClass("java.io.ByteArrayOutputStream")
     PrintStream           = jpype.JClass("java.io.PrintStream")
