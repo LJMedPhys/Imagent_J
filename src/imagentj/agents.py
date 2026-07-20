@@ -113,7 +113,7 @@ class AnalystHandoff(BaseModel):
     """Returned by python_data_analyst."""
     script_path: str
     description: str
-    stage: str = "unknown"              # "statistics" | "plotting"
+    stage: str = "unknown"              # "measurement" | "statistics" | "plotting"
     inputs: list[str] = []
     outputs: list[str] = []
     stats_csv_path: Optional[str] = None  # Stage 1 only
@@ -140,9 +140,34 @@ class QAHandoff(BaseModel):
     success: bool
 
 
+class PipelineStepRecommendation(BaseModel):
+    """One step of a multi-step pipeline, each routed to the best software backend.
+
+    A pipeline can mix backends freely: e.g. register with a Fiji plugin (imagej_coder),
+    segment with micro_sam in napari (napari) or as a batch script (python_data_analyst),
+    then measure with scikit-image/cp_measure (python_data_analyst).
+    """
+    step_name: str                                  # e.g. "registration", "segmentation", "measurement"
+    recommended_tool: Optional[str] = None          # concrete plugin/package/model, e.g. "TurboReg", "StarDist", "micro_sam (vit_b_lm)", "scikit-image"
+    backend: str = "imagej_coder"                   # executor: "imagej_coder" | "python_data_analyst" | "napari" | "core"
+    env: Optional[str] = None                       # for python_data_analyst steps: the `# imagentj-env` value ("main", "napari-mcp", "brainglobe")
+    skill_folder: Optional[str] = None              # skill docs the executor should read (relative to /app/skills/)
+    reasoning: str = ""                             # why this tool/backend for this step
+
+
 class PluginRecommendation(BaseModel):
-    """Returned by plugin_manager."""
+    """Returned by plugin_manager.
+
+    Two shapes, not mutually exclusive:
+      • Single-tool recommendation — the legacy fields (recommended_plugin, skill_folder,
+        installation_status, ...) describe the ONE best tool for a single-operation task.
+      • Multi-step pipeline — `pipeline_steps` routes each step to its own backend/tool.
+        When populated, the single-tool fields describe the PRIMARY/most-critical step so
+        older consumers still get a sensible pointer.
+    """
     recommended_plugin: Optional[str] = None
+    recommended_backend: str = "imagej_coder"       # backend for the primary recommendation
+    recommended_env: Optional[str] = None           # env for the primary recommendation when backend == python_data_analyst
     is_installed: bool = False
     needs_restart: bool = False
     skill_folder: Optional[str] = None
@@ -150,6 +175,7 @@ class PluginRecommendation(BaseModel):
     relevance_reasoning: str = ""
     alternative_plugins: list[str] = []
     installation_status: str = "not_needed"
+    pipeline_steps: list[PipelineStepRecommendation] = []   # per-step routing for multi-step pipelines; empty for single-tool tasks
     success: bool = True
 
 
@@ -196,7 +222,7 @@ def m(name: str) -> str:
 
 
 llm_supervisor = ChatOpenAI(
-    model=m("openai/gpt-5.2"),
+    model=m("openai/gpt-5.4"),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
@@ -216,11 +242,11 @@ llm_worker = ChatOpenAI(
 )
 
 llm_analyst = ChatOpenAI(
-    model=m("openai/gpt-5.2"),
+    model=m("openai/gpt-5.3-codex"),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
-    reasoning_effort="none",
+    reasoning_effort="low",
     verbose=True,
     callbacks=[shared_tracker],
 )
@@ -305,6 +331,16 @@ def _make_coder_agent(model, name, system_prompt):
     )
 
 
+# Python skills backend — scoped to /app/skills/python/ so the analyst sees only the
+# Python library + standards skills, not the ~26 Groovy/Fiji plugin doc skills.
+# SkillsMiddleware's scan is one level deep (it looks for <source>/<skill>/SKILL.md),
+# so /app/skills/python/ is invisible to the plugin_manager's /app/skills/ scan and
+# vice versa — the two skill sets stay cleanly separated.
+_python_skills_backend = FilesystemBackend(
+    root_dir="/app/",
+    virtual_mode=False,
+)
+
 _analyst_agent = create_agent(
     # Codex model (gpt-5.3-codex) — same one the coder/debugger run on. The analyst
     # was previously on gpt-5.2, where an A/B test showed edit_script tripled the tool-loop
@@ -324,11 +360,22 @@ _analyst_agent = create_agent(
         load_script,
         get_script_history,
         recall,
+        # SkillsMiddleware lists skill metadata and tells the agent to read the full
+        # SKILL.md on demand; it ships no reader of its own, so these two supply it.
+        smart_file_reader,
+        inspect_folder_tree,
     ],
     system_prompt=python_analyst_prompt,
     response_format=ToolStrategy(schema=AnalystHandoff, handle_errors=True),
     name="python_data_analyst",
     middleware=[
+        SkillsMiddleware(
+            backend=_python_skills_backend,
+            # /app/skills/napari/ is included so the analyst can read the micro_sam skill and
+            # run its automatic-segmentation script (with `# imagentj-env: napari-mcp`). The
+            # napari_general skill also lives there but is routing guidance, not a Python API.
+            sources=["/app/skills/python/", "/app/skills/napari/"],
+        ),
         ContextEditingMiddleware(
             edits=[
                 ClearToolUsesEdit(
@@ -380,7 +427,14 @@ _plugin_agent = create_agent(
     middleware=[
         SkillsMiddleware(
             backend=_plugin_skills_backend,
-            sources=["/app/skills/"],  # scans /app/skills/ for SKILL.md files
+            # Three skill families, so the manager can route each pipeline step to the
+            # best backend — a Fiji plugin, a Python package, or a napari plugin:
+            #   /app/skills/         → Fiji/ImageJ plugin skills (*_documentation)  → imagej_coder
+            #   /app/skills/python/  → Python library skills (scikit-image, cp_measure, …) → python_data_analyst
+            #   /app/skills/napari/  → napari plugin skills (micro_sam, napari_general) → napari / python_data_analyst
+            # SkillsMiddleware scans one level deep (<source>/<skill>/SKILL.md), so these
+            # three sources stay cleanly separated and none shadows another.
+            sources=["/app/skills/", "/app/skills/python/", "/app/skills/napari/"],
         ),
     ],
 )
@@ -626,24 +680,30 @@ def imagej_debugger(script_path: str, error_message: str, project_root: str = ""
 
 
 @tool
-def python_data_analyst(task: str, input_csv: str, output_dir: str, project_root: str) -> AnalystHandoff:
+def python_data_analyst(task: str, input_path: str, output_dir: str, project_root: str) -> AnalystHandoff:
     """
-    Run statistical analysis or generate publication-quality plots from ImageJ CSV data.
+    The Python allrounder: measure images, run statistics, or generate publication figures.
 
-    Call TWICE — once per stage, never combined:
-      Stage 1 (statistics): task describes hypothesis testing. Returns stats_csv_path.
-      Stage 2 (plotting):   task describes plot types. Call only after Stage 1 CSV exists.
+    Call ONCE PER STAGE, never combined:
+      Stage 0 (measurement): task describes segmentation / feature extraction from an image
+                             or label mask (scikit-image, cp_measure, scikit-learn,
+                             brainglobe). Outputs a per-object CSV.
+      Stage 1 (statistics):  task describes hypothesis testing. Returns stats_csv_path.
+      Stage 2 (plotting):    task describes plot types. Call only after Stage 1 CSV exists.
 
     Args:
-        task:         What to do — describe the hypothesis, groups to compare, or plot types.
-        input_csv:    Absolute path to the CSV file to analyze (raw measurements or Statistics_Results.csv).
+        task:         What to do — the measurement to extract, the hypothesis and groups to
+                      compare, or the plot types.
+        input_path:   Absolute path to the input for THIS stage: an image or label mask for
+                      Stage 0, a raw measurement CSV for Stage 1, Statistics_Results.csv for
+                      Stage 2.
         output_dir:   Absolute path to the directory where scripts and outputs should be saved.
-        project_root: Absolute path to the project folder. 
+        project_root: Absolute path to the project folder.
 
     Returns an AnalystHandoff with script_path, outputs, stats_csv_path or figure_paths.
     """
     sections = [
-        f"INPUT CSV: {input_csv}",
+        f"INPUT PATH: {input_path}",
         f"OUTPUT DIR: {output_dir}",
     ]
     # Inject ledger so the analyst knows the scientific goal (for axis labels),

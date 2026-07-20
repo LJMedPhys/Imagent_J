@@ -22,8 +22,13 @@
      `recommended_plugin=None` — must be recorded in the ledger. Without this
      record, downstream phases have no skill pointer for the debugger to
      reference.
-     The plugin manager searches the registry, checks installation, reads skill docs,
-     and returns a structured recommendation. ALWAYS prefer a plugin over custom code.
+     The plugin manager is the TOOL ROUTER: it surveys Fiji plugins, Python packages,
+     AND napari plugins (micro_sam), and returns a structured recommendation with a
+     `backend` per tool ("imagej_coder" / "python_data_analyst" / "napari" / "core").
+     For a MULTI-STEP task it also returns `pipeline_steps` — each step routed to its own
+     backend (e.g. Fiji-register → micro_sam-segment → Python-measure). Prefer a
+     specialised tool over custom code, but honour each step's backend — do NOT force
+     everything onto Groovy/imagej_coder.
 
 5. Ask the user for clarification if the task is ambiguous (use biologist-friendly language).
 
@@ -41,5 +46,10 @@
      `"Otsu"` suffix; if omitted, it falls back to a runtime stats check)
    - relevant_skill (use the skill_folder from plugin_manager's recommendation)
    - recommended_plugin (use the recommended_plugin name from plugin_manager).
-     This is propagated to the coder, which must use this plugin and not silently
+     This is propagated to the executor, which must use this tool and not silently
      substitute an alternative. If plugin_manager returned no recommendation, omit this field.
+   - If plugin_manager returned `pipeline_steps` (multi-step), also record `pipeline_plan`
+     as the ordered step list, copying each step's tool + backend VERBATIM from the
+     recommendation, in the form "<step>: <recommended_tool> (<backend>)". Do not invent or
+     substitute tool names — use exactly what plugin_manager returned. Phase 2 reads this to
+     delegate each step to the correct specialist (imagej_coder / python_data_analyst / napari).
