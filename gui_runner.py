@@ -29,6 +29,8 @@ from imagentj.imagej_context import get_ij
 from imagentj.chat_history import ChatHistoryManager
 from imagentj.tools.analyst_tools import kill_running_processes
 import imagentj.stop_signal as stop_signal
+from imagentj import run_control
+from imagentj import watchdog
 
 from imagentj.benchmark_gui_hooks import is_benchmark_mode, setup_benchmark_gui
 
@@ -730,6 +732,11 @@ class AgentWorker(QObject):
     event_received = Signal(dict)
     finished = Signal()
     error = Signal(str)
+    # (scripts signalled, scripts that ignored the stop) — lets the UI tell the
+    # user the truth when a Groovy script cannot actually be killed.
+    stop_report = Signal(int, int)
+    # Watchdog verdicts, surfaced in the chat rather than buried in the log.
+    watchdog_notice = Signal(str)
 
     def __init__(self, supervisor, thread_id: str, tracker_callback):
         super().__init__()
@@ -780,10 +787,19 @@ class AgentWorker(QObject):
     def request_stop(self):
         self._stop_requested = True
         stop_signal.request_stop()
-        # Kill any running subprocesses immediately (Python scripts, etc.)
-        killed = kill_running_processes()
-        if killed:
-            log.info(f"Stop: killed {killed} running subprocess(es)")
+
+        # Terminate whatever code is executing right now. Python subprocesses die
+        # outright (whole process group); an in-JVM Groovy script can only be asked
+        # to abort, so report back which ones actually stopped rather than assuming.
+        handles = run_control.terminate_all("Stopped by user", by="user")
+        if not handles:
+            return
+        stubborn = [h for h in handles if h.terminate_succeeded is False]
+        log.info(
+            f"Stop: signalled {len(handles)} running script(s), "
+            f"{len(stubborn)} did not stop"
+        )
+        self.stop_report.emit(len(handles), len(stubborn))
 
 
 # ---------------------------------------------------------------------------
@@ -967,6 +983,11 @@ class ImageJAgentGUI(QWidget):
         self.worker.event_received.connect(self.handle_event)
         self.worker.finished.connect(self.on_agent_finished)
         self.worker.error.connect(self.on_agent_error)
+        self.worker.stop_report.connect(self.on_stop_report)
+        self.worker.watchdog_notice.connect(self.on_watchdog_notice)
+        # The watchdog fires from its own thread; hop onto the GUI thread via the
+        # worker's signal rather than touching widgets directly.
+        watchdog.set_notifier(self.worker.watchdog_notice.emit)
         self.thread.start()
 
         self._current_status_bubble = None
@@ -1184,6 +1205,25 @@ class ImageJAgentGUI(QWidget):
             self.chat_scroll.add_message('system', "Stopping agent...")
             self.worker.request_stop()
             self.set_status("Stopping...")
+
+    def on_stop_report(self, signalled: int, stubborn: int):
+        """Say what the Stop button actually achieved — not what we wish it had."""
+        if stubborn:
+            self.chat_scroll.add_message(
+                'system',
+                f"Stop sent to {signalled} running script(s), but {stubborn} did not "
+                f"respond. Groovy runs inside the shared Fiji JVM and cannot be "
+                f"force-killed, so it may still be running in the background. "
+                f"Restart Fiji if it must be stopped for certain."
+            )
+        else:
+            self.chat_scroll.add_message(
+                'system', f"Terminated {signalled} running script(s)."
+            )
+
+    def on_watchdog_notice(self, message: str):
+        self.chat_scroll.add_message('system', message)
+        self.set_status("Watchdog intervened")
 
     def on_agent_finished(self):
         log.debug("on_agent_finished called")

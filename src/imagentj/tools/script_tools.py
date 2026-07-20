@@ -10,10 +10,14 @@ import datetime
 import shutil
 from typing import Optional, Any
 from filelock import FileLock
+import logging
 import threading
 import time
 from scyjava import jimport
+from imagentj import run_control, stop_signal
 from .utils import add_line_numbers, strip_line_numbers
+
+log = logging.getLogger(__name__)
 
 # ── Window classification ─────────────────────────────────────────────────
 
@@ -505,7 +509,263 @@ def _truncate(s: str, max_bytes: int = 2048) -> str:
     return f"{head}\n...[truncated {remaining_lines} more lines]"
 
 
-def run_groovy_script(script: str, ij) -> str:
+# ── Groovy interruption ───────────────────────────────────────────────────
+#
+# Groovy runs in the shared Fiji JVM, which is what lets a script leave its images
+# on screen for the user. Stopping one is subtle, and the obvious approach is
+# wrong in a way that silently lies:
+#
+# ij.py.run_script() is `script().run(...).get()` — the script executes on a
+# SciJava pool thread and the caller merely blocks on Future.get(). Interrupting
+# the *calling* thread therefore only stops us waiting; the script runs happily on.
+# We submit the Future ourselves so we can act on the thread that is really doing
+# the work.
+#
+# Abort is then three escalating signals:
+#   1. Future.cancel(true) — interrupts the SciJava thread executing the script
+#   2. Macro.abort()       — stops the IJ macro interpreter between statements
+#   3. IJ.setKeyDown(ESC)  — long-running IJ ops poll IJ.escapePressed() and bail
+#
+# Verified on this container (JDK 21.0.10, ImageJ 1.54p): a script parked in
+# sleep/IO/an IJ operation does stop; a pure-CPU `while(true){}` does not, and no
+# hard kill exists — JDK 20 degraded Thread.stop() to always throw
+# UnsupportedOperationException.
+#
+# Crucially we do not have to guess which happened. Future.isDone() returns true
+# the moment cancel() is called even when the thread keeps running, so instead we
+# inspect JVM thread stacks for Groovy frames and report what is actually true.
+
+_ESC_KEYCODE = 27           # java.awt.event.KeyEvent.VK_ESCAPE
+_ABORT_GRACE_SECONDS = 5.0  # how long we wait for an abort to actually land
+# Backstop for an unwatched run; see the note in analyst_tools for why it is generous.
+_HARD_TIMEOUT_SECONDS = int(os.environ.get("IMAGENTJ_SCRIPT_HARD_TIMEOUT", "7200"))
+
+
+def _signal_imagej_abort() -> None:
+    """Fire ImageJ's cooperative abort paths. Never raises."""
+    try:
+        jimport("ij.Macro").abort()
+    except Exception:
+        pass
+    try:
+        jimport("ij.IJ").setKeyDown(_ESC_KEYCODE)
+    except Exception:
+        pass
+
+
+def _reset_imagej_escape() -> None:
+    """
+    Clear a latched ESC. Must run before every script: IJ.escapePressed() is
+    global JVM state, so an ESC left set by a previous abort would make the next
+    script bail out instantly for no visible reason.
+    """
+    try:
+        jimport("ij.IJ").resetEscape()
+    except Exception:
+        pass
+
+
+def _groovy_thread_ids() -> set[int]:
+    """
+    IDs of JVM threads currently executing a Groovy script.
+
+    This is our ground truth for "is it actually still running" — the Future
+    cannot tell us, since cancel() marks it done regardless.
+    """
+    ids: set[int] = set()
+    try:
+        JThread = jimport("java.lang.Thread")
+        for entry in JThread.getAllStackTraces().entrySet():
+            frames = " ".join(str(f.getClassName()) for f in entry.getValue())
+            if "groovy" in frames.lower():
+                ids.add(int(entry.getKey().getId()))
+    except Exception:
+        pass
+    return ids
+
+
+class _GroovyRunner:
+    """
+    Submits a Groovy script and keeps hold of the Future and the thread running it.
+
+    Unlike ij.py.run_script this never blocks the caller, so the run stays
+    observable and the UI can be handed back the instant a stop is requested.
+    """
+
+    def __init__(self, ij, script: str):
+        self._ij = ij
+        self._script = script
+        self._future = None
+        self._baseline: set[int] = set()
+        self._script_tid: int | None = None
+
+    def start(self) -> "_GroovyRunner":
+        # Threads already running Groovy (e.g. an earlier detached runaway) must
+        # not be mistaken for this run's thread.
+        self._baseline = _groovy_thread_ids()
+        self._future = self._ij.script().run("script.groovy", self._script, True)
+        return self
+
+    def track_thread(self) -> None:
+        """Latch onto this run's SciJava thread. Cheap no-op once found."""
+        if self._script_tid is not None:
+            return
+        new = _groovy_thread_ids() - self._baseline
+        if new:
+            self._script_tid = next(iter(new))
+
+    def script_thread_running(self) -> bool:
+        """
+        Is this run's thread still executing Groovy?
+
+        If we never managed to latch onto the thread we fall back to "is any
+        Groovy thread running that was not already running when we started" —
+        failing to identify the thread must never be reported as a clean stop.
+        """
+        self.track_thread()
+        if self._script_tid is None:
+            return bool(_groovy_thread_ids() - self._baseline)
+        return self._script_tid in _groovy_thread_ids()
+
+    @property
+    def done(self) -> bool:
+        try:
+            return bool(self._future.isDone())
+        except Exception:
+            return True
+
+    def cancel(self) -> None:
+        try:
+            self._future.cancel(True)   # mayInterruptIfRunning
+        except Exception:
+            pass
+        _signal_imagej_abort()
+
+    def result(self):
+        """Return the script's result, re-raising the script's own error if it threw."""
+        try:
+            return self._future.get()
+        except Exception as exc:
+            # Future.get wraps script failures in ExecutionException; unwrap so the
+            # debugger sees the real Groovy error rather than the wrapper.
+            cause = getattr(exc, "getCause", None)
+            if cause is not None:
+                try:
+                    inner = cause()
+                    if inner is not None:
+                        raise RuntimeError(str(inner.toString())) from exc
+                except RuntimeError:
+                    raise
+                except Exception:
+                    pass
+            raise
+
+
+def _abort_groovy(runner: "_GroovyRunner") -> bool:
+    """
+    Stop a Groovy run. Returns True only when the script thread has verifiably
+    stopped executing — never on the mere fact that we asked it to.
+    """
+    runner.cancel()
+    deadline = time.monotonic() + _ABORT_GRACE_SECONDS
+    while time.monotonic() < deadline:
+        if not runner.script_thread_running():
+            return True
+        time.sleep(0.2)
+
+    log.warning(
+        "Groovy script ignored abort (Future.cancel + Macro.abort + ESC) after %.0fs; "
+        "detaching — its SciJava thread keeps running until it returns on its own.",
+        _ABORT_GRACE_SECONDS,
+    )
+    return False
+
+
+def _await_groovy(runner: "_GroovyRunner", handle: "run_control.RunHandle") -> bool:
+    """
+    Wait for the script, honouring stop requests. Returns True if we detached from
+    a script that refused to stop.
+    """
+    deadline = time.monotonic() + _HARD_TIMEOUT_SECONDS
+    while True:
+        runner.track_thread()
+        if runner.done and not handle.terminated:
+            return False
+        # The Stop button trips the global signal; the watchdog flips the handle
+        # from its own thread. Both mean stop waiting on this script.
+        if stop_signal.is_set() and not handle.terminated:
+            handle.terminate("Stopped by user", by="user")
+        # Backstop for when the watchdog is disabled — matches the Python path,
+        # which bounds its wait via proc.wait(timeout=...).
+        elif time.monotonic() > deadline and not handle.terminated:
+            handle.terminate(
+                f"Exceeded the hard {_HARD_TIMEOUT_SECONDS}s execution limit",
+                by="watchdog",
+            )
+        if handle.terminated:
+            # terminate() flips the status before the abort has actually been
+            # attempted, so wait for the verdict rather than racing it to None.
+            handle.wait_termination_settled(_ABORT_GRACE_SECONDS + 3.0)
+            return handle.terminate_succeeded is False
+        time.sleep(0.1)
+
+
+def _stopped_report(handle, out_stream, ij_log_before, monitor, detached: bool) -> str:
+    """
+    Report for a run that was stopped, whether it aborted cleanly or had to be
+    abandoned. Deliberately not shaped like a crash: the supervisor must not hand
+    this to the debugger as a bug to repair.
+    """
+    monitor.stop()
+    try:
+        partial = str(out_stream.toString())[-1500:]
+    except Exception:
+        partial = ""
+    try:
+        ij_log = get_new_ij_log_entries(ij_log_before)[-800:]
+    except Exception:
+        ij_log = ""
+
+    by_user = handle.killed_by == "user"
+    headline = (
+        "EXECUTION STOPPED BY USER" if by_user
+        else "EXECUTION TERMINATED BY WATCHDOG"
+    )
+    guidance = (
+        "The user pressed Stop — this is NOT a bug to fix. Do not retry or debug it; "
+        "wait for the user's next instruction."
+        if by_user else
+        f"Reason: {handle.kill_reason}\n"
+        "The script was killed while running because it appeared stuck or misbehaving. "
+        "This is not a normal crash — review the reason and partial output, then decide "
+        "whether to fix the script, change approach, or ask the user."
+    )
+
+    tail = (
+        "Groovy script ignored the abort and was detached"
+        if detached else
+        "Groovy script aborted on request"
+    )
+    parts = [
+        f"SUMMARY: {headline} — {tail}",
+        f"STATUS: {'STOPPED' if by_user else 'TERMINATED'}",
+        "LANGUAGE: Groovy",
+        guidance,
+    ]
+    if detached:
+        parts.append(
+            "IMPORTANT: Groovy runs inside the shared Fiji JVM and cannot be force-killed "
+            "(JDK 21 removed Thread.stop). ImageJ was sent an abort (Macro.abort + ESC + "
+            "thread interrupt) but the script ignored it, so it MAY STILL BE RUNNING in the "
+            "background and could keep writing output or opening windows. Warn the user, and "
+            "if it must be stopped for certain, the Fiji JVM has to be restarted."
+        )
+    parts.append(f"PARTIAL_STDOUT:\n{partial}" if partial.strip() else "PARTIAL_STDOUT: (none)")
+    parts.append(f"PARTIAL_IJ_LOG:\n{ij_log}" if ij_log.strip() else "PARTIAL_IJ_LOG: (none)")
+    return "\n".join(parts)
+
+
+def run_groovy_script(script: str, ij, purpose: str = "") -> str:
     """
     Execute a Groovy script in ImageJ/Fiji, capturing all output channels
     and classifying windows into errors vs. results vs. info.
@@ -527,8 +787,42 @@ def run_groovy_script(script: str, ij) -> str:
 
     monitor = _WindowMonitor(windows_before).start()
 
+    _reset_imagej_escape()
+    runner = _GroovyRunner(script=script, ij=ij).start()
+
+    # The redirected System.out buffer is readable while the script runs, so the
+    # watchdog gets live progress here exactly as it does from the Python pipes.
+    # IJ.log output is folded in too — plenty of Groovy scripts report progress
+    # only through IJ.log, and silence is how we decide a run is stuck.
+    def _live_output() -> str:
+        try:
+            text = str(out_stream.toString()) + str(err_stream.toString())
+        except Exception:
+            text = ""
+        try:
+            text += get_new_ij_log_entries(ij_log_before)
+        except Exception:
+            pass
+        return text
+
+    handle = run_control.register(run_control.RunHandle(
+        language="groovy",
+        code=script,
+        purpose=purpose,
+        terminator=lambda reason, r=runner: _abort_groovy(r),
+        output_provider=_live_output,
+    ))
+
     try:
-        result = ij.py.run_script("Groovy", script)
+        detached = _await_groovy(runner, handle)
+
+        # Stopped runs report as stopped whether or not the abort landed — a
+        # script that aborted cleanly must not come back looking like a normal
+        # SUCCESS/ERROR result the agent would then act on.
+        if handle.terminated:
+            return _stopped_report(handle, out_stream, ij_log_before, monitor, detached)
+
+        result = runner.result()
         stdout = str(out_stream.toString())
         stderr = str(err_stream.toString())
 
@@ -633,8 +927,12 @@ def run_groovy_script(script: str, ij) -> str:
     finally:
         System.setOut(original_out)
         System.setErr(original_err)
+        handle.mark_finished()
+        run_control.unregister(handle)
+        # Clear any ESC we latched, so the next script does not inherit an abort.
+        _reset_imagej_escape()
 
-def run_script_safe(language: str, code: str, max_retries: int = 3) -> str:
+def run_script_safe(language: str, code: str, max_retries: int = 3, purpose: str = "") -> str:
     """
     Unified safe execution tool for the supervisor.
 
@@ -683,11 +981,17 @@ def run_script_safe(language: str, code: str, max_retries: int = 3) -> str:
 
     # Run the script
     try:
-        output = exec_tool(code, ij)
+        output = exec_tool(code, ij, purpose)
     except Exception as e:
         output = f"Exception during execution: {e}"
 
     last_output = output
+
+    # A deliberate stop is not a failed run — return it untouched so the
+    # zero-object heuristic below cannot relabel it as an ERROR to be debugged.
+    if last_output.lstrip().startswith(("SUMMARY: EXECUTION STOPPED",
+                                        "SUMMARY: EXECUTION TERMINATED")):
+        return last_output
 
     # Snapshot new windows
     windows_after = set(WindowManager.getImageTitles())
@@ -994,13 +1298,17 @@ def execute_script(directory: str, filename: str) -> str:
     with open(full_path, 'r', encoding='utf-8') as f:
         code_content = f.read()
 
+    # The registered description is what the script is *supposed* to do — the
+    # watchdog needs it to tell "slow but on track" from "doing the wrong thing".
+    purpose = _existing_description(directory, filename) or filename
+
     # Route based on extension
     if filename.endswith('.py'):
         # Calls your existing run_python_code function
-        output = run_python_code(code_content, directory)
+        output = run_python_code(code_content, directory, purpose=purpose)
     elif filename.endswith('.groovy'):
         # Calls your existing run_script_safe function
-        output = run_script_safe(language="groovy", code=code_content)
+        output = run_script_safe(language="groovy", code=code_content, purpose=purpose)
     else:
         return f"Error: File extension of {filename} is not supported for execution."
 
