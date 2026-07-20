@@ -11,6 +11,8 @@ Design principles:
   - Human-readable JSON (for debugging and QA)
 """
 
+from __future__ import annotations
+
 import json
 import os
 import tempfile
@@ -96,6 +98,23 @@ def _format_ledger(ledger: dict) -> str:
     if meta:
         parts = [f"{k}={v}" for k, v in meta.items()]
         lines.append(f"IMAGE METADATA: {', '.join(parts)}")
+
+    # Visual observations complement file metadata but never replace it.  Keep
+    # the handoff compact so all downstream specialists can use it safely.
+    visual = ledger.get("vlm_assessments", [])
+    if visual:
+        lines.append("VLM VISUAL ASSESSMENTS (advisory; confirm quantitatively):")
+        for assessment in visual:
+            stage = assessment.get("pipeline_step", "unknown")
+            verdict = assessment.get("overall_verdict", "INFO")
+            summary = assessment.get("summary", "")
+            lines.append(f"  [{stage}/{verdict}] {summary}")
+            issues = assessment.get("issues_found", [])
+            if issues:
+                lines.append(f"    issues: {'; '.join(str(i) for i in issues)}")
+            action = assessment.get("recommended_action", "")
+            if action:
+                lines.append(f"    recommendation: {action}")
 
     # Channels — the supervisor must be able to recall channel order and
     # marker names verbatim (e.g. channel 1 = DAPI, channel 2 = phalloidin)
@@ -294,6 +313,7 @@ def set_ledger_metadata(
     relevant_skill: Optional[str] = None,
     recommended_plugin: Optional[str] = None,
     rag_reference: Optional[dict] = None,
+    vlm_assessment: Optional[dict] = None,
 ) -> str:
     """
     Set or update high-level project metadata in the state ledger.
@@ -359,6 +379,10 @@ def set_ledger_metadata(
                          and a one-line finding (for quick reference). One reference per call.
                          Example: {"query": "otsu thresholding fiji", "step": "thresholding",
                                    "finding": "Use 'dark' flag for bright objects. 16-bit needs conversion to 8-bit."}
+        vlm_assessment:  Compact structured handoff from vlm_judge. Store at least
+                         pipeline_step, overall_verdict, summary, and issues_found.
+                         Visual observations are advisory and complement, never replace,
+                         numeric metadata or user verification.
 
     Returns:
         A one-line confirmation listing the fields that changed. Call
@@ -422,6 +446,26 @@ def set_ledger_metadata(
                 "finding": rag_reference.get("finding", ""),
             })
 
+    if vlm_assessment is not None:
+        ledger.setdefault("vlm_assessments", [])
+        compact = {
+            "pipeline_step": vlm_assessment.get("pipeline_step", "unknown"),
+            "overall_verdict": vlm_assessment.get("overall_verdict", "INFO"),
+            "summary": vlm_assessment.get("summary", ""),
+            "issues_found": list(vlm_assessment.get("issues_found") or []),
+            "recommended_action": vlm_assessment.get("recommended_action", ""),
+            "image_paths_inspected": list(vlm_assessment.get("image_paths_inspected") or []),
+            "success": bool(vlm_assessment.get("success", True)),
+        }
+        # Replace a prior assessment for the same checkpoint so retries after a
+        # segmentation fix do not leave a stale FAIL beside the current result.
+        stage = compact["pipeline_step"]
+        ledger["vlm_assessments"] = [
+            item for item in ledger["vlm_assessments"]
+            if item.get("pipeline_step") != stage
+        ]
+        ledger["vlm_assessments"].append(compact)
+
     _save_ledger(project_root, ledger)
 
     # Compact acknowledgement instead of the full ledger (see update_state_ledger).
@@ -438,6 +482,7 @@ def set_ledger_metadata(
             ("relevant_skill", relevant_skill),
             ("recommended_plugin", recommended_plugin),
             ("rag_reference", rag_reference),
+            ("vlm_assessment", vlm_assessment),
         ) if val is not None
     ]
     return (

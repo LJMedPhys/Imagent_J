@@ -303,13 +303,13 @@ class SubagentHeartbeatTimer:
             "Data Scientist is adding publication-quality plot settings…",
             "Data Scientist is saving the script…",
         ],
-        # "vlm_judge": [  # VLM disabled
-        #     "Vision AI is capturing the ImageJ window…",
-        #     "Vision AI is building the comparison panel…",
-        #     "Vision AI is sending the image for analysis…",
-        #     "Vision AI is evaluating against expected output…",
-        #     "Vision AI is compiling the verdict…",
-        # ],
+        "vlm_judge": [
+            "Vision Judge is preparing the image preview…",
+            "Vision Judge is building the comparison panel…",
+            "Vision Judge is inspecting visible structures…",
+            "Vision Judge is evaluating the expected output…",
+            "Vision Judge is compiling the visual handoff…",
+        ],
         "qa_reporter": [
             "QA Agent is scanning the project folder…",
             "QA Agent is reading script documentation…",
@@ -1233,7 +1233,7 @@ class ImageJAgentGUI(QWidget):
 
         # These are the subagent tool names that run for a long time with no streaming.
         _SUBAGENT_TOOLS = {"imagej_coder", "imagej_debugger",
-                        "python_data_analyst", "qa_reporter"}  # vlm_judge disabled
+                        "python_data_analyst", "qa_reporter", "vlm_judge"}
 
         # Non-subagent tool start messages (short, fire-and-forget tools)
         _TOOL_START = {
@@ -1263,7 +1263,7 @@ class ImageJAgentGUI(QWidget):
             "python_data_analyst":       "Data Scientist finished.",
             "execute_script":            "Script execution complete.",
             "qa_reporter":               "QA report generated.",
-            # "vlm_judge":              "Vision AI inspection complete.",  # VLM disabled
+            "vlm_judge":                 "Vision Judge inspection complete.",
             "setup_analysis_workspace":  "Project workspace ready.",
             "install_fiji_plugin":       "Plugin installed — please restart Fiji.",
         }

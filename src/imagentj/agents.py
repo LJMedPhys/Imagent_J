@@ -1,6 +1,6 @@
 import os
 import sqlite3
-from typing import Optional
+from typing import Literal, Optional
 
 from . import stop_signal
 
@@ -29,7 +29,7 @@ from .prompts import (
     qa_reporter_prompt,
     plugin_manager_prompt,
     librarian_prompt,
-    # vlm_judge_prompt,  # VLM disabled
+    vlm_judge_prompt,
 )
 from .tools import (
     internet_search, inspect_all_ui_windows, capture_plugin_dialog,
@@ -46,7 +46,8 @@ from .tools import (
     check_environment,
     set_dialog_vision_llm,
     get_mcp_tools,
-    # capture_ij_window, build_compilation, analyze_image,  # VLM disabled
+    capture_ij_window, build_mask_overlay, build_compilation, analyze_image,
+    set_vision_llm,
 )
 from .tools.learned_memory import (
     register_pending_lesson, core_pitfalls, core_recipes, recall,
@@ -179,23 +180,25 @@ class PluginRecommendation(BaseModel):
     success: bool = True
 
 
-# VLM disabled — uncomment to re-enable
-# class VLMCheckResult(BaseModel):
-#     check_name:    str
-#     verdict:       str   # "PASS" | "WARN" | "FAIL"
-#     observation:   str
-#     image_path:    Optional[str] = None
-#
-# class VLMHandoff(BaseModel):
-#     overall_verdict:       str
-#     summary:               str
-#     checks:                list[VLMCheckResult]
-#     issues_found:          list[str]
-#     recommended_action:    str
-#     image_paths_inspected: list[str]
-#     pipeline_step:         str
-#     success:               bool
-#     error_message:         Optional[str] = None
+class VLMCheckResult(BaseModel):
+    """One evidence-backed visual observation returned by the VLM judge."""
+    check_name: str
+    verdict: Literal["PASS", "WARN", "FAIL", "INFO"]
+    observation: str
+    image_path: Optional[str] = None
+
+
+class VLMHandoff(BaseModel):
+    """Typed handoff from the stateless VLM judge to the supervisor."""
+    overall_verdict: Literal["PASS", "WARN", "FAIL", "INFO"]
+    summary: str
+    checks: list[VLMCheckResult] = []
+    issues_found: list[str] = []
+    recommended_action: str
+    image_paths_inspected: list[str] = []
+    pipeline_step: str
+    success: bool
+    error_message: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -274,15 +277,23 @@ llm_curator = ChatOpenAI(
     callbacks=[shared_tracker],
 )
 
-# llm_vlm = ChatOpenAI(  # VLM disabled
-#     model=m("openai/gpt-5.4-nano"),
-#     api_key=api_key,
-#     base_url=base_url,
-#     temperature=0.,
-#     reasoning_effort="none",
-#     verbose=True,
-#     callbacks=[shared_tracker],
-# )
+# The VLM judge deliberately uses OpenRouter even when the text agents use the
+# direct OpenAI API.  Keep startup compatible with OpenAI-only installations:
+# the tool remains visible but returns a structured "unavailable" handoff.
+llm_vlm = (
+    ChatOpenAI(
+        model="google/gemini-3.5-flash",
+        api_key=open_router_key,
+        base_url="https://openrouter.ai/api/v1",
+        temperature=0.,
+        timeout=90,
+        max_retries=1,
+        verbose=True,
+        callbacks=[shared_tracker],
+    )
+    if open_router_key
+    else None
+)
 
 # ---------------------------------------------------------------------------
 # Subagent instances — created once at module level, stateless invocation
@@ -463,17 +474,22 @@ librarian_agent = create_agent(
     ],
 )
 
-# _vlm_agent = create_agent(
-#     llm_vlm,
-#     tools=[
-#         capture_ij_window,   # save named open IJ window as PNG via PyImageJ
-#         build_compilation,   # fuse multiple images into a labelled side-by-side panel
-#         analyze_image,       # send image/compilation to vision LLM, return analysis
-#     ],
-#     system_prompt=vlm_judge_prompt,
-#     response_format=VLMHandoff,
-#     name="vlm_judge",
-# )
+_vlm_agent = (
+    create_agent(
+        llm_vlm,
+        tools=[
+            capture_ij_window,   # save a named open IJ window as PNG
+            build_mask_overlay,  # alpha-overlay a mask on the source image
+            build_compilation,   # build a labelled comparison panel
+            analyze_image,       # send one image/panel to the vision model
+        ],
+        system_prompt=vlm_judge_prompt,
+        response_format=ToolStrategy(schema=VLMHandoff, handle_errors=True),
+        name="vlm_judge",
+    )
+    if llm_vlm is not None
+    else None
+)
 
 
 # ---------------------------------------------------------------------------
@@ -815,19 +831,101 @@ def qa_reporter(project_root: str) -> QAHandoff:
     return result["structured_response"]
 
 
-# VLM disabled — uncomment to re-enable
-# @tool
-# def vlm_judge(task, pipeline_step, expected_output, image_source, labels=None):
-#     sources = image_source if isinstance(image_source, list) else [image_source]
-#     content = (
-#         f"PIPELINE STEP: {pipeline_step}\n"
-#         f"IMAGE SOURCE(S): {sources}\n"
-#         f"LABELS: {labels or []}\n"
-#         f"EXPECTED OUTPUT: {expected_output}\n\n"
-#         f"TASK: {task}"
-#     )
-#     result = _vlm_agent.invoke({"messages": [{"role": "user", "content": content}]})
-#     return result["structured_response"]
+def _vlm_failure(pipeline_step: str, message: str) -> VLMHandoff:
+    """Return a non-throwing handoff so visual QA cannot crash the core pipeline."""
+    return VLMHandoff(
+        overall_verdict="WARN",
+        summary="Visual assessment was unavailable; continue with metadata and human review.",
+        recommended_action="Continue with the non-visual checks and show the output to the user.",
+        pipeline_step=pipeline_step,
+        success=False,
+        error_message=message,
+    )
+
+
+@tool
+def vlm_judge(
+    task: str,
+    pipeline_step: str,
+    expected_output: str,
+    image_source: str | list[str],
+    labels: Optional[list[str]] = None,
+    create_mask_overlay: bool = False,
+    overlay_opacity: float = 0.35,
+) -> VLMHandoff:
+    """Visually inspect input context or a completed image-processing result.
+
+    This is a stateless specialist with a typed handoff to the supervisor.  Use
+    it at two checkpoints: (1) alongside initial metadata extraction for an
+    advisory whole-image review, and (2) after the final image-producing step.
+
+    For a segmentation result, pass ``image_source=[original_path, mask_path]``
+    and ``create_mask_overlay=True``.  A transparent overlay is generated
+    deterministically and the judge compares Original / Mask / Overlay.
+
+    Args:
+        task: Focused visual question and biological context.
+        pipeline_step: Traceability label, e.g. ``input_review`` or ``segmentation``.
+        expected_output: Observable criteria for a satisfactory result.
+        image_source: One path/window title, or an ordered list for comparison.
+        labels: Optional captions matching the sources.
+        create_mask_overlay: Build an alpha overlay from the first two file paths.
+        overlay_opacity: Mask tint opacity in the range 0..1.
+    """
+    if _vlm_agent is None:
+        return _vlm_failure(
+            pipeline_step,
+            "VLM judge requires OPEN_ROUTER_API_KEY (model google/gemini-3.5-flash).",
+        )
+
+    sources = list(image_source) if isinstance(image_source, list) else [image_source]
+    if not sources or any(not isinstance(source, str) or not source.strip() for source in sources):
+        return _vlm_failure(pipeline_step, "image_source must contain at least one non-empty source.")
+    panel_labels = list(labels) if labels else []
+    overlay_note = ""
+
+    if create_mask_overlay:
+        if len(sources) != 2:
+            return _vlm_failure(
+                pipeline_step,
+                "create_mask_overlay requires exactly two sources: [original_path, mask_path].",
+            )
+        overlay_path = build_mask_overlay.invoke({
+            "original_path": sources[0],
+            "mask_path": sources[1],
+            "opacity": overlay_opacity,
+            "color": "magenta",
+        })
+        if overlay_path.startswith("ERROR:"):
+            return _vlm_failure(pipeline_step, overlay_path)
+        sources.append(overlay_path)
+        panel_labels = panel_labels[:2]
+        defaults = ["Original", "Mask"]
+        while len(panel_labels) < 2:
+            panel_labels.append(defaults[len(panel_labels)])
+        panel_labels.append(f"Overlay ({int(overlay_opacity * 100)}% mask)")
+        overlay_note = (
+            "A mask overlay has already been generated as the third source. "
+            "Build a three-panel compilation before analysis.\n"
+        )
+
+    content = (
+        f"PIPELINE STEP: {pipeline_step}\n"
+        f"IMAGE SOURCE(S): {sources}\n"
+        f"LABELS: {panel_labels}\n"
+        f"EXPECTED OUTPUT: {expected_output}\n"
+        f"{overlay_note}\n"
+        f"TASK: {task}"
+    )
+
+    try:
+        return _run_capped(
+            _vlm_agent,
+            {"messages": [{"role": "user", "content": content}]},
+            lambda: _vlm_failure(pipeline_step, "VLM judge reached its tool-call limit."),
+        )
+    except Exception as exc:
+        return _vlm_failure(pipeline_step, f"{type(exc).__name__}: {exc}")
 
 
 @tool
@@ -867,70 +965,6 @@ def plugin_manager(task: str, project_root: str = "") -> PluginRecommendation:
     return result["structured_response"]
 
 
-# @tool
-# def vlm_judge(
-#     task:            str,
-#     pipeline_step:   str,
-#     expected_output: str,
-#     image_source:    str | list[str],
-#     labels:          Optional[list[str]] = None,
-# ) -> VLMHandoff:
-#     """
-#     Visually inspect one or more images using a vision LLM and return a structured verdict.
- 
-#     ⚠️  COST NOTICE — vision API calls are significantly more expensive than text:
-#         Call vlm_judge selectively — see WHEN TO CALL below.
- 
-#     IMAGE SOURCE — two modes:
-#         Single string:  open IJ window title  → captured via IJ API then analysed.
-#                         absolute file path    → analysed directly, no capture.
-#         List of strings: multiple window titles and/or file paths
-#                         → automatically fused into a side-by-side compilation panel
-#                           before analysis. Much more effective for comparisons than
-#                           sending images separately (VLM gets direct spatial reference).
- 
-#     Args:
-#         task:            What to inspect and what criteria to judge against.
-#         pipeline_step:   Short stage identifier for traceability, e.g. "segmentation".
-#         expected_output: What a correct result looks like — used as pass/fail benchmark.
-#         image_source:    Window title, file path, or list of either.
-#                          Window titles: e.g. "MAX_DAPI.tif", "mask_nuclei.tif"
-#                          File paths:    e.g. "/app/data/projects/study/processed/mask.tif"
-#         labels:          Optional panel captions for compilations, e.g. ["Original", "Mask"].
-#                          Ignored for single images.
- 
-#     Returns VLMHandoff with overall_verdict ("PASS"/"WARN"/"FAIL"), per-check breakdown,
-#     issues_found, and recommended_action.
- 
-#     WHEN TO CALL (be selective — each call costs money):
-#         ✅ Sample verification (Phase 4b) — once per pipeline, on the verification image.
-#         ✅ Segmentation / threshold output — use compilation with original + result.
-#         ✅ When a script exits cleanly but output is suspected to be wrong.
-#         ✅ Final QA before qa_reporter — scale bar and output image check.
-#         ✅ When the user reports a visual problem.
-#         ❌ Do NOT call after every batch script execution.
-#         ❌ Do NOT call to list open windows — use inspect_all_ui_windows.
-#         ❌ Do NOT call to read CSV or log output — use inspect_csv_header / smart_file_reader.
- 
-#     ACTING ON THE VERDICT:
-#         PASS → proceed. Show summary to user at sample verification.
-#         WARN → continue pipeline; report issues in Phase 5 summary.
-#         FAIL → stop. Send script path + issues_found to imagej_debugger. AFTER asking the user for visual verfification. 
-#                Re-run and call vlm_judge again after the fix.
-#     """
-#     sources = image_source if isinstance(image_source, list) else [image_source]
- 
-#     content = (
-#         f"PIPELINE STEP: {pipeline_step}\n"
-#         f"IMAGE SOURCE(S): {sources}\n"
-#         f"LABELS: {labels or []}\n"
-#         f"EXPECTED OUTPUT: {expected_output}\n\n"
-#         f"TASK: {task}"
-#     )
- 
-#     result = _vlm_agent.invoke({"messages": [{"role": "user", "content": content}]})
-#     return result["structured_response"]
-
 # ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
@@ -946,10 +980,12 @@ def init_agent():
         imagej_debugger,
         python_data_analyst,
         qa_reporter,   # always present; _qa_enabled flag controls execution
-        # vlm_judge,  # VLM disabled
+        vlm_judge,
     ]
 
     set_dialog_vision_llm(llm_nano)
+    if llm_vlm is not None:
+        set_vision_llm(llm_vlm)
 
     supervisor_middleware = [
         ContextEditingMiddleware(

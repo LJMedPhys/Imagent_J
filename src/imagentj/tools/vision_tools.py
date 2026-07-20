@@ -2,6 +2,7 @@
 vision.py — Vision tools for the VLM judge agent.
 
   capture_ij_window   → saves a named open IJ window as PNG via PyImageJ/scyjava
+  build_mask_overlay  → overlays a segmentation mask on its source image
   build_compilation   → fuses multiple images into a labelled side-by-side panel
   analyze_image       → resizes to ≤1024 px and sends to a vision LLM via OpenAI
 
@@ -13,6 +14,8 @@ Comparison workflow:
                                   each nucleus without merging adjacent cells?")
 """
 
+from __future__ import annotations
+
 import base64
 import io
 import os
@@ -20,6 +23,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
@@ -60,9 +64,40 @@ def _get_ij_classes():
 
 
 def _to_rgb(img: Image.Image) -> Image.Image:
-    if img.mode not in ("RGB", "L"):
-        img = img.convert("RGB")
-    return img
+    """Convert a microscopy image to a visible 8-bit RGB preview.
+
+    PIL's direct ``I;16``/float-to-RGB conversion clips values above 255, which
+    turns many 16-bit microscopy images into nearly solid white previews.  Use
+    robust percentile scaling for non-8-bit arrays so the VLM sees the same
+    structures a user would see after applying display contrast in Fiji.
+    """
+    if img.mode in ("RGB", "RGBA", "L") and np.asarray(img).dtype == np.uint8:
+        return img.convert("RGB")
+
+    arr = np.asarray(img)
+    if arr.ndim == 3 and arr.shape[-1] == 4:
+        arr = arr[..., :3]
+
+    finite = np.isfinite(arr)
+    if not finite.any():
+        scaled = np.zeros(arr.shape, dtype=np.uint8)
+    else:
+        values = arr[finite].astype(np.float64, copy=False)
+        low, high = np.percentile(values, (1.0, 99.8))
+        if high <= low:
+            low, high = float(values.min()), float(values.max())
+        if high <= low:
+            scaled = np.zeros(arr.shape, dtype=np.uint8)
+        else:
+            scaled = np.clip((arr.astype(np.float64) - low) * 255.0 / (high - low), 0, 255)
+            scaled[~finite] = 0
+            scaled = scaled.astype(np.uint8)
+
+    if scaled.ndim == 2:
+        return Image.fromarray(scaled, mode="L").convert("RGB")
+    if scaled.ndim == 3 and scaled.shape[-1] >= 3:
+        return Image.fromarray(scaled[..., :3], mode="RGB")
+    raise ValueError(f"Unsupported image shape for preview: {scaled.shape}")
 
 
 def _resize_and_encode(img: Image.Image) -> tuple[str, tuple[int, int], tuple[int, int]]:
@@ -92,7 +127,18 @@ def _call_vision_api(image_b64: str, question: str) -> str:
         {"type": "text", "text": question},
     ])
     try:
-        return _llm.invoke([msg]).content
+        content = _llm.invoke([msg]).content
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            text_parts = []
+            for block in content:
+                if isinstance(block, str):
+                    text_parts.append(block)
+                elif isinstance(block, dict) and block.get("text"):
+                    text_parts.append(str(block["text"]))
+            return "\n".join(text_parts) or str(content)
+        return str(content)
     except Exception as e:
         return f"ERROR: {type(e).__name__}: {e}"
 
@@ -100,6 +146,11 @@ def _load_image(path: Path) -> Image.Image:
     """Load and normalise to RGB regardless of bit depth."""
     img = Image.open(path)
     return _to_rgb(img)
+
+
+def _capture_path(prefix: str) -> Path:
+    """Return a collision-resistant path for concurrently generated previews."""
+    return _CAPTURE_DIR / f"{prefix}_{time.strftime('%Y%m%d_%H%M%S')}_{time.time_ns()}.png"
 
 
 def _try_get_font(size: int = 14) -> ImageFont:
@@ -132,10 +183,9 @@ def capture_ij_window(window_name: str, label: Optional[str] = None) -> str:
     Returns:
         Absolute path to the saved PNG, or "ERROR: ..." with open window titles on failure.
     """
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
     suffix    = f"_{label}" if label else ""
     safe_name = "".join(c if c.isalnum() or c in "-_." else "_" for c in window_name)
-    out_path  = _CAPTURE_DIR / f"{safe_name}_{timestamp}{suffix}.png"
+    out_path  = _capture_path(f"{safe_name}{suffix}")
 
     try:
         WindowManager, IJ = _get_ij_classes()
@@ -157,6 +207,79 @@ def capture_ij_window(window_name: str, label: Optional[str] = None) -> str:
     if not out_path.exists():
         return f"ERROR: saveAs ran but file not created at {out_path}."
 
+    return str(out_path)
+
+
+@tool
+def build_mask_overlay(
+    original_path: str,
+    mask_path: str,
+    opacity: float = 0.35,
+    color: str = "magenta",
+) -> str:
+    """Create a transparent segmentation-mask overlay for visual judging.
+
+    Every non-zero mask pixel is treated as foreground.  The source and mask
+    must have the same XY dimensions; a mismatch is reported instead of being
+    silently resized because misregistration is itself a segmentation failure.
+    The original files are never modified.
+
+    Args:
+        original_path: Absolute path to the raw/source image.
+        mask_path: Absolute path to the binary or labelled segmentation mask.
+        opacity: Foreground tint opacity in the inclusive range 0..1.
+        color: Overlay colour: magenta, red, green, cyan, yellow, or blue.
+
+    Returns:
+        Absolute path to a PNG overlay, or an ``ERROR: ...`` string.
+    """
+    colors = {
+        "magenta": (255, 0, 255),
+        "red": (255, 0, 0),
+        "green": (0, 255, 0),
+        "cyan": (0, 255, 255),
+        "yellow": (255, 255, 0),
+        "blue": (0, 128, 255),
+    }
+    if color.lower() not in colors:
+        return f"ERROR: Unsupported overlay color '{color}'. Choose from: {', '.join(colors)}."
+    if not 0.0 <= opacity <= 1.0:
+        return "ERROR: opacity must be between 0 and 1."
+
+    original = Path(original_path)
+    mask = Path(mask_path)
+    for role, path in (("Original", original), ("Mask", mask)):
+        if not path.exists():
+            return f"ERROR: {role} file not found — {path}"
+        if path.suffix.lower() not in _SUPPORTED_FORMATS:
+            return f"ERROR: Unsupported {role.lower()} format '{path.suffix}'."
+
+    try:
+        base = _load_image(original)
+        mask_img = Image.open(mask)
+        mask_arr = np.asarray(mask_img)
+        if mask_arr.ndim == 3:
+            foreground = np.any(mask_arr != 0, axis=-1)
+        elif mask_arr.ndim == 2:
+            foreground = mask_arr != 0
+        else:
+            return f"ERROR: Unsupported mask shape {mask_arr.shape}. Expected a 2D mask."
+    except Exception as exc:
+        return f"ERROR: Could not load overlay inputs — {type(exc).__name__}: {exc}"
+
+    expected_shape = (base.height, base.width)
+    if foreground.shape != expected_shape:
+        return (
+            "ERROR: Original/mask dimensions do not match — "
+            f"original={base.width}×{base.height}, mask={foreground.shape[1]}×{foreground.shape[0]}."
+        )
+
+    mask_l = Image.fromarray((foreground.astype(np.uint8) * 255), mode="L")
+    tint = Image.new("RGB", base.size, colors[color.lower()])
+    tinted = Image.blend(base, tint, opacity)
+    overlay = Image.composite(tinted, base, mask_l)
+    out_path = _capture_path("mask_overlay")
+    overlay.save(out_path, format="PNG")
     return str(out_path)
 
 
@@ -256,8 +379,7 @@ def build_compilation(
         draw.text((text_x, 4), caption, fill=_LABEL_COLOR, font=font)
         x_offset += img.width
 
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    out_path  = _CAPTURE_DIR / f"compilation_{timestamp}.png"
+    out_path = _capture_path("compilation")
     canvas.save(out_path, format="PNG")
 
     return str(out_path)

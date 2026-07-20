@@ -47,9 +47,16 @@ Agentic-J uses a **supervisor + specialist** model. The supervisor receives your
 | **ImageJ Coder** | GPT-5.3-codex | Writes production-ready Groovy/ImageJ macro scripts using plugin skill documentation. |
 | **ImageJ Debugger** | GPT-5.3-codex | Diagnoses and repairs failing scripts by reading the ImageJ log and inspecting exception stack traces. |
 | **Python Data Analyst** | GPT-5.2 | Runs Python code for statistical analysis (scipy, pandas) and publication-quality plots (matplotlib). |
+| **VLM Judge** | Gemini 3.5 Flash via OpenRouter | Adds advisory visual context during input metadata review and judges final image outputs. For segmentation it compares the original, mask, and a transparent mask overlay. |
 | **QA Reporter** | GPT-4o-mini | Audits the completed project folder against workflow and image-publishing standards; generates a `QA_Checklist_Report.md`. Optional — enabled per session. |
 
 The supervisor follows a structured pipeline: gather requirements → select plugin → plan → set up workspace → code & test → statistics → plots → summarise & document → QA.
+
+The VLM Judge returns a structured handoff that is stored in the project state
+ledger and shared with the other specialists. Its observations are advisory:
+numeric metadata, quantitative checks, and the user's visual approval remain the
+source of truth. An OpenRouter key is required for this agent; an unavailable
+visual call does not stop the core pipeline.
 
 ### Dialog window vision
 
@@ -65,6 +72,7 @@ When you ask "What does this window do?" or similar, the agent uses a **GPT-4o-m
 | **Debug scripts** | Read the ImageJ log and exception stack traces to diagnose and repair failing scripts |
 | **Run Python code** | Statistical analysis (scipy, pandas) and publication-quality plots (matplotlib, seaborn) |
 | **Extract image metadata** | Read pixel size, bit depth, dimensions, channel count, and calibration from image files without loading pixel data |
+| **Visual input/result review** | Inspect overall image quality at input and compare final visual outputs; segmentation review uses a transparent mask overlay |
 | **List open Fiji windows** | Enumerate all currently open images and dialogs in the Fiji UI |
 | **Capture dialog screenshot** | Take a screenshot of the active Fiji plugin dialog and explain its parameters using a vision model |
 | **Search & install plugins** | Search Fiji update sites by capability; check installation status; install plugins |
