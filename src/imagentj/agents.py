@@ -225,12 +225,32 @@ def m(name: str) -> str:
     raise ValueError(f"Model {name} not available on OpenAI direct; needs OpenRouter.")
 
 
+def _agent_reasoning_kwargs(reasoning_effort: Optional[str] = None) -> dict:
+    """Return endpoint-compatible options for tool-using text agents.
+
+    OpenRouter currently serves these models through Chat Completions, while in OpenAI api endpoint,
+    reasoning plus function tools is rejected starting from gpt-5.4. Direct OpenAI calls use
+    the Responses API instead, so they can retain explicit reasoning effort.
+    Refer to: https://community.openai.com/t/gpt-5-6-chat-completion-reasoning-effort-bug-behavior-change/1386454/2
+    """
+    options = {}
+    if use_openrouter:
+        if reasoning_effort is not None:
+            options["reasoning_effort"] = reasoning_effort
+        return options
+
+    options["use_responses_api"] = True
+    if reasoning_effort is not None:
+        options["reasoning"] = {"effort": reasoning_effort}
+    return options
+
+
 llm_supervisor = ChatOpenAI(
     model=m("openai/gpt-5.4"),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
-    reasoning_effort="low",
+    **_agent_reasoning_kwargs("low"),
     verbose=True,
     callbacks=[shared_tracker],
 )
@@ -240,7 +260,7 @@ llm_worker = ChatOpenAI(
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
-    reasoning_effort="low",
+    **_agent_reasoning_kwargs("low"),
     verbose=True,
     callbacks=[shared_tracker],
 )
@@ -250,7 +270,7 @@ llm_analyst = ChatOpenAI(
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
-    reasoning_effort="low",
+    **_agent_reasoning_kwargs("low"),
     verbose=True,
     callbacks=[shared_tracker],
 )
@@ -260,6 +280,7 @@ llm_nano = ChatOpenAI(
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
+    **_agent_reasoning_kwargs(),
     verbose=True,
     callbacks=[shared_tracker],
 )
@@ -271,18 +292,19 @@ llm_curator = ChatOpenAI(
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
-    reasoning_effort="low",
+    **_agent_reasoning_kwargs("low"),
     timeout=30,          # never let a stalled call hang the curator thread or
     max_retries=1,       # the (gated) hot-path deep-recall fallback forever
     verbose=True,
     callbacks=[shared_tracker],
 )
 
-# The VLM judge deliberately uses OpenRouter even when the text agents use the
-# direct OpenAI API.  Keep startup compatible with OpenAI-only installations:
-# the tool remains visible but returns a structured "unavailable" handoff.
-llm_vlm = (
-    ChatOpenAI(
+# Prefer Gemini through OpenRouter when both providers are configured. For an
+# OpenAI-only installation, GPT-5.6 reasoning plus function tools belongs on
+# the Responses API; keeping this explicit avoids Chat Completions'
+# reasoning/tool compatibility limit.
+if open_router_key:
+    llm_vlm = ChatOpenAI(
         model="google/gemini-3.5-flash",
         api_key=open_router_key,
         base_url="https://openrouter.ai/api/v1",
@@ -292,9 +314,19 @@ llm_vlm = (
         verbose=True,
         callbacks=[shared_tracker],
     )
-    if open_router_key
-    else None
-)
+elif openai_key:
+    llm_vlm = ChatOpenAI(
+        model="gpt-5.6-luna",
+        api_key=openai_key,
+        temperature=0.,
+        **_agent_reasoning_kwargs("high"),
+        timeout=90,
+        max_retries=1,
+        verbose=True,
+        callbacks=[shared_tracker],
+    )
+else:
+    llm_vlm = None
 
 # ---------------------------------------------------------------------------
 # Subagent instances — created once at module level, stateless invocation
@@ -878,7 +910,7 @@ def vlm_judge(
     if _vlm_agent is None:
         return _vlm_failure(
             pipeline_step,
-            "VLM judge requires OPEN_ROUTER_API_KEY (model google/gemini-3.5-flash).",
+            "VLM judge requires OPENAI_API_KEY or OPEN_ROUTER_API_KEY.",
         )
 
     sources = list(image_source) if isinstance(image_source, list) else [image_source]

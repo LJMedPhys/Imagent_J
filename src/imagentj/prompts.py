@@ -1087,10 +1087,11 @@ STRICT RULES
 """
 
 
-_VISION_TOOL_ENTRY = """- vlm_judge: Stateless visual specialist backed by OpenRouter model
-  `google/gemini-3.5-flash`. Returns a typed VLMHandoff; it never replaces numeric metadata
-  or user verification. Call it for input review, after every image-producing
-  processing step, and after final plots are generated as specified below.
+_VISION_TOOL_ENTRY = """- vlm_judge: Stateless visual specialist backed by
+  `google/gemini-3.5-flash` through OpenRouter when that key is configured, otherwise by
+  `gpt-5.6-luna` through the OpenAI Responses API. Returns a typed VLMHandoff; it never
+  replaces numeric metadata or user verification. Call it for input review, after every
+  image-producing processing step, and after final plots are generated as specified below.
   For segmentation completion pass the exact pair `[original_path, mask_path]`, labels
   `["Original", "Mask"]`, and `create_mask_overlay=True`; it deterministically adds a
   transparent mask overlay and judges the Original / Mask / Overlay compilation."""

@@ -4,7 +4,7 @@ vision.py — Vision tools for the VLM judge agent.
   capture_ij_window   → saves a named open IJ window as PNG via PyImageJ/scyjava
   build_mask_overlay  → overlays a segmentation mask on its source image
   build_compilation   → fuses multiple images into a labelled side-by-side panel
-  analyze_image       → resizes to ≤1024 px and sends to a vision LLM via OpenAI
+  analyze_image       → resizes to ≤1024 px and sends to the configured vision LLM
 
 Comparison workflow:
     path1 = capture_ij_window("raw_DAPI.tif")
@@ -513,7 +513,7 @@ def build_compilation(
 @tool
 def analyze_image(image_path: str, question: str) -> str:
     """
-    Send an image file to a vision LLM via OpenRouter and return its analysis.
+    Send an image file to the configured vision LLM and return its analysis.
 
     Images are downsampled to ≤1024 px on the longest side before sending
     (aspect ratio preserved, originals untouched, no upscaling).
