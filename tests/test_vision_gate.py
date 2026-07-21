@@ -45,7 +45,10 @@ class _Request:
         )
 
 
-_VISION_PROMPT = "supervisor base with VLM visual-checkpoint rules"
+_VISION_PROMPT = (
+    "supervisor base with VLM visual-checkpoint rules; "
+    "after plotting call vlm_judge on each generated PNG figure"
+)
 _NO_VISION_PROMPT = "supervisor base without optional visual review"
 _DEEP_AGENT_RULES = "deep-agent filesystem and skills rules"
 
@@ -108,6 +111,7 @@ def test_vision_is_disabled_by_default_and_tool_is_hidden():
 
     assert [tool.name for tool in result.tools] == ["execute_script"]
     assert _VISION_PROMPT not in result.system_message.content
+    assert "call vlm_judge on each generated PNG figure" not in result.system_message.content
     assert _NO_VISION_PROMPT in result.system_message.content
     assert _DEEP_AGENT_RULES in result.system_message.content
     assert result.system_message.marker == "deep-agent metadata"
@@ -119,6 +123,7 @@ def test_enabled_chat_keeps_vision_tool_and_receives_checkpoint_rule():
 
     assert [tool.name for tool in result.tools] == ["vlm_judge", "execute_script"]
     assert _VISION_PROMPT in result.system_message.content
+    assert "call vlm_judge on each generated PNG figure" in result.system_message.content
     assert _NO_VISION_PROMPT not in result.system_message.content
     assert _DEEP_AGENT_RULES in result.system_message.content
 
