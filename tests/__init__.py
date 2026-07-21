@@ -1,1 +1,0 @@
-"""Agentic-J tests."""
