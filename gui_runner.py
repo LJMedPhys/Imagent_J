@@ -1330,7 +1330,7 @@ class ImageJAgentGUI(QWidget):
             messages = node_data.get("messages", []) if isinstance(node_data, dict) else []
 
             for msg in messages:
-                content    = getattr(msg, "content", "") or ""
+                content    = _extract_text(getattr(msg, "content", "") or "")
                 tool_calls = getattr(msg, "tool_calls", None) or []
                 msg_type   = getattr(msg, "type", "") or ""
 
