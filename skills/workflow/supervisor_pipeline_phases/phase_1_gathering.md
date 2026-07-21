@@ -14,7 +14,8 @@
 4. Do NOT call these one at a time. Issue ALL in a single turn — LangGraph runs them in parallel:
    - inspect_all_ui_windows()
    - extract_image_metadata("/data/<filename>")   ← use the actual file path from step 3
-   - vlm_judge(task="Review the whole image for visual context relevant to <goal>",
+   - When `vlm_judge` is available in the current tools:
+     vlm_judge(task="Review the whole image for visual context relevant to <goal>",
        pipeline_step="input_review", expected_output="The target is visually discernible",
        image_source="/data/<filename>")
    - rag_retrieve_docs(relevant_query)
@@ -47,7 +48,7 @@
      and `background_mode` from `threshold_suggestions` — `"dark"` for fluorescence,
      `"bright"` for brightfield/H&E. The coder reads this to pick the `"Otsu dark"` vs
      `"Otsu"` suffix; if omitted, it falls back to a runtime stats check)
-   - vlm_assessment (compact typed handoff from the input_review call: pipeline_step,
+   - When Vision Judge is enabled, vlm_assessment (compact typed handoff from the input_review call: pipeline_step,
      overall_verdict, summary, issues_found, recommended_action,
      image_paths_inspected, success). Treat visual observations as advisory and do
      not overwrite metadata or channel identity with visual guesses.

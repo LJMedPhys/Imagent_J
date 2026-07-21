@@ -41,7 +41,7 @@ from .tools import (
     check_plugin_installed, mkdir_copy, save_script, edit_script, copy_file, execute_script,
     get_script_info, load_script, get_script_history,
     setup_analysis_workspace, save_markdown,
-    NarrationReminderMiddleware, PhaseGuardMiddleware,
+    NarrationReminderMiddleware, PhaseGuardMiddleware, VisionOptionMiddleware,
     update_state_ledger, read_state_ledger, set_ledger_metadata, get_ledger_context,
     check_environment,
     set_dialog_vision_llm,
@@ -855,9 +855,9 @@ def vlm_judge(
 ) -> VLMHandoff:
     """Visually inspect input context or a completed image-processing result.
 
-    This is a stateless specialist with a typed handoff to the supervisor.  Use
-    it at two checkpoints: (1) alongside initial metadata extraction for an
-    advisory whole-image review, and (2) after the final image-producing step.
+    This is a stateless specialist with a typed handoff to the supervisor.  When
+    enabled for the chat, use it (1) alongside initial metadata extraction for an
+    advisory whole-image review, and (2) after every image-producing processing step.
 
     For a segmentation result, pass ``image_source=[original_path, mask_path]``
     and ``create_mask_overlay=True``.  A transparent overlay is generated
@@ -987,6 +987,9 @@ def init_agent():
     if llm_vlm is not None:
         set_vision_llm(llm_vlm)
 
+    vision_prompt = build_supervisor_prompt(enable_qa=True, enable_vision=True)
+    no_vision_prompt = build_supervisor_prompt(enable_qa=True, enable_vision=False)
+
     supervisor_middleware = [
         ContextEditingMiddleware(
             edits=[
@@ -1009,6 +1012,11 @@ def init_agent():
         ),
         NarrationReminderMiddleware(),
         PhaseGuardMiddleware(),
+        # Innermost user middleware: per-chat final say on Vision prompt + tool exposure.
+        VisionOptionMiddleware(
+            enabled_prompt=vision_prompt,
+            disabled_prompt=no_vision_prompt,
+        ),
     ]
 
     supervisor = create_deep_agent(
@@ -1045,7 +1053,7 @@ def init_agent():
             read_state_ledger,
             set_ledger_metadata,
         ],
-        system_prompt=build_supervisor_prompt(enable_qa=True),
+        system_prompt=vision_prompt,
         subagents=[],
         middleware=supervisor_middleware,
         model=llm_supervisor,

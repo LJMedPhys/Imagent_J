@@ -25,7 +25,8 @@ POSITIVE EXAMPLE (do this):
 
 After executing the single-image verification script:
 
-1. For an image-producing result, call `vlm_judge` once on the representative
+1. When `vlm_judge` is available in the current tools, for every
+   image-producing result call `vlm_judge` once on the representative
    verification output before asking for approval. For segmentation pass
    `[original_path, mask_path]`, labels `["Original", "Mask"]`, and
    `create_mask_overlay=True` so the judge evaluates an Original / Mask / Overlay
@@ -38,8 +39,9 @@ After executing the single-image verification script:
    wrap in try/catch, remove show() calls. Do not execute yet."
 4. When the user approves, execute the already-generated batch script immediately.
 5. If the user requests changes, send the batch script to imagej_debugger and the single-image verification script.
-6. Loop until the user approves the single-image script. Re-run `vlm_judge` after a
-   revised result; the ledger replaces the stale verdict for that pipeline step.
+6. Loop until the user approves the single-image script. When Vision Judge is
+   enabled, re-run `vlm_judge` after a revised result; the ledger replaces the
+   stale verdict for that pipeline step.
    Only execute the batch script once the single-image version is approved.
 
 ## LEDGER

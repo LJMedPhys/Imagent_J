@@ -16,6 +16,7 @@ Scaling is set to "Local Scaling" by default so the desktop fits your browser wi
 | **Send / Enter** | Submit your message to the agent. |
 | **Stop** | Requests the agent to stop after the current tool call completes. The agent finishes its in-progress step first — it does not cut off mid-execution. Use this if the agent is heading in the wrong direction or is taking too long. |
 | **QA Agent** (checkbox) | Enables the QA Reporter agent, which runs a full audit at the end of the workflow and generates `QA_Checklist_Report.md`. **Off by default** — enabling it adds one extra LLM call per completed project and increases cost. Toggle it before sending your first message; the setting cannot be changed while the agent is running. |
+| **Vision Judge** (checkbox) | Enables advisory visual review of a representative input and every image-producing processing step. **Off by default** — enabling it adds OpenRouter vision calls and requires an OpenRouter key. The setting is saved independently for each chat and cannot be changed while the agent is running. |
 | **Save Usage Report** | Saves a JSON summary of token usage and estimated cost for the current conversation to a file of your choice. |
 | **Report Issue** | Opens a dialog to describe a problem and send a report to the developers (see [Data & Reports](04_data_history_and_reports.md)). |
 
@@ -47,7 +48,7 @@ Agentic-J uses a **supervisor + specialist** model. The supervisor receives your
 | **ImageJ Coder** | GPT-5.3-codex | Writes production-ready Groovy/ImageJ macro scripts using plugin skill documentation. |
 | **ImageJ Debugger** | GPT-5.3-codex | Diagnoses and repairs failing scripts by reading the ImageJ log and inspecting exception stack traces. |
 | **Python Data Analyst** | GPT-5.2 | Runs Python code for statistical analysis (scipy, pandas) and publication-quality plots (matplotlib). |
-| **VLM Judge** | Gemini 3.5 Flash via OpenRouter | Adds advisory visual context during input metadata review and judges final image outputs. For segmentation it compares the original, mask, and a transparent mask overlay. |
+| **VLM Judge** | Gemini 3.5 Flash via OpenRouter | Optionally adds advisory visual context during input metadata review and judges every image-producing processing step. For segmentation it compares the original, mask, and a transparent mask overlay. |
 | **QA Reporter** | GPT-4o-mini | Audits the completed project folder against workflow and image-publishing standards; generates a `QA_Checklist_Report.md`. Optional — enabled per session. |
 
 The supervisor follows a structured pipeline: gather requirements → select plugin → plan → set up workspace → code & test → statistics → plots → summarise & document → QA.
@@ -72,7 +73,7 @@ When you ask "What does this window do?" or similar, the agent uses a **GPT-4o-m
 | **Debug scripts** | Read the ImageJ log and exception stack traces to diagnose and repair failing scripts |
 | **Run Python code** | Statistical analysis (scipy, pandas) and publication-quality plots (matplotlib, seaborn) |
 | **Extract image metadata** | Read pixel size, bit depth, dimensions, channel count, and calibration from image files without loading pixel data |
-| **Visual input/result review** | Inspect overall image quality at input and compare final visual outputs; segmentation review uses a transparent mask overlay |
+| **Visual input/result review** | Inspect overall image quality at input and review each image-producing processing step; segmentation review uses a transparent mask overlay |
 | **List open Fiji windows** | Enumerate all currently open images and dialogs in the Fiji UI |
 | **Capture dialog screenshot** | Take a screenshot of the active Fiji plugin dialog and explain its parameters using a vision model |
 | **Search & install plugins** | Search Fiji update sites by capability; check installation status; install plugins |
