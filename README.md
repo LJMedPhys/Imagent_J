@@ -11,9 +11,9 @@ Prerequisites:
 - ~8 GB RAM and ~30 GB free disk
 - An OpenAI **or** OpenRouter API key
 
-> The optional VLM Judge uses `google/gemini-3.5-flash` through OpenRouter. With
-> only an OpenAI key, the rest of Agentic-J works normally and visual judging
-> degrades gracefully to metadata and user review.
+> The optional VLM Judge uses `google/gemini-3.5-flash` when
+> `OPEN_ROUTER_API_KEY` is set (including when both keys are present). OpenAI-only
+> setups use `gpt-5.6-luna` with high reasoning through the Responses API.
 
 Steps:
 
