@@ -46,7 +46,8 @@ from .tools import (
     check_environment,
     set_dialog_vision_llm,
     get_mcp_tools,
-    capture_ij_window, build_mask_overlay, build_compilation, analyze_image,
+    capture_ij_window, prepare_image_source_for_vlm,
+    build_mask_overlay, build_compilation, analyze_image,
     set_vision_llm,
 )
 from .tools.learned_memory import (
@@ -868,8 +869,10 @@ def vlm_judge(
         pipeline_step: Traceability label, e.g. ``input_review`` or ``segmentation``.
         expected_output: Observable criteria for a satisfactory result.
         image_source: One path/window title, or an ordered list for comparison.
+            PNG/JPG/JPEG paths are read directly; all other existing paths are
+            opened in Fiji and captured as PNG before visual analysis.
         labels: Optional captions matching the sources.
-        create_mask_overlay: Build an alpha overlay from the first two file paths.
+        create_mask_overlay: Build an alpha overlay from the first two prepared sources.
         overlay_opacity: Mask tint opacity in the range 0..1.
     """
     if _vlm_agent is None:
@@ -881,6 +884,18 @@ def vlm_judge(
     sources = list(image_source) if isinstance(image_source, list) else [image_source]
     if not sources or any(not isinstance(source, str) or not source.strip() for source in sources):
         return _vlm_failure(pipeline_step, "image_source must contain at least one non-empty source.")
+
+    # Two-level fallback: intrinsically 2D web images remain direct inputs;
+    # every other existing bioimage path is opened/rendered by Fiji first.
+    # Window titles pass through unchanged and keep the existing capture path.
+    prepared_sources = []
+    for source in sources:
+        prepared = prepare_image_source_for_vlm.invoke({"image_source": source})
+        if prepared.startswith("ERROR:"):
+            return _vlm_failure(pipeline_step, prepared)
+        prepared_sources.append(prepared)
+    sources = prepared_sources
+
     panel_labels = list(labels) if labels else []
     overlay_note = ""
 

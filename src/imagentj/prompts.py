@@ -19,15 +19,17 @@ build_compilation(image_paths, labels)
     ALWAYS use it when comparing two or more images.
 
 analyze_image(image_path, question)
-    Sends any image file to the vision LLM and returns plain-text analysis.
+    Sends a prepared PNG/JPG/JPEG to the vision LLM and returns plain-text analysis.
     Ask ONE focused, falsifiable question per call.
     Always pass a compilation path here for comparison tasks.
 
 ────────────────────────────────────────
 PROTOCOL
 ────────────────────────────────────────
-1. Resolve sources. A source containing a path separator is a file path and is
-   analysed directly. Otherwise it is an ImageJ window title: capture it first.
+1. Sources have already passed through the supervisor's two-level resolver:
+   PNG/JPG/JPEG paths remain direct; other bioimage paths were opened in Fiji,
+   captured as PNG, and closed. A remaining non-path source is an already-open
+   ImageJ window title: capture it first and do not close the user's window.
 2. For one image, call analyze_image directly. For two or more images, first call
    build_compilation with every source and the supplied labels, then analyse only
    that panel. A segmentation request may already include Original / Mask / Overlay;

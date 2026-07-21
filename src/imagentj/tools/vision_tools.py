@@ -35,8 +35,11 @@ _MAX_PX          = 1024   # longest side cap applied to the final compilation
 _CAPTURE_DIR = Path(os.environ.get("CHAT_DATA_PATH", "/app/data/chats")) / "vlm_captures"
 _CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
 
+# Only intrinsically 2D display formats are read directly.  Bioimage containers
+# (TIFF, CZI, LIF, ND2, OME-Zarr, ...) first go through Fiji so its reader owns
+# dimensionality, precision, LUT, and display-plane selection.
 _SUPPORTED_FORMATS = {
-    ".png": "image/png", ".tif": "image/tiff", ".tiff": "image/tiff",
+    ".png": "image/png",
     ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
 }
 
@@ -153,6 +156,15 @@ def _capture_path(prefix: str) -> Path:
     return _CAPTURE_DIR / f"{prefix}_{time.strftime('%Y%m%d_%H%M%S')}_{time.time_ns()}.png"
 
 
+def _image_window_ids(WindowManager) -> set[int]:
+    """Snapshot the IDs of open ImageJ image windows."""
+    try:
+        ids = WindowManager.getIDList()
+        return {int(image_id) for image_id in list(ids)} if ids is not None else set()
+    except Exception:
+        return set()
+
+
 def _try_get_font(size: int = 14) -> ImageFont:
     """Return a truetype font if available, fall back to default."""
     try:
@@ -170,8 +182,8 @@ def capture_ij_window(window_name: str, label: Optional[str] = None) -> str:
 
     Calls WindowManager.getImage(window_name) and IJ.saveAs(imp, "PNG", path) directly
     from Python — no Groovy scripts, no screen capture. Saves actual pixel data including
-    LUT colours and visible overlays (ROI outlines, labels). For raw 16-bit values,
-    use the .tif saved by the Groovy script with analyze_image instead.
+    LUT colours and visible overlays (ROI outlines, labels). Bioimage files that
+    are not already open should use ``prepare_image_source_for_vlm`` first.
 
     Supported output format: PNG only.
 
@@ -208,6 +220,118 @@ def capture_ij_window(window_name: str, label: Optional[str] = None) -> str:
         return f"ERROR: saveAs ran but file not created at {out_path}."
 
     return str(out_path)
+
+
+@tool
+def capture_image_file_via_fiji(image_path: str) -> str:
+    """Open a bioimage source in Fiji, export its displayed plane, and clean up.
+
+    This is the second level of the VLM input fallback.  Fiji's normal ``IJ.open``
+    dispatch is used so installed readers such as Bio-Formats can handle formats
+    beyond PNG/JPEG.  Only image windows created by this call are closed; windows
+    that were already open are never touched.
+
+    The resulting PNG represents Fiji's initially displayed C/Z/T plane (and its
+    LUT), not an automatic projection or a complete review of a stack/time series.
+
+    Args:
+        image_path: Existing file or dataset path to ask Fiji to open. Directory
+                    datasets such as OME-Zarr are attempted and depend on an
+                    installed Fiji reader that accepts the directory path.
+
+    Returns:
+        Absolute path to a PNG preview, or ``ERROR: ...``.
+    """
+    source = Path(image_path).expanduser()
+    if not source.exists():
+        return f"ERROR: File or dataset not found — {image_path}"
+
+    try:
+        WindowManager, IJ = _get_ij_classes()
+    except RuntimeError as exc:
+        return f"ERROR: {exc}"
+
+    before_ids = _image_window_ids(WindowManager)
+    new_ids: set[int] = set()
+    duplicate = None
+    out_path = _capture_path("fiji_preview")
+
+    try:
+        # IJ.open follows Fiji's normal opener/plugin dispatch. In a Fiji
+        # installation this includes Bio-Formats for its registered formats.
+        IJ.open(str(source.resolve()))
+        new_ids = _image_window_ids(WindowManager) - before_ids
+        if not new_ids:
+            return (
+                "ERROR: Fiji did not create a new image window for "
+                f"'{source}'. The format may need a reader/import option, or the "
+                "opener may have shown a dialog instead. Existing windows were left untouched."
+            )
+
+        current = WindowManager.getCurrentImage()
+        try:
+            current_id = int(current.getID()) if current is not None else None
+        except Exception:
+            current_id = None
+        selected_id = current_id if current_id in new_ids else sorted(new_ids)[-1]
+        imp = WindowManager.getImage(selected_id)
+        if imp is None:
+            return "ERROR: Fiji opened the source but no new ImagePlus could be selected."
+
+        duplicate = imp.duplicate()
+        IJ.saveAs(duplicate, "PNG", str(out_path))
+        if not out_path.exists():
+            return f"ERROR: Fiji opened the source but did not create preview {out_path}."
+        return str(out_path)
+    except Exception as exc:
+        return f"ERROR: Fiji could not prepare a VLM preview — {type(exc).__name__}: {exc}"
+    finally:
+        if duplicate is not None:
+            try:
+                duplicate.changes = False
+                duplicate.close()
+            except Exception:
+                pass
+
+        # Re-snapshot in case the opener created more than one series/window.
+        opened_ids = _image_window_ids(WindowManager) - before_ids
+        for image_id in opened_ids | new_ids:
+            try:
+                opened = WindowManager.getImage(image_id)
+                if opened is not None:
+                    opened.changes = False
+                    opened.close()
+            except Exception:
+                pass
+
+
+@tool
+def prepare_image_source_for_vlm(image_source: str) -> str:
+    """Resolve one VLM source using a two-level input fallback.
+
+    Existing PNG/JPG/JPEG files pass through unchanged. Every other existing
+    file or dataset path is opened and captured through Fiji. A non-path string
+    remains unchanged so the VLM judge can treat it as an already-open ImageJ
+    window title and use ``capture_ij_window`` as before.
+    """
+    if not isinstance(image_source, str) or not image_source.strip():
+        return "ERROR: image_source must be a non-empty string."
+
+    source_text = image_source.strip()
+    source = Path(source_text).expanduser()
+    if source.exists():
+        if source.is_file() and source.suffix.lower() in _SUPPORTED_FORMATS:
+            return str(source.resolve())
+        return capture_image_file_via_fiji.invoke({"image_path": str(source)})
+
+    # Match the VLM protocol: strings containing a path separator are paths;
+    # other strings are existing Fiji window titles.
+    separators = {os.path.sep}
+    if os.path.altsep:
+        separators.add(os.path.altsep)
+    if any(separator in source_text for separator in separators):
+        return f"ERROR: File or dataset not found — {source_text}"
+    return source_text
 
 
 @tool
@@ -303,14 +427,15 @@ def build_compilation(
         Original vs segmentation:
             build_compilation(["raw.png", "mask.png"], ["Original", "Segmentation"])
         Before vs after preprocessing:
-            build_compilation(["raw.tif", "denoised.tif"], ["Raw", "Denoised"])
+            build_compilation(["raw.png", "denoised.png"], ["Raw", "Denoised"])
         Multi-condition comparison:
-            build_compilation(["ctrl.tif", "treated.tif"], ["Control", "Treated"])
+            build_compilation(["ctrl.jpg", "treated.jpg"], ["Control", "Treated"])
         Three-panel (raw / mask / overlay):
             build_compilation(["raw.png", "mask.png", "overlay.png"],
                               ["Raw", "Mask", "Overlay"])
 
-    Supported input formats: .png, .tif, .tiff, .jpg, .jpeg
+    Supported input formats: .png, .jpg, .jpeg. Bioimage containers must first
+    be converted with ``prepare_image_source_for_vlm``.
     Output: PNG saved to the vlm_captures directory.
 
     Args:
@@ -392,12 +517,12 @@ def analyze_image(image_path: str, question: str) -> str:
 
     Images are downsampled to ≤1024 px on the longest side before sending
     (aspect ratio preserved, originals untouched, no upscaling).
-    All formats are normalised to 8-bit RGB PNG before the API call —
-    16-bit and 32-bit TIFFs are handled transparently.
+    Inputs are normalised to 8-bit RGB PNG before the API call. Bioimage
+    containers and higher-precision data must first pass through Fiji via
+    ``prepare_image_source_for_vlm``.
 
     Supported input formats:
         .png              — lossless; default output of capture_ij_window / build_compilation
-        .tif / .tiff      — standard IJ output; preferred for quantitative checks
         .jpg / .jpeg      — lossy; fine for structural checks (scale bar, focus, colors)
 
     For comparison tasks (original vs segmentation, before vs after), always use
@@ -405,7 +530,7 @@ def analyze_image(image_path: str, question: str) -> str:
     this tool — it gives the VLM direct spatial reference between the images.
 
     Args:
-        image_path: Absolute path to the image. Accepted: .png, .tif, .tiff, .jpg, .jpeg
+        image_path: Absolute path to a prepared .png, .jpg, or .jpeg image.
         question:   One specific, falsifiable question per call. Include what you
                     expect to see so the model can confirm or deny. Examples:
                       "Left panel is the original, right is the segmentation.
@@ -427,7 +552,7 @@ def analyze_image(image_path: str, question: str) -> str:
         return (
             f"ERROR: Unsupported format '{path.suffix}'. "
             f"Accepted: {', '.join(sorted(_SUPPORTED_FORMATS))}. "
-            f"Convert to TIFF or PNG in your Groovy script first."
+            "Resolve bioimage containers through Fiji first."
         )
 
     try:
