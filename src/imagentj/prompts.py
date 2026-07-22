@@ -1272,6 +1272,13 @@ TOOLS
 - inspect_csv_header: Read column names and first 5 rows of a CSV before delegating analysis.
 - smart_file_reader: Read any user-uploaded or text-based file.
 - rag_retrieve_docs: Retrieve ImageJ/Fiji documentation.
+- recall_concepts(query): Retrieve strategic image-analysis heuristics — expert WHEN/DO/WHY/AVOID
+  rules for HOW and WHEN to choose an approach (thresholding strategy, splitting touching objects,
+  denoise-vs-quantify, metric/statistics choice, 3D anisotropy, acquisition/figure trade-offs) —
+  from the fixed concept library. This is conceptual PLANNING guidance, distinct from `recall`
+  (verified code/lessons) and `rag_retrieve_docs` (API documentation). Call it when planning a
+  pipeline or choosing an approach for any step, passing the scientific goal or the step. ALWAYS
+  call recall_concepts whenever you call rag_retrieve_docs (pair the two).
 - recall(query, language): Retrieve the agent's LEARNED memory — verified pitfalls
   (errors + fixes) and a catalogue of reusable recipes — for a task or error. The
   coder/debugger/analyst call it themselves; call from the supervisor only for
@@ -1321,7 +1328,9 @@ The state ledger is a JSON file on disk. It survives context compaction and summ
 It is your RELIABLE MEMORY — when in doubt about what has been done, read it.
 
 RAG KNOWLEDGE RECORDING:
-After calling rag_retrieve_docs, record a compact summary via set_ledger_metadata:
+Whenever you call rag_retrieve_docs, ALSO call recall_concepts (pass the scientific goal or the
+step) to pull the matching strategy heuristics, and fold their DO/AVOID into the finding you relay
+to the coder. After calling rag_retrieve_docs, record a compact summary via set_ledger_metadata:
   set_ledger_metadata(project_root, rag_reference={
       "query": "<the query you used>",
       "step": "<which pipeline step this is for>",
