@@ -50,6 +50,7 @@ PRICE_TABLE: dict[str, tuple[float, float, float]] = {
     "openai/gpt-5-nano":         (0.05,   0.40,  0.50),
     "openai/gpt-5.2":            (1.75,  14.00,  0.50),
     "openai/gpt-5.3-codex":      (1.75,  14.00,  0.50),
+    "gpt-5.6-luna":              (1.00,   6.00,  0.10),
     "openai/gpt-5":              (2.00,  16.00,  0.50),  # 5.x fallback
     "default":                   (1.00,   3.00,  None),  # fallback, no cache discount
     "gemini-3-flash-preview":    (0.50,   3.00,  None),

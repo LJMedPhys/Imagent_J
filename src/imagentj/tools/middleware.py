@@ -27,6 +27,96 @@ class NarrationReminderMiddleware(AgentMiddleware):
         return handler(request)
 
 
+def _tool_name(tool) -> str:
+    """Return a tool name from a LangChain tool object or tool-schema dict."""
+    name = getattr(tool, "name", None)
+    if isinstance(name, str) and name:
+        return name
+    if isinstance(tool, dict):
+        return tool.get("name") or (tool.get("function") or {}).get("name") or ""
+    return ""
+
+
+class VisionOptionState(AgentState):
+    """Per-chat Vision Judge setting persisted by the graph checkpointer."""
+    vision_enabled: NotRequired[bool]
+
+
+class VisionOptionMiddleware(AgentMiddleware):
+    """Condition the composed system prompt and tools on per-chat Vision state."""
+
+    state_schema = VisionOptionState
+
+    def __init__(self, enabled_prompt: str, disabled_prompt: str):
+        super().__init__()
+        self.enabled_prompt = enabled_prompt
+        self.disabled_prompt = disabled_prompt
+
+    def _disable_vision_in_prompt(self, system_message):
+        """Substitute only the supervisor base inside the composed prompt.
+
+        Deep-agent builds the system message before user middleware runs. Replacing
+        the known Vision-on base with its Vision-off variant preserves every rule
+        deep-agent composed around it (filesystem, skills, tool-use guidance, etc.).
+        """
+        if system_message is None:
+            return SystemMessage(content=self.disabled_prompt)
+
+        original_content = getattr(system_message, "content", system_message)
+        if isinstance(original_content, list):
+            replaced = False
+            combined_content = []
+            for block in original_content:
+                if isinstance(block, str) and not replaced and self.enabled_prompt in block:
+                    block = block.replace(self.enabled_prompt, self.disabled_prompt, 1)
+                    replaced = True
+                elif isinstance(block, dict) and not replaced:
+                    text = block.get("text")
+                    if isinstance(text, str) and self.enabled_prompt in text:
+                        block = {
+                            **block,
+                            "text": text.replace(self.enabled_prompt, self.disabled_prompt, 1),
+                        }
+                        replaced = True
+                combined_content.append(block)
+        else:
+            text = str(original_content or "")
+            combined_content = text.replace(
+                self.enabled_prompt,
+                self.disabled_prompt,
+                1,
+            )
+
+        if hasattr(system_message, "model_copy"):
+            return system_message.model_copy(update={"content": combined_content})
+        if hasattr(system_message, "copy"):
+            return system_message.copy(update={"content": combined_content})
+        return SystemMessage(content=combined_content)
+
+    def wrap_model_call(self, request, handler):
+        state = getattr(request, "state", {}) or {}
+        if isinstance(state, dict):
+            enabled = bool(state.get("vision_enabled", False))
+        else:
+            enabled = bool(getattr(state, "vision_enabled", False))
+
+        if enabled:
+            return handler(request)
+
+        overrides = {
+            "system_message": self._disable_vision_in_prompt(
+                getattr(request, "system_message", None)
+            )
+        }
+
+        current_tools = list(getattr(request, "tools", None) or [])
+        overrides["tools"] = [
+            tool for tool in current_tools if _tool_name(tool) != "vlm_judge"
+        ]
+
+        return handler(request.override(**overrides))
+
+
 class SafeToolLoggerMiddleware(AgentMiddleware):
      def wrap_tool_call(self, request: ToolCallRequest, handler):
         print(f"[TOOL LOG] Calling tool: {request.tool_call['name']}")

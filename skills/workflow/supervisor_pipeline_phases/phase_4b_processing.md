@@ -25,13 +25,24 @@ POSITIVE EXAMPLE (do this):
 
 After executing the single-image verification script:
 
-1. Show the user the result and ask for approval.
-2. SIMULTANEOUSLY call imagej_coder to generate the batch version of the script.
+1. When `vlm_judge` is available in the current tools, for every
+   image-producing result call `vlm_judge` once on the representative
+   verification output before asking for approval. For segmentation pass
+   `[original_path, mask_path]`, labels `["Original", "Mask"]`, and
+   `create_mask_overlay=True` so the judge evaluates an Original / Mask / Overlay
+   compilation. Persist the typed handoff via
+   `set_ledger_metadata(vlm_assessment=...)`. VLM evidence complements rather than
+   replaces the user's visual approval or quantitative checks.
+2. Show the user the result, relay any WARN/FAIL uncertainty, and ask for approval.
+3. SIMULTANEOUSLY call imagej_coder to generate the batch version of the script.
    Tell it: "Batch version of [script_path]: add IJ.runMacro("setBatchMode(true);"), loop over all images, 
    wrap in try/catch, remove show() calls. Do not execute yet."
-3. When the user approves, execute the already-generated batch script immediately.
-4. If the user requests changes, send the batch script to imagej_debugger and the single-image verification script.
-5. Loop until the user approves the single-image script. Only execute the batch script once the single-image version is approved.
+4. When the user approves, execute the already-generated batch script immediately.
+5. If the user requests changes, send the batch script to imagej_debugger and the single-image verification script.
+6. Loop until the user approves the single-image script. When Vision Judge is
+   enabled, re-run `vlm_judge` after a revised result; the ledger replaces the
+   stale verdict for that pipeline step.
+   Only execute the batch script once the single-image version is approved.
 
 ## LEDGER
 

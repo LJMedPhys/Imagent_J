@@ -28,9 +28,14 @@ for the operations where it matters — the plugin recommendation (see step 3).
    - `setup_analysis_workspace(project_name)` (short descriptive name).
    - `extract_image_metadata("/data/<filename>")` — the coder needs bit depth,
      channels, calibration, and `background_mode` or it invents values.
+   - When `vlm_judge` is available in the current tools:
+     `vlm_judge(..., pipeline_step="input_review",
+     image_source="/data/<filename>")` — advisory whole-image context (focus,
+     contrast, background, artifacts, visible structures, target discernibility).
    Then ONE `set_ledger_metadata` recording: `scientific_goal`, `track="fast"`,
    `operating_mode` (default `"script"`), `image_metadata`, `channels` (if
-   multi-channel), `input_files`. That single record is enough — do NOT spread
+   multi-channel), `input_files`, and, when Vision Judge is enabled, the compact
+   `vlm_assessment`. That single record is enough — do NOT spread
    ledger writes across every action the way the full pipeline does.
 
 3. **Decide whether to consult `plugin_manager` — gate on the OPERATION, not on
@@ -60,8 +65,14 @@ for the operations where it matters — the plugin recommendation (see step 3).
    path + error + project_root to `imagej_debugger`, re-execute, save the lesson
    only after a clean run) — same as the full pipeline.
 
-6. **Show and report.** `show_in_imagej_gui` the result and describe what you got
-   in plain, biologist-friendly language.
+6. **Visually judge, show, and report.** After the final image output exists, and
+   only when Vision Judge is enabled, call `vlm_judge` once before declaring
+   completion. For segmentation, pass the exact
+   `[original_path, mask_path]` pair and `create_mask_overlay=True`; for another
+   transformation pass a labelled before/after pair. When called, persist the handoff with
+   `set_ledger_metadata(vlm_assessment=...)`, then `show_in_imagej_gui` the result
+   and describe what you got in plain, biologist-friendly language. A VLM API/file
+   failure is non-fatal; use the normal execution checks and user review instead.
 
 7. **Offer escalation.** If the user now wants quantification across conditions,
    statistics, plots, or a written-up reproducible analysis, switch to the FULL

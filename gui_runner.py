@@ -303,13 +303,13 @@ class SubagentHeartbeatTimer:
             "Data Scientist is adding publication-quality plot settings…",
             "Data Scientist is saving the script…",
         ],
-        # "vlm_judge": [  # VLM disabled
-        #     "Vision AI is capturing the ImageJ window…",
-        #     "Vision AI is building the comparison panel…",
-        #     "Vision AI is sending the image for analysis…",
-        #     "Vision AI is evaluating against expected output…",
-        #     "Vision AI is compiling the verdict…",
-        # ],
+        "vlm_judge": [
+            "Vision Judge is preparing the image preview…",
+            "Vision Judge is building the comparison panel…",
+            "Vision Judge is inspecting visible structures…",
+            "Vision Judge is evaluating the expected output…",
+            "Vision Judge is compiling the visual handoff…",
+        ],
         "qa_reporter": [
             "QA Agent is scanning the project folder…",
             "QA Agent is reading script documentation…",
@@ -355,6 +355,7 @@ class MetricsPanelWidget(QWidget):
     """Shows token/cost/tool metrics for the active conversation."""
 
     qa_toggled = Signal(bool)
+    vision_toggled = Signal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -445,6 +446,22 @@ class MetricsPanelWidget(QWidget):
         qa_desc.setWordWrap(True)
         qa_desc.setStyleSheet("color:#555; font-size:10px; padding-left:18px;")
         agent_layout.addWidget(qa_desc)
+
+        self._vision_checkbox = QCheckBox("Vision Judge")
+        self._vision_checkbox.setChecked(False)
+        self._vision_checkbox.stateChanged.connect(
+            lambda _: self.vision_toggled.emit(self._vision_checkbox.isChecked())
+        )
+        agent_layout.addWidget(self._vision_checkbox)
+
+        vision_desc = QLabel(
+            "Reviews a representative input and every image-producing step.<br>"
+            "<span style='color:#c0392b;'>Adds API calls and token cost.</span>"
+        )
+        vision_desc.setTextFormat(Qt.RichText)
+        vision_desc.setWordWrap(True)
+        vision_desc.setStyleSheet("color:#555; font-size:10px; padding-left:18px;")
+        agent_layout.addWidget(vision_desc)
         root.addWidget(agent_box)
 
         root.addStretch()
@@ -917,6 +934,7 @@ class ImageJAgentGUI(QWidget):
         self.metrics_panel._btn_save.clicked.connect(self._save_report)
         self.metrics_panel._btn_report.clicked.connect(self._open_feedback_dialog)
         self.metrics_panel.qa_toggled.connect(self._on_qa_toggled)
+        self.metrics_panel.vision_toggled.connect(self._on_vision_toggled)
 
         splitter.addWidget(self.history_panel)
         splitter.addWidget(chat_widget)
@@ -983,6 +1001,7 @@ class ImageJAgentGUI(QWidget):
 
         self.chat_scroll.clear_messages()
         self.chat_scroll.add_message('ai', intro_message)
+        self._set_vision_checkbox(False)
 
         self.history_panel.populate(self.history_manager.list_threads())
         self.history_panel.set_active(thread_id)
@@ -1001,7 +1020,9 @@ class ImageJAgentGUI(QWidget):
 
         self.chat_scroll.clear_messages()
 
-        messages = self.history_manager.get_messages_for_display(self.supervisor, thread_id)
+        state_values = self.history_manager.get_state_values(self.supervisor, thread_id)
+        messages = state_values.get("messages", [])
+        self._set_vision_checkbox(bool(state_values.get("vision_enabled", False)))
         if not messages:
             self.chat_scroll.add_message('ai', intro_message)
         else:
@@ -1126,6 +1147,31 @@ class ImageJAgentGUI(QWidget):
             return
         set_qa_enabled(enabled)
 
+    def _on_vision_toggled(self, enabled: bool):
+        if self._agent_is_busy():
+            # Revert the checkbox — can't change while agent is running
+            self.metrics_panel._vision_checkbox.blockSignals(True)
+            self.metrics_panel._vision_checkbox.setChecked(not enabled)
+            self.metrics_panel._vision_checkbox.blockSignals(False)
+            self.set_status("Cannot change Vision Judge setting while agent is running.")
+            return
+
+        config = {"configurable": {"thread_id": self.current_thread_id}}
+        try:
+            self.supervisor.update_state(config, {"vision_enabled": enabled})
+            state = "enabled" if enabled else "disabled"
+            self.set_status(f"Vision Judge {state} for this chat.")
+        except Exception as exc:
+            self._set_vision_checkbox(not enabled)
+            log.exception(f"Failed to update Vision Judge setting: {exc}")
+            self.set_status("Could not update Vision Judge setting for this chat.")
+
+    def _set_vision_checkbox(self, enabled: bool):
+        checkbox = self.metrics_panel._vision_checkbox
+        checkbox.blockSignals(True)
+        checkbox.setChecked(enabled)
+        checkbox.blockSignals(False)
+
 
     # ------------------------------------------------------------------
     # Agent lifecycle
@@ -1233,7 +1279,7 @@ class ImageJAgentGUI(QWidget):
 
         # These are the subagent tool names that run for a long time with no streaming.
         _SUBAGENT_TOOLS = {"imagej_coder", "imagej_debugger",
-                        "python_data_analyst", "qa_reporter"}  # vlm_judge disabled
+                        "python_data_analyst", "qa_reporter", "vlm_judge"}
 
         # Non-subagent tool start messages (short, fire-and-forget tools)
         _TOOL_START = {
@@ -1263,7 +1309,7 @@ class ImageJAgentGUI(QWidget):
             "python_data_analyst":       "Data Scientist finished.",
             "execute_script":            "Script execution complete.",
             "qa_reporter":               "QA report generated.",
-            # "vlm_judge":              "Vision AI inspection complete.",  # VLM disabled
+            "vlm_judge":                 "Vision Judge inspection complete.",
             "setup_analysis_workspace":  "Project workspace ready.",
             "install_fiji_plugin":       "Plugin installed — please restart Fiji.",
         }
@@ -1284,7 +1330,7 @@ class ImageJAgentGUI(QWidget):
             messages = node_data.get("messages", []) if isinstance(node_data, dict) else []
 
             for msg in messages:
-                content    = getattr(msg, "content", "") or ""
+                content    = _extract_text(getattr(msg, "content", "") or "")
                 tool_calls = getattr(msg, "tool_calls", None) or []
                 msg_type   = getattr(msg, "type", "") or ""
 
