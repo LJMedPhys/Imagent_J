@@ -37,9 +37,17 @@ ENABLED = os.environ.get("IMAGENTJ_WATCHDOG", "1") not in ("0", "false", "False"
 # Silence that trips the first LLM check. Long enough that a normal plugin step
 # or model load does not trigger it.
 SILENCE_SECONDS = float(os.environ.get("IMAGENTJ_WATCHDOG_SILENCE", "180"))
-# Total runtime that trips a check regardless of how chatty the script is —
-# catches a loop that prints forever without making progress.
-MAX_RUNTIME_SECONDS = float(os.environ.get("IMAGENTJ_WATCHDOG_MAX_RUNTIME", "1500"))
+# Runtime that trips a check regardless of how chatty the script is. This is the
+# ONLY defence against a runaway that deliberately looks alive: a `while (true)`
+# printing a heartbeat every few seconds never goes silent, so SILENCE_SECONDS can
+# never fire and the silence signal is worthless against it.
+#
+# Kept short (5 min) precisely because it is that case's only tripwire — at the
+# old 25 minutes a spinning loop burned a core for 25 minutes before anyone looked.
+# The cost of checking early is one nano call per run; the backoff below then
+# spaces out re-checks, so a legitimate multi-hour job is judged only a handful of
+# times. Being early here is cheap; being late is not.
+MAX_RUNTIME_SECONDS = float(os.environ.get("IMAGENTJ_WATCHDOG_MAX_RUNTIME", "300"))
 POLL_SECONDS = 5.0
 # After a CONTINUE verdict we back off multiplicatively, so a long legitimate job
 # is not re-judged every few minutes at increasing cost.
@@ -80,6 +88,10 @@ all — loading models, segmenting large stacks, stitching tiles, writing big fi
 Silence alone is NOT evidence of a problem.
 
 Answer KILL only on positive evidence the run is not going to finish usefully:
+  - it CANNOT TERMINATE: the loop driving the work has no reachable exit — a
+    `while (true)` with no break/return/throw that can fire, or a condition that
+    nothing in the loop body can ever make false. This counts NO MATTER HOW MUCH
+    OUTPUT IT PRODUCES.
   - the same output repeats over and over (spinning loop)
   - it is blocked waiting for input that will never arrive (a prompt, a dialog, stdin)
   - it hit a fatal error and is now hanging instead of exiting
@@ -90,15 +102,19 @@ Answer KILL only on positive evidence the run is not going to finish usefully:
     condition it can reach on its own, and it has already waited far longer than
     that event should plausibly take
 
-Distinguish those last two cases carefully, because they look identical from
-outside:
-  - COMPUTING silently (segmenting, filtering, training, writing a big file) has
-    a definite end and will reach it. Silence here means CONTINUE, however long.
-  - WAITING silently on something external that has not happened will never end
-    by itself. Once that wait is clearly out of proportion, KILL — nothing is
-    gained by waiting longer.
-Read the code to tell them apart: a bounded `for` over known work is computing;
-a `while (!condition)` poll with no timeout is waiting.
+CRITICAL — LIVELINESS IS NOT PROGRESS. Output flowing does not mean the run will
+ever finish. A runaway loop frequently prints heartbeats, counters, elapsed times
+or checksums every few seconds, and those numbers change every line, so it does
+NOT look like "the same output repeating". Do not accept "it is actively
+computing and printing" as a reason to continue — that is exactly what a
+non-terminating loop looks like from outside.
+
+Decide termination from the CODE, not from whether output is flowing:
+  - BOUNDED work — `for (i = 0; i < n; i++)`, iterating a fixed list of files,
+    a training run with a set number of epochs — WILL end. CONTINUE, however long
+    it takes and however silent it is.
+  - UNBOUNDED work — `while (true)`, or a poll whose condition nothing can
+    satisfy — will NEVER end. KILL it, however lively its output looks.
 
 Otherwise answer CONTINUE.
 
