@@ -21,6 +21,7 @@ a Python subprocess dies on SIGKILL, whereas an in-JVM Groovy script can only be
 asked to stop (see terminate_groovy_run in tools/script_tools.py for why).
 """
 
+import functools
 import itertools
 import logging
 import os
@@ -57,6 +58,7 @@ class RunHandle:
         purpose: str = "",
         terminator: Optional[Callable[[str], bool]] = None,
         output_provider: Optional[Callable[[], str]] = None,
+        rss_provider: Optional[Callable[[], int]] = None,
     ):
         self.run_id = next(_run_ids)
         self.language = language
@@ -72,6 +74,9 @@ class RunHandle:
         # of pushing chunks; we diff its length to detect progress.
         self._output_provider = output_provider
         self._provider_len = 0
+        # Only out-of-process runs can report this: an in-process Groovy script
+        # has no memory footprint separable from the app's own.
+        self._rss_provider = rss_provider
 
         self._terminator = terminator
         self.status = "running"          # running | finished | stopped | killed
@@ -129,6 +134,15 @@ class RunHandle:
         with self._lock:
             self._refresh_from_provider()
             return time.monotonic() - self._last_output_at
+
+    def rss_bytes(self) -> Optional[int]:
+        """Resident memory of this run's process tree, or None if not measurable."""
+        if self._rss_provider is None:
+            return None
+        try:
+            return self._rss_provider()
+        except Exception:
+            return None
 
     @property
     def terminated(self) -> bool:
@@ -254,6 +268,58 @@ HARD_TIMEOUT_SECONDS = int(os.environ.get("IMAGENTJ_SCRIPT_HARD_TIMEOUT", "7200"
 _TERM_GRACE_SECONDS = 3.0
 
 
+@functools.lru_cache(maxsize=1)
+def container_memory_limit() -> Optional[int]:
+    """
+    The container's memory cap in bytes, or None if unlimited/unreadable.
+
+    This is the ceiling the watchdog races: exceed it and the kernel OOM-kills
+    the whole container, taking the app — and the watchdog itself — with it.
+    """
+    for path in (
+        "/sys/fs/cgroup/memory.max",                     # cgroup v2
+        "/sys/fs/cgroup/memory/memory.limit_in_bytes",   # cgroup v1
+    ):
+        try:
+            with open(path) as handle:
+                raw = handle.read().strip()
+        except OSError:
+            continue
+        if raw == "max":
+            return None
+        try:
+            value = int(raw)
+        except ValueError:
+            continue
+        # cgroup v1 reports a huge sentinel rather than "max" when unlimited.
+        if value <= 0 or value >= (1 << 62):
+            return None
+        return value
+    return None
+
+
+def process_tree_rss(pid: int) -> int:
+    """
+    Resident memory of a process AND everything it spawned, in bytes.
+
+    The tree, not the process: a script that leaks inside a multiprocessing pool
+    shows almost nothing on the parent while the container fills up.
+    """
+    try:
+        import psutil
+
+        proc = psutil.Process(pid)
+        total = proc.memory_info().rss
+        for child in proc.children(recursive=True):
+            try:
+                total += child.memory_info().rss
+            except psutil.Error:
+                pass  # died mid-walk; its memory is already gone
+        return total
+    except Exception:
+        return 0
+
+
 def terminate_process_group(proc: subprocess.Popen, grace: float = _TERM_GRACE_SECONDS) -> bool:
     """
     Signal a run's whole process group down. Returns True once it is gone.
@@ -344,6 +410,7 @@ class SupervisedProcess:
             code=code,
             purpose=purpose,
             terminator=lambda reason, p=self.proc: terminate_process_group(p),
+            rss_provider=lambda pid=self.proc.pid: process_tree_rss(pid),
         ))
         self._out: list[str] = []
         self._err: list[str] = []

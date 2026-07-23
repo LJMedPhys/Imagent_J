@@ -56,6 +56,19 @@ BACKOFF_FACTOR = 2.0
 # after the third check effectively stops being watched at all.
 MAX_CHECK_GAP_SECONDS = float(os.environ.get("IMAGENTJ_WATCHDOG_MAX_GAP", "600"))
 
+# Fraction of the container's memory limit at which a run is killed outright.
+#
+# This is a THIRD tripwire, and unlike silence and runtime it does not consult the
+# LLM. Two reasons. There is nothing to judge — a run about to exhaust the
+# container must die whether or not its logic is sound. And we are racing the
+# kernel's OOM killer, which shows no such restraint: it kills the whole container,
+# taking the app, the user's open images, and this watchdog with it. A verdict call
+# takes seconds we may not have.
+#
+# Only out-of-process runs are covered; an in-process Groovy script has no
+# footprint separable from the app's own.
+MEMORY_FRACTION = float(os.environ.get("IMAGENTJ_WATCHDOG_MEM_FRACTION", "0.85"))
+
 _MAX_CODE_CHARS = 3_000
 _MAX_TAIL_CHARS = 2_500
 
@@ -184,6 +197,23 @@ def _ask_llm(handle: "run_control.RunHandle") -> tuple[bool, str]:
     return False, first
 
 
+def _memory_tripped(handle: "run_control.RunHandle") -> Optional[str]:
+    """Is this run about to exhaust the container? Returns a reason, or None."""
+    limit = run_control.container_memory_limit()
+    if limit is None or MEMORY_FRACTION <= 0:
+        return None
+    rss = handle.rss_bytes()
+    if rss is None:
+        return None
+    if rss < limit * MEMORY_FRACTION:
+        return None
+    gib = 1024 ** 3
+    return (
+        f"using {rss / gib:.1f} GiB of the container's {limit / gib:.1f} GiB limit "
+        f"({rss / limit:.0%}) — killed to stop the kernel OOM-killing the whole app"
+    )
+
+
 def _supervise(handle: "run_control.RunHandle") -> None:
     """Watch one run until it finishes or gets killed."""
     silence_threshold = SILENCE_SECONDS
@@ -195,6 +225,19 @@ def _supervise(handle: "run_control.RunHandle") -> None:
         if handle.terminated or handle.status == "finished":
             return
         if handle not in run_control.active_runs():
+            return
+
+        # Memory first, and without asking the LLM — see MEMORY_FRACTION.
+        memory_reason = _memory_tripped(handle)
+        if memory_reason:
+            log.warning("watchdog: killing run %s — %s", handle.run_id, memory_reason)
+            killed = handle.terminate(memory_reason, by="watchdog")
+            _notify(
+                f"Watchdog stopped the running {handle.language} script: {memory_reason}"
+                if killed else
+                f"Watchdog tried to stop the running {handle.language} script "
+                f"({memory_reason}) but it did not respond — the container may still OOM."
+            )
             return
 
         silent = handle.silent_for()
