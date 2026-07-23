@@ -1,27 +1,13 @@
 import os
 import pandas as pd
 import re
-import signal
-import subprocess
 import sys
 import textwrap
-import time
 import io
-import threading
 from langchain_core.tools import tool
 import tempfile
 
 from imagentj import run_control
-
-# Backstop only, for when the watchdog is disabled or its LLM is unreachable — a
-# run nothing is watching must still not hang the agent forever.
-#
-# Deliberately generous (2h). The watchdog is the real defence and kills a stuck
-# run within minutes; this cap exists solely to bound the unwatched case. Setting
-# it tight would silently kill the legitimate long jobs this tool is used for
-# (cellpose over a big dataset, stitching, DeepImageJ) hours before they finish,
-# overriding a watchdog that had correctly judged them healthy.
-_HARD_TIMEOUT_SECONDS = int(os.environ.get("IMAGENTJ_SCRIPT_HARD_TIMEOUT", "7200"))
 
 # ---------------------------------------------------------------------------
 # Conda envs the Python agent may execute in.
@@ -77,80 +63,6 @@ def _resolve_interpreter(env: str) -> tuple[str | None, str | None]:
             f"(expected {interpreter}). Rebuild the image or use the 'main' env."
         )
     return interpreter, None
-
-# ---------------------------------------------------------------------------
-# Subprocess termination
-#
-# Scripts here routinely fan out into child processes — multiprocessing pools,
-# cellpose/stardist workers, napari. proc.kill() only reaps the direct child and
-# leaves those orphaned and still burning CPU/GPU, so every run gets its own
-# session (start_new_session=True) and we signal the whole process group.
-#
-# SIGTERM first so a script can unwind (flush files, release the GPU), SIGKILL
-# after a grace period for anything ignoring it.
-# ---------------------------------------------------------------------------
-_TERM_GRACE_SECONDS = 3.0
-
-
-def _terminate_process_group(proc: subprocess.Popen, grace: float = _TERM_GRACE_SECONDS) -> bool:
-    """Signal a run's whole process group down. Returns True once it is gone."""
-    try:
-        pgid = os.getpgid(proc.pid)
-    except (ProcessLookupError, OSError):
-        return True  # already reaped
-
-    # SIGTERM the group and give the direct child time to unwind.
-    try:
-        os.killpg(pgid, signal.SIGTERM)
-    except (ProcessLookupError, OSError):
-        return True
-    deadline = time.monotonic() + grace
-    while time.monotonic() < deadline and proc.poll() is None:
-        time.sleep(0.05)
-
-    # Then SIGKILL the group regardless. The child exiting does not mean the group
-    # is empty — a grandchild that ignores SIGTERM would otherwise be left running,
-    # which is exactly the orphaned-worker case this function exists to prevent.
-    try:
-        os.killpg(pgid, signal.SIGKILL)
-    except (ProcessLookupError, OSError):
-        pass
-
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and proc.poll() is None:
-        time.sleep(0.05)
-    return proc.poll() is not None
-
-
-def kill_running_processes() -> int:
-    """
-    Kill every in-flight run. Retained for callers that just want a count;
-    run_control.terminate_all() is the richer API the Stop button uses.
-    """
-    handles = run_control.terminate_all("Stopped by user", by="user")
-    return len(handles)
-
-
-def _drain(stream, sink: list[str], handle: "run_control.RunHandle", label: str) -> None:
-    """
-    Pump one pipe into both the final transcript and the live handle.
-
-    Reading in a thread is what makes a running script observable at all, and it
-    also removes the pipe-buffer deadlock the old communicate() call papered over
-    with its timeout: a script printing more than ~64 KB to stderr used to block
-    forever once the pipe filled.
-    """
-    try:
-        for line in iter(stream.readline, ""):
-            sink.append(line)
-            handle.append_output(line if label == "out" else f"[stderr] {line}")
-    except Exception:
-        pass
-    finally:
-        try:
-            stream.close()
-        except Exception:
-            pass
 
 @tool
 def inspect_csv_header(file_path: str):
@@ -269,88 +181,36 @@ def run_python_code(code: str, output_directory: str, purpose: str = ""):
         f.write(full_script)
 
     try:
-        proc = subprocess.Popen(
-            [interpreter, script_path],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,               # line-buffered: the watchdog sees progress promptly
-            start_new_session=True,  # own process group, so we can kill the whole tree
+        run = run_control.SupervisedProcess(
+            [interpreter, script_path], language="python", code=code, purpose=purpose,
         )
     except Exception as e:
         return f"SYSTEM ERROR: {str(e)}"
 
-    handle = run_control.register(run_control.RunHandle(
-        language="python",
-        code=code,
-        purpose=purpose,
-        terminator=lambda reason, p=proc: _terminate_process_group(p),
-    ))
-
-    out_lines: list[str] = []
-    err_lines: list[str] = []
-    readers = [
-        threading.Thread(target=_drain, args=(proc.stdout, out_lines, handle, "out"), daemon=True),
-        threading.Thread(target=_drain, args=(proc.stderr, err_lines, handle, "err"), daemon=True),
-    ]
-    for reader in readers:
-        reader.start()
-
-    try:
+    with run:
         try:
-            proc.wait(timeout=_HARD_TIMEOUT_SECONDS)
-        except subprocess.TimeoutExpired:
-            _terminate_process_group(proc)
-            handle.terminate(
-                f"Exceeded the hard {_HARD_TIMEOUT_SECONDS}s execution limit", by="watchdog"
-            )
-        for reader in readers:
-            reader.join(timeout=5.0)
+            run.wait()
+            stdout, stderr = run.stdout, run.stderr
 
-        stdout = "".join(out_lines)
-        stderr = "".join(err_lines)
+            if run.handle.terminated:
+                return (
+                    f"{run_control.stop_headline(run.handle)} (env='{env}').\n"
+                    f"{run_control.stop_guidance(run.handle)}\n"
+                    f"Partial STDOUT before termination:\n{stdout[-2000:]}\n"
+                    f"Partial STDERR:\n{stderr[-1000:]}"
+                )
 
-        # A run we took down deliberately must NOT read as a crash. The debugger
-        # agent treats crash output as something to repair, so a user pressing Stop
-        # would otherwise kick off a pointless fix-the-nonexistent-bug loop.
-        if handle.status == "stopped":
-            return (
-                f"EXECUTION STOPPED BY USER (env='{env}').\n"
-                f"The script was terminated on request — this is NOT a bug to fix. "
-                f"Do not retry or debug it; wait for the user's next instruction.\n"
-                f"Partial STDOUT before termination:\n{stdout[-2000:]}"
-            )
-        if handle.status == "killed":
-            return (
-                f"EXECUTION TERMINATED BY WATCHDOG (env='{env}').\n"
-                f"Reason: {handle.kill_reason}\n"
-                f"This was not a normal crash — the script was killed while running "
-                f"because it appeared stuck or misbehaving. Review the reason and the "
-                f"partial output below, then decide whether to fix the script, change "
-                f"approach, or ask the user.\n"
-                f"Partial STDOUT before termination:\n{stdout[-2000:]}\n"
-                f"Partial STDERR:\n{stderr[-1000:]}"
-            )
-
-        if proc.returncode != 0:
-            return (
-                f"CRASH DETECTED IN PYTHON (env='{env}'):\n"
-                f"STDOUT: {stdout}\nSTDERR: {stderr}"
-            )
-        # The leading "SUCCESS:" is load-bearing: learned_memory._run_succeeded gates the
-        # background Librarian on out.lstrip().startswith("SUCCESS:"). Keep the colon
-        # immediately after SUCCESS or Python runs stop being learned as recipes.
-        return f"SUCCESS: (env='{env}')\n{stdout}"
-    except Exception as e:
-        return f"SYSTEM ERROR: {str(e)}"
-    finally:
-        # Leave no orphan behind: if we exit this frame for any reason while the
-        # child is still up (an exception in our own bookkeeping, say), take the
-        # process group down rather than let it keep running unsupervised.
-        if proc.poll() is None:
-            _terminate_process_group(proc, grace=0.5)
-        handle.mark_finished()
-        run_control.unregister(handle)
+            if run.returncode != 0:
+                return (
+                    f"CRASH DETECTED IN PYTHON (env='{env}'):\n"
+                    f"STDOUT: {stdout}\nSTDERR: {stderr}"
+                )
+            # The leading "SUCCESS:" is load-bearing: learned_memory._run_succeeded gates the
+            # background Librarian on out.lstrip().startswith("SUCCESS:"). Keep the colon
+            # immediately after SUCCESS or Python runs stop being learned as recipes.
+            return f"SUCCESS: (env='{env}')\n{stdout}"
+        except Exception as e:
+            return f"SYSTEM ERROR: {str(e)}"
 
 
 

@@ -573,8 +573,7 @@ def _fix_line_numbers(text: str) -> str:
     return _SCRIPT_LINE_RE.sub(
         lambda m: f"{m.group(1)}{max(int(m.group(2)) - _PREFIX_LINES, 1)}", text
     )
-# Backstop for an unwatched run; see the note in analyst_tools for why it is generous.
-_HARD_TIMEOUT_SECONDS = int(os.environ.get("IMAGENTJ_SCRIPT_HARD_TIMEOUT", "7200"))
+_HARD_TIMEOUT_SECONDS = run_control.HARD_TIMEOUT_SECONDS
 
 
 def _signal_imagej_abort() -> None:
@@ -796,19 +795,8 @@ def _stopped_report(handle, out_stream, ij_log_before, monitor, detached: bool) 
         ij_log = ""
 
     by_user = handle.killed_by == "user"
-    headline = (
-        "EXECUTION STOPPED BY USER" if by_user
-        else "EXECUTION TERMINATED BY WATCHDOG"
-    )
-    guidance = (
-        "The user pressed Stop — this is NOT a bug to fix. Do not retry or debug it; "
-        "wait for the user's next instruction."
-        if by_user else
-        f"Reason: {handle.kill_reason}\n"
-        "The script was killed while running because it appeared stuck or misbehaving. "
-        "This is not a normal crash — review the reason and partial output, then decide "
-        "whether to fix the script, change approach, or ask the user."
-    )
+    headline = run_control.stop_headline(handle)
+    guidance = run_control.stop_guidance(handle)
 
     tail = (
         "Groovy script ignored the abort and was detached"
@@ -1070,8 +1058,15 @@ def _should_run_in_subprocess(code: str) -> tuple[bool, str]:
 def _batch_env() -> dict:
     """Environment for the worker: smaller heap, no nested watchdog, importable src."""
     env = os.environ.copy()
-    # Two 6g JVMs do not fit in this container. The batch JVM gets a smaller heap.
-    env["IMAGENTJ_JVM_HEAP"] = os.environ.get("IMAGENTJ_BATCH_HEAP", "3g")
+    # The batch JVM's heap must fit ALONGSIDE the app's, inside the container limit:
+    # IMAGENTJ_JVM_HEAP (app, 6g default) + this must stay under the container's
+    # memory cap (8g by default here), with room for Python, napari and the OS.
+    #
+    # Undersizing here is the safe direction. A batch JVM that exhausts its own heap
+    # fails only that script, and the app carries on; a container OOM kills the whole
+    # app — the exact outcome running batch work out-of-process is meant to prevent.
+    # Raise IMAGENTJ_BATCH_HEAP (and the container limit) for memory-hungry batches.
+    env["IMAGENTJ_JVM_HEAP"] = os.environ.get("IMAGENTJ_BATCH_HEAP", "2g")
     env["IMAGENTJ_WATCHDOG"] = "0"      # the parent supervises this run
     env["PYTHONUNBUFFERED"] = "1"       # so the watchdog sees progress promptly
     src_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -1094,99 +1089,54 @@ def _run_groovy_subprocess(code: str, purpose: str = "") -> str:
     Reports exactly like the in-process path (the worker reuses run_groovy_script),
     except that a stop here is a genuine kill — never "it may still be running".
     """
-    import subprocess
     import sys
     import tempfile
-    from .analyst_tools import _drain, _terminate_process_group
 
     script_path = os.path.join(
         tempfile.gettempdir(), f"imagentj_batch_{os.getpid()}_{int(time.time() * 1000)}.groovy"
     )
-    with open(script_path, "w", encoding="utf-8") as handle_file:
-        handle_file.write(code)
+    with open(script_path, "w", encoding="utf-8") as script_file:
+        script_file.write(code)
 
     try:
-        proc = subprocess.Popen(
+        run = run_control.SupervisedProcess(
             [sys.executable, "-m", "imagentj.groovy_worker", script_path, purpose],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-            start_new_session=True,   # own process group, so the kill takes the JVM too
-            env=_batch_env(),
+            language="groovy", code=code, purpose=purpose, env=_batch_env(),
         )
     except Exception as exc:
         return f"SUMMARY: ERROR — could not start batch Fiji: {exc}\nSTATUS: ERROR\nLANGUAGE: Groovy"
 
-    handle = run_control.register(run_control.RunHandle(
-        language="groovy",
-        code=code,
-        purpose=purpose,
-        terminator=lambda reason, p=proc: _terminate_process_group(p),
-    ))
-
-    out_lines: list[str] = []
-    err_lines: list[str] = []
-    readers = [
-        threading.Thread(target=_drain, args=(proc.stdout, out_lines, handle, "out"), daemon=True),
-        threading.Thread(target=_drain, args=(proc.stderr, err_lines, handle, "err"), daemon=True),
-    ]
-    for reader in readers:
-        reader.start()
-
     try:
-        try:
-            proc.wait(timeout=_HARD_TIMEOUT_SECONDS)
-        except subprocess.TimeoutExpired:
-            _terminate_process_group(proc)
-            handle.terminate(
-                f"Exceeded the hard {_HARD_TIMEOUT_SECONDS}s execution limit", by="watchdog"
-            )
-        for reader in readers:
-            reader.join(timeout=5.0)
+        with run:
+            run.wait()
+            stdout, stderr = run.stdout, run.stderr
 
-        stdout = "".join(out_lines)
-        stderr = "".join(err_lines)
+            if run.handle.terminated:
+                by_user = run.handle.killed_by == "user"
+                return "\n".join([
+                    f"SUMMARY: {run_control.stop_headline(run.handle)} — batch Groovy process killed",
+                    f"STATUS: {'STOPPED' if by_user else 'TERMINATED'}",
+                    "LANGUAGE: Groovy",
+                    run_control.stop_guidance(run.handle),
+                    "The script ran in its own Fiji process and was killed outright, so it is "
+                    "definitely no longer running. The app's own Fiji and its open images were "
+                    "not affected.",
+                    f"PARTIAL_STDOUT:\n{_truncate(stdout, 1500)}" if stdout.strip() else "PARTIAL_STDOUT: (none)",
+                ])
 
-        if handle.terminated:
-            by_user = handle.killed_by == "user"
-            headline = "EXECUTION STOPPED BY USER" if by_user else "EXECUTION TERMINATED BY WATCHDOG"
-            guidance = (
-                "The user pressed Stop — this is NOT a bug to fix. Do not retry or debug it; "
-                "wait for the user's next instruction."
-                if by_user else
-                f"Reason: {handle.kill_reason}\nThe script was killed because it appeared "
-                "stuck or misbehaving. This is not a normal crash — review the reason and "
-                "partial output, then decide whether to fix it, change approach, or ask."
-            )
+            report = _extract_worker_report(stdout)
+            if report:
+                return report
+
+            # No report means the worker died before finishing — surface why.
             return "\n".join([
-                f"SUMMARY: {headline} — batch Groovy process killed",
-                f"STATUS: {'STOPPED' if by_user else 'TERMINATED'}",
+                f"SUMMARY: ERROR — batch Fiji exited without a report (code {run.returncode})",
+                "STATUS: ERROR",
                 "LANGUAGE: Groovy",
-                guidance,
-                "The script ran in its own Fiji process and was killed outright, so it is "
-                "definitely no longer running. The app's own Fiji and its open images were "
-                "not affected.",
-                f"PARTIAL_STDOUT:\n{_truncate(stdout, 1500)}" if stdout.strip() else "PARTIAL_STDOUT: (none)",
+                f"STDERR:\n{_truncate(stderr, 1500)}" if stderr.strip() else "STDERR: (none)",
+                f"STDOUT:\n{_truncate(stdout, 800)}" if stdout.strip() else "STDOUT: (none)",
             ])
-
-        report = _extract_worker_report(stdout)
-        if report:
-            return report
-
-        # No report means the worker died before finishing — surface why.
-        return "\n".join([
-            f"SUMMARY: ERROR — batch Fiji exited without a report (code {proc.returncode})",
-            "STATUS: ERROR",
-            "LANGUAGE: Groovy",
-            f"STDERR:\n{_truncate(stderr, 1500)}" if stderr.strip() else "STDERR: (none)",
-            f"STDOUT:\n{_truncate(stdout, 800)}" if stdout.strip() else "STDOUT: (none)",
-        ])
     finally:
-        if proc.poll() is None:
-            _terminate_process_group(proc, grace=0.5)
-        handle.mark_finished()
-        run_control.unregister(handle)
         try:
             os.remove(script_path)
         except OSError:
@@ -1235,31 +1185,16 @@ def run_script_safe(language: str, code: str, max_retries: int = 3, purpose: str
 
     ij = get_ij()
 
-    WindowManager = JClass("ij.WindowManager")
-
-    exec_tool = run_groovy_script
-    last_output = ""
-
-    # Snapshot open windows
-    windows_before = set(WindowManager.getImageTitles())
-
-    # Run the script
     try:
-        output = exec_tool(code, ij, purpose)
+        last_output = run_groovy_script(code, ij, purpose)
     except Exception as e:
-        output = f"Exception during execution: {e}"
-
-    last_output = output
+        last_output = f"Exception during execution: {e}"
 
     # A deliberate stop is not a failed run — return it untouched so the
     # zero-object heuristic below cannot relabel it as an ERROR to be debugged.
     if last_output.lstrip().startswith(("SUMMARY: EXECUTION STOPPED",
                                         "SUMMARY: EXECUTION TERMINATED")):
         return last_output
-
-    # Snapshot new windows
-    windows_after = set(WindowManager.getImageTitles())
-    new_windows = windows_after - windows_before
 
     # Determine failure — check both explicit errors and zero-object outcomes
     output_lower = last_output.lower()

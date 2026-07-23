@@ -27,7 +27,6 @@ from queue import Queue
 from imagentj.agents import init_agent, set_qa_enabled
 from imagentj.imagej_context import get_ij
 from imagentj.chat_history import ChatHistoryManager
-from imagentj.tools.analyst_tools import kill_running_processes
 import imagentj.stop_signal as stop_signal
 from imagentj import run_control
 from imagentj import watchdog

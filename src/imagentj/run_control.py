@@ -23,9 +23,12 @@ asked to stop (see terminate_groovy_run in tools/script_tools.py for why).
 
 import itertools
 import logging
+import os
+import signal
+import subprocess
 import threading
 import time
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
 log = logging.getLogger(__name__)
 
@@ -231,3 +234,188 @@ def terminate_all(reason: str = "Stopped by user", by: str = "user") -> list[Run
     for handle in handles:
         handle.terminate(reason, by=by)
     return handles
+
+
+# ── Supervised child processes ───────────────────────────────────────────
+#
+# Both execution paths — Python analyst scripts and batch Groovy — run their work
+# in a child process, and both need exactly the same machinery around it. It lives
+# here, next to the registry, rather than being written twice and imported across
+# module privates.
+
+# Backstop for a run nothing is watching; the watchdog is the real defence and
+# normally intervenes long before this. Deliberately generous (2h): setting it
+# tight would silently kill the legitimate long jobs these tools exist for
+# (cellpose over a big dataset, stitching, DeepImageJ) hours before they finish.
+HARD_TIMEOUT_SECONDS = int(os.environ.get("IMAGENTJ_SCRIPT_HARD_TIMEOUT", "7200"))
+
+# SIGTERM first so a script can unwind (flush files, release the GPU), SIGKILL
+# after a grace period for anything ignoring it.
+_TERM_GRACE_SECONDS = 3.0
+
+
+def terminate_process_group(proc: subprocess.Popen, grace: float = _TERM_GRACE_SECONDS) -> bool:
+    """
+    Signal a run's whole process group down. Returns True once it is gone.
+
+    The group, not the process: these scripts fan out into multiprocessing pools
+    and cellpose/stardist workers, and killing only the direct child leaves those
+    orphaned and still burning CPU/GPU.
+    """
+    try:
+        pgid = os.getpgid(proc.pid)
+    except (ProcessLookupError, OSError):
+        return True  # already reaped
+
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except (ProcessLookupError, OSError):
+        return True
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline and proc.poll() is None:
+        time.sleep(0.05)
+
+    # SIGKILL the group regardless. The child exiting does not mean the group is
+    # empty — a grandchild ignoring SIGTERM would otherwise survive, which is
+    # exactly the orphan case this exists to prevent.
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, OSError):
+        pass
+
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and proc.poll() is None:
+        time.sleep(0.05)
+    return proc.poll() is not None
+
+
+def _drain_stream(stream, sink: list[str], handle: RunHandle, label: str) -> None:
+    """
+    Pump one pipe into both the final transcript and the live handle.
+
+    Reading in a thread is what makes a running script observable at all, and it
+    also removes the pipe-buffer deadlock a plain communicate(timeout=...) hides:
+    a script printing more than ~64 KB to stderr blocks forever once the pipe fills.
+    """
+    try:
+        for line in iter(stream.readline, ""):
+            sink.append(line)
+            handle.append_output(line if label == "out" else f"[stderr] {line}")
+    except Exception:
+        pass
+    finally:
+        try:
+            stream.close()
+        except Exception:
+            pass
+
+
+class SupervisedProcess:
+    """
+    A child process wired into the run registry: killable by the Stop button and
+    the watchdog, with its output streamed live so silence is meaningful.
+
+    Use as a context manager — __exit__ guarantees no orphan survives an early
+    return or an exception in the caller's own bookkeeping.
+    """
+
+    def __init__(
+        self,
+        cmd: Sequence[str],
+        *,
+        language: str,
+        code: str,
+        purpose: str = "",
+        env: Optional[dict] = None,
+        timeout: Optional[float] = None,
+    ):
+        self.timeout = timeout if timeout is not None else HARD_TIMEOUT_SECONDS
+        self.proc = subprocess.Popen(
+            list(cmd),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,               # line-buffered: the watchdog sees progress promptly
+            start_new_session=True,  # own process group, so the kill takes the whole tree
+            env=env,
+        )
+        self.handle = register(RunHandle(
+            language=language,
+            code=code,
+            purpose=purpose,
+            terminator=lambda reason, p=self.proc: terminate_process_group(p),
+        ))
+        self._out: list[str] = []
+        self._err: list[str] = []
+        self._readers = [
+            threading.Thread(target=_drain_stream, args=(self.proc.stdout, self._out, self.handle, "out"), daemon=True),
+            threading.Thread(target=_drain_stream, args=(self.proc.stderr, self._err, self.handle, "err"), daemon=True),
+        ]
+        for reader in self._readers:
+            reader.start()
+
+    def wait(self) -> None:
+        """Block until the child exits, bounded by the hard timeout."""
+        try:
+            self.proc.wait(timeout=self.timeout)
+        except subprocess.TimeoutExpired:
+            terminate_process_group(self.proc)
+            self.handle.terminate(
+                f"Exceeded the hard {self.timeout}s execution limit", by="watchdog"
+            )
+        for reader in self._readers:
+            reader.join(timeout=5.0)
+
+    @property
+    def stdout(self) -> str:
+        return "".join(self._out)
+
+    @property
+    def stderr(self) -> str:
+        return "".join(self._err)
+
+    @property
+    def returncode(self):
+        return self.proc.returncode
+
+    def close(self) -> None:
+        if self.proc.poll() is None:
+            terminate_process_group(self.proc, grace=0.5)
+        self.handle.mark_finished()
+        unregister(self.handle)
+
+    def __enter__(self) -> "SupervisedProcess":
+        return self
+
+    def __exit__(self, *exc_info) -> bool:
+        self.close()
+        return False
+
+
+# ── Reporting a deliberate stop ──────────────────────────────────────────
+#
+# A stop must never read like a crash: the debugger agent treats crash output as
+# something to repair, so a user pressing Stop would otherwise kick off a
+# fix-the-nonexistent-bug loop. Every execution path says this the same way.
+
+def stop_headline(handle: RunHandle) -> str:
+    return (
+        "EXECUTION STOPPED BY USER" if handle.killed_by == "user"
+        else "EXECUTION TERMINATED BY WATCHDOG"
+    )
+
+
+def stop_guidance(handle: RunHandle) -> str:
+    """Tell the agent what a stopped run means and what to do about it."""
+    if handle.killed_by == "user":
+        return (
+            "The user pressed Stop — this is NOT a bug to fix. Do not retry or "
+            "debug it; wait for the user's next instruction."
+        )
+    return (
+        f"Reason: {handle.kill_reason}\n"
+        "The script was killed while running because it appeared stuck or "
+        "misbehaving. This is not a normal crash — review the reason and the "
+        "partial output, then decide whether to fix the script, change approach, "
+        "or ask the user."
+    )
