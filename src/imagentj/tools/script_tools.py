@@ -719,15 +719,46 @@ def _abort_groovy(runner: "_GroovyRunner") -> bool:
     return False
 
 
-def _await_groovy(runner: "_GroovyRunner", handle: "run_control.RunHandle") -> bool:
+def _await_groovy(
+    runner: "_GroovyRunner",
+    handle: "run_control.RunHandle",
+    live_sink=None,
+    live_output=None,
+) -> bool:
     """
     Wait for the script, honouring stop requests. Returns True if we detached from
     a script that refused to stop.
+
+    `live_sink` matters only for the batch-subprocess path: the script's output is
+    captured into JVM buffers, so without echoing it to real stdout the parent
+    process would see total silence and its watchdog would judge a perfectly
+    healthy long batch job as stuck.
     """
     deadline = time.monotonic() + _HARD_TIMEOUT_SECONDS
+    emitted = 0
+
+    def _echo() -> None:
+        nonlocal emitted
+        if live_sink is None or live_output is None:
+            return
+        try:
+            current = live_output()
+            # IJ.log('\\Clear') makes this shrink, so resync instead of slicing
+            # with a stale offset (which would emit garbage or nothing at all).
+            if len(current) < emitted:
+                emitted = 0
+            if len(current) > emitted:
+                live_sink.write(current[emitted:])
+                live_sink.flush()
+                emitted = len(current)
+        except Exception:
+            pass
+
     while True:
         runner.track_thread()
+        _echo()
         if runner.done and not handle.terminated:
+            _echo()
             return False
         # The Stop button trips the global signal; the watchdog flips the handle
         # from its own thread. Both mean stop waiting on this script.
@@ -805,7 +836,7 @@ def _stopped_report(handle, out_stream, ij_log_before, monitor, detached: bool) 
     return "\n".join(parts)
 
 
-def run_groovy_script(script: str, ij, purpose: str = "") -> str:
+def run_groovy_script(script: str, ij, purpose: str = "", live_sink=None) -> str:
     """
     Execute a Groovy script in ImageJ/Fiji, capturing all output channels
     and classifying windows into errors vs. results vs. info.
@@ -813,10 +844,10 @@ def run_groovy_script(script: str, ij, purpose: str = "") -> str:
     Thin wrapper over _run_groovy_script so the @ThreadInterrupt prefix's line
     shift is corrected at exactly one place, on every return path.
     """
-    return _fix_line_numbers(_run_groovy_script(script, ij, purpose))
+    return _fix_line_numbers(_run_groovy_script(script, ij, purpose, live_sink))
 
 
-def _run_groovy_script(script: str, ij, purpose: str = "") -> str:
+def _run_groovy_script(script: str, ij, purpose: str = "", live_sink=None) -> str:
     System                = jpype.JClass("java.lang.System")
     ByteArrayOutputStream = jpype.JClass("java.io.ByteArrayOutputStream")
     PrintStream           = jpype.JClass("java.io.PrintStream")
@@ -861,7 +892,7 @@ def _run_groovy_script(script: str, ij, purpose: str = "") -> str:
     ))
 
     try:
-        detached = _await_groovy(runner, handle)
+        detached = _await_groovy(runner, handle, live_sink, _live_output)
 
         # Stopped runs report as stopped whether or not the abort landed — a
         # script that aborted cleanly must not come back looking like a normal
@@ -979,6 +1010,189 @@ def _run_groovy_script(script: str, ij, purpose: str = "") -> str:
         # Clear any ESC we latched, so the next script does not inherit an abort.
         _reset_imagej_escape()
 
+# ── Batch execution in a separate, killable Fiji ──────────────────────────
+#
+# Groovy in the app's own JVM cannot be force-killed. Groovy in its own PROCESS
+# can — SIGKILL always wins. The catch is that a second Fiji sees none of the
+# user's open images, so this is not a blanket replacement.
+#
+# The saving asymmetry: the scripts that actually hang are batch jobs, and batch
+# jobs source their own images from disk. A script that reads TIFFs in a loop and
+# writes a CSV does not care what the user has open, so it can run in a throwaway
+# Fiji and be killed outright. Scripts that DO need live state are short and
+# interactive, and cooperative interrupt already handles those.
+#
+# Routing is deliberately conservative: in-process is the default, and a script is
+# only sent to a subprocess when it visibly opens its own inputs and never touches
+# the live image. Mis-routing a live-state script would break it, whereas
+# mis-routing a batch script only costs killability (today's behaviour).
+
+_EXEC_OVERRIDE_RE = re.compile(
+    r"^\s*//\s*imagentj-exec:\s*(inprocess|subprocess)\s*$", re.IGNORECASE | re.MULTILINE
+)
+
+# Reading any of these means the script depends on state only the app's Fiji has.
+_LIVE_STATE_MARKERS = (
+    "getcurrentimage",
+    "ij.getimage()",
+    "wm.getimage()",
+)
+
+# Sourcing images this way means the script is self-contained.
+_BATCH_MARKERS = (
+    "ij.openimage",
+    "listfiles",
+    "new opener(",
+    "bf.openimageplus",
+    "ij.open(",
+)
+
+
+def _should_run_in_subprocess(code: str) -> tuple[bool, str]:
+    """Decide where a Groovy script runs. Returns (use_subprocess, why)."""
+    override = _EXEC_OVERRIDE_RE.search(code)
+    if override:
+        choice = override.group(1).lower() == "subprocess"
+        return choice, f"explicit `// imagentj-exec: {override.group(1).lower()}`"
+
+    lowered = code.lower()
+    live_hit = next((m for m in _LIVE_STATE_MARKERS if m in lowered), None)
+    if live_hit:
+        return False, f"uses live state ({live_hit}) — needs the app's Fiji"
+
+    batch_hit = next((m for m in _BATCH_MARKERS if m in lowered), None)
+    if batch_hit:
+        return True, f"self-contained batch job (opens its own inputs via {batch_hit})"
+
+    return False, "no clear batch signal — defaulting to in-process"
+
+
+def _batch_env() -> dict:
+    """Environment for the worker: smaller heap, no nested watchdog, importable src."""
+    env = os.environ.copy()
+    # Two 6g JVMs do not fit in this container. The batch JVM gets a smaller heap.
+    env["IMAGENTJ_JVM_HEAP"] = os.environ.get("IMAGENTJ_BATCH_HEAP", "3g")
+    env["IMAGENTJ_WATCHDOG"] = "0"      # the parent supervises this run
+    env["PYTHONUNBUFFERED"] = "1"       # so the watchdog sees progress promptly
+    src_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [src_dir, env.get("PYTHONPATH", "")]))
+    return env
+
+
+def _extract_worker_report(stdout: str) -> Optional[str]:
+    """Pull the structured report out of Fiji's very chatty stdout."""
+    from imagentj.groovy_worker import REPORT_BEGIN, REPORT_END
+    if REPORT_BEGIN in stdout and REPORT_END in stdout:
+        return stdout.split(REPORT_BEGIN, 1)[1].split(REPORT_END, 1)[0].strip()
+    return None
+
+
+def _run_groovy_subprocess(code: str, purpose: str = "") -> str:
+    """
+    Run a batch Groovy script in its own Fiji process.
+
+    Reports exactly like the in-process path (the worker reuses run_groovy_script),
+    except that a stop here is a genuine kill — never "it may still be running".
+    """
+    import subprocess
+    import sys
+    import tempfile
+    from .analyst_tools import _drain, _terminate_process_group
+
+    script_path = os.path.join(
+        tempfile.gettempdir(), f"imagentj_batch_{os.getpid()}_{int(time.time() * 1000)}.groovy"
+    )
+    with open(script_path, "w", encoding="utf-8") as handle_file:
+        handle_file.write(code)
+
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "imagentj.groovy_worker", script_path, purpose],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            start_new_session=True,   # own process group, so the kill takes the JVM too
+            env=_batch_env(),
+        )
+    except Exception as exc:
+        return f"SUMMARY: ERROR — could not start batch Fiji: {exc}\nSTATUS: ERROR\nLANGUAGE: Groovy"
+
+    handle = run_control.register(run_control.RunHandle(
+        language="groovy",
+        code=code,
+        purpose=purpose,
+        terminator=lambda reason, p=proc: _terminate_process_group(p),
+    ))
+
+    out_lines: list[str] = []
+    err_lines: list[str] = []
+    readers = [
+        threading.Thread(target=_drain, args=(proc.stdout, out_lines, handle, "out"), daemon=True),
+        threading.Thread(target=_drain, args=(proc.stderr, err_lines, handle, "err"), daemon=True),
+    ]
+    for reader in readers:
+        reader.start()
+
+    try:
+        try:
+            proc.wait(timeout=_HARD_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            _terminate_process_group(proc)
+            handle.terminate(
+                f"Exceeded the hard {_HARD_TIMEOUT_SECONDS}s execution limit", by="watchdog"
+            )
+        for reader in readers:
+            reader.join(timeout=5.0)
+
+        stdout = "".join(out_lines)
+        stderr = "".join(err_lines)
+
+        if handle.terminated:
+            by_user = handle.killed_by == "user"
+            headline = "EXECUTION STOPPED BY USER" if by_user else "EXECUTION TERMINATED BY WATCHDOG"
+            guidance = (
+                "The user pressed Stop — this is NOT a bug to fix. Do not retry or debug it; "
+                "wait for the user's next instruction."
+                if by_user else
+                f"Reason: {handle.kill_reason}\nThe script was killed because it appeared "
+                "stuck or misbehaving. This is not a normal crash — review the reason and "
+                "partial output, then decide whether to fix it, change approach, or ask."
+            )
+            return "\n".join([
+                f"SUMMARY: {headline} — batch Groovy process killed",
+                f"STATUS: {'STOPPED' if by_user else 'TERMINATED'}",
+                "LANGUAGE: Groovy",
+                guidance,
+                "The script ran in its own Fiji process and was killed outright, so it is "
+                "definitely no longer running. The app's own Fiji and its open images were "
+                "not affected.",
+                f"PARTIAL_STDOUT:\n{_truncate(stdout, 1500)}" if stdout.strip() else "PARTIAL_STDOUT: (none)",
+            ])
+
+        report = _extract_worker_report(stdout)
+        if report:
+            return report
+
+        # No report means the worker died before finishing — surface why.
+        return "\n".join([
+            f"SUMMARY: ERROR — batch Fiji exited without a report (code {proc.returncode})",
+            "STATUS: ERROR",
+            "LANGUAGE: Groovy",
+            f"STDERR:\n{_truncate(stderr, 1500)}" if stderr.strip() else "STDERR: (none)",
+            f"STDOUT:\n{_truncate(stdout, 800)}" if stdout.strip() else "STDOUT: (none)",
+        ])
+    finally:
+        if proc.poll() is None:
+            _terminate_process_group(proc, grace=0.5)
+        handle.mark_finished()
+        run_control.unregister(handle)
+        try:
+            os.remove(script_path)
+        except OSError:
+            pass
+
+
 def run_script_safe(language: str, code: str, max_retries: int = 3, purpose: str = "") -> str:
     """
     Unified safe execution tool for the supervisor.
@@ -1008,19 +1222,22 @@ def run_script_safe(language: str, code: str, max_retries: int = 3, purpose: str
     Returns:
       str : Output log from script execution, including any error messages.
     """
+    if language.lower() != "groovy":
+        raise ValueError(f"Unsupported language: {language}")
+
+    # Self-contained batch jobs go to their own Fiji process, where Stop is a real
+    # kill. Everything else stays in the app's Fiji so it can see the live windows.
+    use_subprocess, why = _should_run_in_subprocess(code)
+    log.info("Groovy execution routed %s: %s",
+             "to a batch subprocess" if use_subprocess else "in-process", why)
+    if use_subprocess:
+        return _run_groovy_subprocess(code, purpose)
+
     ij = get_ij()
 
     WindowManager = JClass("ij.WindowManager")
 
-    # Map language to the original execution tool
-    tool_map = {
-        "groovy": run_groovy_script,
-    }
-
-    if language.lower() not in tool_map:
-        raise ValueError(f"Unsupported language: {language}")
-
-    exec_tool = tool_map[language.lower()]
+    exec_tool = run_groovy_script
     last_output = ""
 
     # Snapshot open windows

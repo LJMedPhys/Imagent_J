@@ -18,7 +18,10 @@ _CONDA_PROFILE = "/opt/conda/etc/profile.d/conda.sh"
 if os.path.exists(_CONDA_PROFILE):
     os.environ.setdefault("BASH_ENV", _CONDA_PROFILE)
 
-scyjava.config.add_options('-Xmx6g')
+# Heap for this JVM. Configurable because the batch-execution subprocess starts a
+# SECOND Fiji in the same container: two JVMs at the 6g default would exceed the
+# container's memory limit, so the worker asks for a smaller heap via this env var.
+scyjava.config.add_options(f"-Xmx{os.environ.get('IMAGENTJ_JVM_HEAP', '6g')}")
 # Local Fiji installation is complete — no network calls needed at JVM startup.
 # Without this, scyjava tries to download Maven from archive.apache.org if mvn
 # is not on PATH, which fails in restricted/flaky network environments.
