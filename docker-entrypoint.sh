@@ -47,6 +47,38 @@ _seed_volume "fiji_jars"    "$FIJI_HOME/jars.seed"    "$FIJI_HOME/jars"    "$FIJ
 _seed_volume "fiji_plugins" "$FIJI_HOME/plugins.seed" "$FIJI_HOME/plugins" "$FIJI_HOME/plugins/.seeded"
 _seed_volume "imagentj_home" "/home/imagentj.seed" "/home/imagentj" "/home/imagentj/.seeded"
 
+# ── Redirect DeepImageJ/APPOSE environments onto the appose_envs volume ───────
+# JDLL's Mamba (io.bioimage.modelrunner.apposed.appose.Mamba) hardcodes its root
+# to ${user.home}/.local/share/appose/micromamba and does NOT read APPOSE_HOME —
+# so without this, every DeepImageJ model run creates multi-GB conda envs (plus a
+# never-cleaned package cache) inside the imagentj_home volume, bloating it by
+# ~20 GB and duplicating that across every container's home volume.
+# We symlink that path onto /opt/appose (the dedicated appose_envs named volume)
+# so the envs are created once, persisted in the right place, and shared. This
+# runs after home seeding and before the app starts, so it is in place before
+# DeepImageJ ever touches it.
+_APPOSE_DIR=/home/imagentj/.local/share/appose
+mkdir -p /opt/appose
+if [ -L "$_APPOSE_DIR" ]; then
+    # Already redirected — refresh the target in case it changed.
+    ln -sfn /opt/appose "$_APPOSE_DIR"
+    echo "[entrypoint] APPOSE dir already symlinked → /opt/appose"
+elif [ -d "$_APPOSE_DIR" ]; then
+    # Pre-existing real directory (the leak). Move it aside on the same volume
+    # (instant rename, non-destructive) so the symlink can take its place.
+    # DeepImageJ recreates its envs under /opt/appose on next use; the backup can
+    # be deleted to reclaim space (see message below).
+    _bak="${_APPOSE_DIR}.pre-symlink-$(date +%Y%m%d%H%M%S)"
+    mv "$_APPOSE_DIR" "$_bak"
+    ln -sfn /opt/appose "$_APPOSE_DIR"
+    echo "[entrypoint] APPOSE leak fixed: old envs moved to $_bak and $_APPOSE_DIR → /opt/appose"
+    echo "[entrypoint]   Reclaim space with:  rm -rf '$_bak'  (envs will be rebuilt under /opt/appose on demand)"
+else
+    mkdir -p "$(dirname "$_APPOSE_DIR")"
+    ln -sfn /opt/appose "$_APPOSE_DIR"
+    echo "[entrypoint] APPOSE dir symlinked → /opt/appose (appose_envs volume)"
+fi
+
 # ── Lock environment snapshot read-only ──────────────────────────────────────
 # The agent reads this file via check_environment() to know what's installed.
 # It must never be edited at runtime — frozen artifact of the image build.
