@@ -34,6 +34,15 @@ LIBRARY_PATH = os.path.join(CONCEPTS_DIR, "library.md")
 
 CONCEPT_K = 6          # max concepts returned per call
 
+# Relevance gating — keeps weak, single-generic-token matches from surfacing when the
+# library has nothing genuinely relevant (the classic "time lapse cell tracking" ->
+# entries that merely contain the word 'cell' problem). A candidate must EARN its place:
+#   * share ≥2 distinct query tokens with the entry, OR
+#   * share ONE token that is distinctive (rare in the library, IDF ≥ solo threshold).
+# Survivors are then trimmed to those within REL_FLOOR of the top score.
+SOLO_IDF_FACTOR = 3.0  # a lone matched token must be rare (present in ≲ n/SOLO_IDF_FACTOR entries)
+REL_FLOOR = 0.34       # drop entries scoring below this fraction of the best hit
+
 # Structural/filler words stripped before matching (mirrors learned_memory._STOP, plus
 # the WHEN/DO/WHY/AVOID scaffold words that appear in every entry and carry no signal).
 _STOP = {
@@ -64,6 +73,22 @@ def _tokens(*parts: str) -> set:
     return {t.lower() for t in re.findall(r"[A-Za-z][A-Za-z0-9_]{2,}", text)} - _STOP
 
 
+def _ngrams(*parts: str) -> set:
+    """Unigrams PLUS adjacent bigrams over the stopword-filtered word sequence, so
+    multi-word phrases match as UNITS ("distance transform", "particle tracking",
+    "stuck together") instead of dissolving into loose, ambiguous words. Bigrams span
+    across dropped stopwords ("reduce the noise" -> "reduce noise"), and are rare, so
+    IDF gives them high weight — a phrase hit is a strong, precise signal. This is the
+    embedding-free lever borrowed from CopilotJ's curated `topic` phrases, applied to
+    every entry's body automatically (the WHEN clause is our canonical query phrasing)."""
+    text = " ".join(p for p in parts if p)
+    words = [t.lower() for t in re.findall(r"[A-Za-z][A-Za-z0-9_]{2,}", text)]
+    uni = [w for w in words if w not in _STOP]
+    grams = set(uni)
+    grams.update(f"{a} {b}" for a, b in zip(uni, uni[1:]))
+    return grams
+
+
 def _blocks() -> List[str]:
     return _BLOCK_RE.findall(_read(LIBRARY_PATH))
 
@@ -75,11 +100,16 @@ def _body(block: str) -> str:
 
 
 def _tags(block: str) -> set:
-    """The header's searchable tags: kw: aliases plus the modality:/task: values."""
+    """The header's searchable tags: kw: aliases plus the modality:/task: values.
+    Each kw alias is expanded through _ngrams, so a multi-word alias ("point spread
+    function") contributes its words AND bigrams ("point spread", "spread function") —
+    otherwise it would be one opaque token that a query phrased slightly differently
+    could never hit."""
     out = set()
     m = re.search(r"\bkw:([^>]*?)-->", block)
     if m:
-        out |= {k.strip().lower() for k in m.group(1).split(",")} - {""}
+        for alias in m.group(1).split(","):
+            out |= _ngrams(alias)          # word + bigram forms of every alias
     for field in ("modality", "task"):
         m = re.search(rf"\b{field}:(\S+)", block)
         if m:
@@ -88,29 +118,39 @@ def _tags(block: str) -> set:
 
 
 def _match_tokens(block: str) -> set:
-    """Everything an entry can match on: its body tokens PLUS its header tags."""
-    return _tokens(_body(block)) | _tags(block)
+    """Everything an entry can match on: its body uni+bigrams PLUS its header tags
+    (kw aliases — which may themselves be multi-word phrases — and modality/task)."""
+    return _ngrams(_body(block)) | _tags(block)
 
 
 def _scored(query_tokens: set, blocks: List[str]) -> List[str]:
     """Rank by IDF-weighted token overlap (BM25-lite): a matched token is worth
     log(1 + N/df), so rare/distinctive terms dominate and ubiquitous ones stop crowding
-    results as the library grows. Mirrors learned_memory._scored."""
+    results as the library grows. Mirrors learned_memory._scored, but ADDS a relevance
+    gate so weak single-generic-token matches are dropped (returns [] when nothing is
+    genuinely relevant, rather than the top-K of the noise)."""
     toks = [_match_tokens(b) for b in blocks]
     n = len(blocks)
     df: dict = {}
     for ts in toks:
         for t in ts:
             df[t] = df.get(t, 0) + 1
+    solo_min = math.log(1 + n / SOLO_IDF_FACTOR)   # min IDF for a lone token to count
     rows = []
     for b, ts in zip(blocks, toks):
         common = query_tokens & ts
         if not common:
             continue
-        score = sum(math.log(1 + n / (1 + df.get(t, 0))) for t in common)
-        rows.append((score, _body(b)))
+        weights = [math.log(1 + n / (1 + df.get(t, 0))) for t in common]
+        # GATE: ≥2 shared tokens, or a single but distinctive (rare) one.
+        if len(common) < 2 and max(weights) < solo_min:
+            continue
+        rows.append((sum(weights), _body(b)))
+    if not rows:
+        return []
     rows.sort(key=lambda t: t[0], reverse=True)
-    return [body for _, body in rows]
+    top = rows[0][0]
+    return [body for score, body in rows if score >= REL_FLOOR * top]
 
 
 @tool("recall_concepts")
@@ -126,7 +166,7 @@ def recall_concepts(query: str) -> str:
     documentation lookup (use `rag_retrieve` for API details). Returns the most relevant
     concepts, or "" if nothing matches.
     """
-    want = _tokens(query)
+    want = _ngrams(query)
     if not want:
         return ""
     hits = _scored(want, _blocks())
