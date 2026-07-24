@@ -88,6 +88,59 @@ def is_autopilot() -> bool:
     )
 
 
+def want_vlm() -> bool:
+    """Vision (VLM) judge requested for this benchmark run.
+
+    Driven by ``imagentj_config.yaml`` (agents.vlm), NOT the .env — see that
+    file for the schema. Guarded by is_benchmark_mode() so it only ever fires
+    on an auto-pilot benchmark run.
+    """
+    from imagentj import config
+    return is_benchmark_mode() and config.use_vlm()
+
+
+def want_qa() -> bool:
+    """QA reporter requested for this benchmark run (imagentj_config.yaml: agents.qa)."""
+    from imagentj import config
+    return is_benchmark_mode() and config.use_qa()
+
+
+def _apply_optional_agents(gui) -> None:
+    """Enable the Vision (VLM) judge and/or QA reporter when the benchmark env
+    flags request them, without any change to the benchmark adapter.
+
+    Must run AFTER the benchmark thread is created (``vision_enabled`` is
+    per-thread graph state, keyed by the current thread_id) and BEFORE the task
+    is sent. QA is a process-global flag, so its timing is not sensitive.
+    """
+    if want_vlm():
+        try:
+            cfg = {"configurable": {"thread_id": gui.current_thread_id}}
+            gui.supervisor.update_state(cfg, {"vision_enabled": True})
+            try:
+                gui._set_vision_checkbox(True)
+            except Exception:
+                pass
+            gui.chat_scroll.add_message("system", "Benchmark: Vision (VLM) judge ENABLED.")
+            _log.info("Benchmark: vision_enabled=True on thread %s", gui.current_thread_id)
+        except Exception:
+            _log.exception("Benchmark: could not enable Vision judge")
+
+    if want_qa():
+        try:
+            from imagentj.agents import set_qa_enabled
+            set_qa_enabled(True)
+            cb = getattr(getattr(gui, "metrics_panel", None), "_qa_checkbox", None)
+            if cb is not None:
+                cb.blockSignals(True)
+                cb.setChecked(True)
+                cb.blockSignals(False)
+            gui.chat_scroll.add_message("system", "Benchmark: QA reporter ENABLED.")
+            _log.info("Benchmark: QA reporter enabled")
+        except Exception:
+            _log.exception("Benchmark: could not enable QA reporter")
+
+
 def _input_dir() -> Path:
     return Path(os.environ.get("BENCHMARK_INPUT_DIR", "/benchmark/input"))
 
@@ -237,9 +290,17 @@ def _load_task() -> tuple[str, list[Path]]:
     if f.exists():
         instruction = f.read_text(encoding="utf-8").strip()
 
+    # Search recursively: the benchmark's get_input_dir() only guarantees a
+    # single input/ directory and, per the black-box contract, leaves
+    # enumeration to the agent. Real tasks nest the data (e.g. this dataset
+    # ships its TIFFs under input/input/, sequence tasks use per-series
+    # subfolders), so a flat iterdir() would stage zero images. rglob finds
+    # them wherever they sit.
+    root = _input_dir()
     images = sorted(
-        p for p in _input_dir().iterdir()
-        if p.is_file() and p.suffix.lower() in _IMAGE_EXT
+        (p for p in root.rglob("*")
+         if p.is_file() and p.suffix.lower() in _IMAGE_EXT),
+        key=lambda p: str(p),
     )
     return instruction, images
 
@@ -290,9 +351,12 @@ def _collect_and_finish(gui, message: str = "") -> None:
     metadata = {}
     if hasattr(gui, "_metrics"):
         m = gui._metrics
+        # Attribute names must match UsageMetrics (tracker.py): total_tokens,
+        # cost_usd, tool_calls. The old total_cost/num_calls names silently
+        # read as 0.0/0 in result.json.
         metadata["total_tokens"] = getattr(m, "total_tokens", 0)
-        metadata["total_cost_usd"] = getattr(m, "total_cost", 0.0)
-        metadata["num_llm_calls"] = getattr(m, "num_calls", 0)
+        metadata["total_cost_usd"] = getattr(m, "cost_usd", 0.0)
+        metadata["tool_calls"] = getattr(m, "tool_calls", 0)
     if hasattr(gui, "_tracker_cb"):
         try:
             metadata["usage_report"] = gui._tracker_cb.get_report()
@@ -404,6 +468,11 @@ def _hook_auto_finish(gui) -> None:
 def _auto_send(gui) -> None:
     gui._start_new_thread()
 
+    # Turn on Vision/QA if the benchmark env flags asked for them. Done here,
+    # on the freshly-created benchmark thread, because vision_enabled is
+    # per-thread state and _start_new_thread() always resets it to off.
+    _apply_optional_agents(gui)
+
     instruction, images = _load_task()
     if not instruction:
         gui.chat_scroll.add_message(
@@ -435,8 +504,11 @@ def _auto_send(gui) -> None:
         "Sending to agent …",
     )
 
+    # on_send() reads self.attached_files directly and renders the attachment
+    # list into the chat itself; there is no separate attachment widget to
+    # refresh (no _update_attachment_ui on ImageJAgentGUI), so setting the list
+    # is all that's needed.
     gui.attached_files = [str(p) for p in local_images]
-    gui._update_attachment_ui()
     gui.input_line.setPlainText(prompt)
     gui.on_send()
 

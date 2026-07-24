@@ -3,6 +3,7 @@ import sqlite3
 from typing import Literal, Optional
 
 from . import stop_signal
+from . import config
 
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
@@ -246,7 +247,7 @@ def _agent_reasoning_kwargs(reasoning_effort: Optional[str] = None) -> dict:
 
 
 llm_supervisor = ChatOpenAI(
-    model=m("openai/gpt-5.4"),
+    model=m(config.model_for("supervisor", "openai/gpt-5.4")),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
@@ -256,7 +257,7 @@ llm_supervisor = ChatOpenAI(
 )
 
 llm_worker = ChatOpenAI(
-    model=m("openai/gpt-5.3-codex"),
+    model=m(config.model_for("worker", "openai/gpt-5.3-codex")),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
@@ -266,7 +267,7 @@ llm_worker = ChatOpenAI(
 )
 
 llm_analyst = ChatOpenAI(
-    model=m("openai/gpt-5.3-codex"),
+    model=m(config.model_for("analyst", "openai/gpt-5.3-codex")),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
@@ -276,7 +277,7 @@ llm_analyst = ChatOpenAI(
 )
 
 llm_nano = ChatOpenAI(
-    model=m("openai/gpt-5.4-nano"),
+    model=m(config.model_for("nano", "openai/gpt-5.4-nano")),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
@@ -288,7 +289,7 @@ llm_nano = ChatOpenAI(
 # Model behind the background Librarian agent (curates the learned-memory wiki off
 # the hot path) and the gated recall() deep-search fallback. Kept small/cheap.
 llm_curator = ChatOpenAI(
-    model=m("openai/gpt-5.4-mini"),
+    model=m(config.model_for("curator", "openai/gpt-5.4-mini")),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
@@ -305,7 +306,7 @@ llm_curator = ChatOpenAI(
 # reasoning/tool compatibility limit.
 if open_router_key:
     llm_vlm = ChatOpenAI(
-        model="google/gemini-3.5-flash",
+        model=config.model_for("vlm", "google/gemini-3.5-flash"),
         api_key=open_router_key,
         base_url="https://openrouter.ai/api/v1",
         temperature=0.,
@@ -315,8 +316,15 @@ if open_router_key:
         callbacks=[shared_tracker],
     )
 elif openai_key:
+    # OpenAI direct cannot serve a non-openai/ model, so drop the prefix and
+    # ignore a cross-provider value (e.g. the default google/ VLM model).
+    _vlm_openai = config.model_for("vlm", "gpt-5.6-luna")
+    if _vlm_openai.startswith("openai/"):
+        _vlm_openai = _vlm_openai.split("/", 1)[1]
+    elif "/" in _vlm_openai:
+        _vlm_openai = "gpt-5.6-luna"
     llm_vlm = ChatOpenAI(
-        model="gpt-5.6-luna",
+        model=_vlm_openai,
         api_key=openai_key,
         temperature=0.,
         **_agent_reasoning_kwargs("high"),

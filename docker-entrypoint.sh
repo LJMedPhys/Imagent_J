@@ -336,26 +336,56 @@ echo "[entrypoint] Starting fluxbox window manager..."
 fluxbox &
 sleep 1
 
-# ── Start VNC server ─────────────────────────────────────────────────────────
-
-echo "[entrypoint] Starting x11vnc on display :1..."
-if [ -n "$VNC_PASSWORD" ]; then
-    mkdir -p /home/imagentj/.vnc
-    x11vnc -storepasswd "$VNC_PASSWORD" /home/imagentj/.vnc/passwd 2>/dev/null
-    x11vnc -display :1 -forever -rfbauth /home/imagentj/.vnc/passwd -shared -rfbport 5900 -quiet &
-    echo "[entrypoint] VNC started with password authentication"
-else
-    x11vnc -display :1 -forever -nopw -shared -rfbport 5900 -quiet &
-    echo "[entrypoint] WARNING: VNC started WITHOUT password (set VNC_PASSWORD env var for security)"
+# ── Unattended mode? Decide whether to run the human-watch VNC layer ─────────
+# On an HPC batch node nobody watches, and x11vnc/noVNC bind fixed ports
+# (5900/6080) that collide when several containers share a node — acute under
+# Apptainer, which shares the host network namespace. In unattended mode we skip
+# both. Xvfb + fluxbox (started above) stay up, so Fiji windows, AWT-Robot
+# plugin-dialog screenshots, napari rendering and the VLM judge all keep working
+# (they read the Xvfb framebuffer, not VNC); only the live browser view is gone.
+# Toggle: env IMAGENTJ_UNATTENDED wins; otherwise runtime.unattended in
+# imagentj_config.yaml.
+UNATTENDED="${IMAGENTJ_UNATTENDED:-}"
+if [ -z "$UNATTENDED" ]; then
+    UNATTENDED=$(python3 - <<'PY' 2>/dev/null
+import yaml
+try:
+    d = yaml.safe_load(open("/app/imagentj_config.yaml")) or {}
+    v = str((d.get("runtime") or {}).get("unattended", "")).strip().lower()
+    print("1" if v in ("1", "true", "yes", "on") else "")
+except Exception:
+    print("")
+PY
+)
 fi
-sleep 1
+case "$(printf '%s' "$UNATTENDED" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) UNATTENDED=1 ;;
+    *)             UNATTENDED=0 ;;
+esac
 
-# ── Start noVNC websocket proxy ──────────────────────────────────────────────
-echo "[entrypoint] Starting noVNC on port 6080..."
-websockify --web /usr/share/novnc 6080 localhost:5900 &
-sleep 1
+# ── Start VNC server (skipped when unattended) ───────────────────────────────
+if [ "$UNATTENDED" = "1" ]; then
+    echo "[entrypoint] Unattended mode — skipping x11vnc + noVNC (Xvfb + fluxbox only; ports 5900/6080 not bound)"
+else
+    echo "[entrypoint] Starting x11vnc on display :1..."
+    if [ -n "$VNC_PASSWORD" ]; then
+        mkdir -p /home/imagentj/.vnc
+        x11vnc -storepasswd "$VNC_PASSWORD" /home/imagentj/.vnc/passwd 2>/dev/null
+        x11vnc -display :1 -forever -rfbauth /home/imagentj/.vnc/passwd -shared -rfbport 5900 -quiet &
+        echo "[entrypoint] VNC started with password authentication"
+    else
+        x11vnc -display :1 -forever -nopw -shared -rfbport 5900 -quiet &
+        echo "[entrypoint] WARNING: VNC started WITHOUT password (set VNC_PASSWORD env var for security)"
+    fi
+    sleep 1
 
-echo "[entrypoint] noVNC is listening on http://localhost:6080"
+    # ── Start noVNC websocket proxy ──────────────────────────────────────────
+    echo "[entrypoint] Starting noVNC on port 6080..."
+    websockify --web /usr/share/novnc 6080 localhost:5900 &
+    sleep 1
+
+    echo "[entrypoint] noVNC is listening on http://localhost:6080"
+fi
 
 # ── Ensure langgraph-checkpoint-sqlite is installed (needed for chat persistence) ──
 python3 -c "import langgraph.checkpoint.sqlite" 2>/dev/null || {
