@@ -38,10 +38,10 @@ CONCEPT_K = 6          # max concepts returned per call
 # library has nothing genuinely relevant (the classic "time lapse cell tracking" ->
 # entries that merely contain the word 'cell' problem). A candidate must EARN its place:
 #   * share ≥2 distinct query tokens with the entry, OR
-#   * share ONE token that is distinctive (rare in the library, IDF ≥ solo threshold).
+#   * share ONE token that is distinctive — present in ≤ SOLO_MAX_DF_FRAC of the entries.
 # Survivors are then trimmed to those within REL_FLOOR of the top score.
-SOLO_IDF_FACTOR = 3.0  # a lone matched token must be rare (present in ≲ n/SOLO_IDF_FACTOR entries)
-REL_FLOOR = 0.34       # drop entries scoring below this fraction of the best hit
+SOLO_MAX_DF_FRAC = 0.10  # a lone matched token must be rare: present in ≤ this fraction of entries
+REL_FLOOR = 0.34         # drop entries scoring below this fraction of the best hit
 
 # Structural/filler words stripped before matching (mirrors learned_memory._STOP, plus
 # the WHEN/DO/WHY/AVOID scaffold words that appear in every entry and carry no signal).
@@ -135,16 +135,21 @@ def _scored(query_tokens: set, blocks: List[str]) -> List[str]:
     for ts in toks:
         for t in ts:
             df[t] = df.get(t, 0) + 1
-    solo_min = math.log(1 + n / SOLO_IDF_FACTOR)   # min IDF for a lone token to count
+    # A lone matched token only rescues a candidate if it is distinctive: present in
+    # ≤ SOLO_MAX_DF_FRAC of the entries. Gate on df DIRECTLY — the previous form compared
+    # two IDF values of the same log(1 + n/·) shape, so n cancelled and the threshold
+    # collapsed to df ≤ SOLO_IDF_FACTOR−1 (=2) regardless of library size, wrongly rejecting
+    # distinctive lone tokens like "watershed"/"cellpose" that live in a handful of entries.
+    solo_max_df = max(2, n * SOLO_MAX_DF_FRAC)   # scales with library size; floor of 2
     rows = []
     for b, ts in zip(blocks, toks):
         common = query_tokens & ts
         if not common:
             continue
-        weights = [math.log(1 + n / (1 + df.get(t, 0))) for t in common]
         # GATE: ≥2 shared tokens, or a single but distinctive (rare) one.
-        if len(common) < 2 and max(weights) < solo_min:
+        if len(common) < 2 and min(df[t] for t in common) > solo_max_df:
             continue
+        weights = [math.log(1 + n / (1 + df.get(t, 0))) for t in common]
         rows.append((sum(weights), _body(b)))
     if not rows:
         return []
