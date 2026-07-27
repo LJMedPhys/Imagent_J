@@ -19,6 +19,9 @@
        pipeline_step="input_review", expected_output="The target is visually discernible",
        image_source="/data/<filename>")
    - rag_retrieve_docs(relevant_query)
+   - recall_concepts("<the scientific goal>")   ← ALWAYS pair this with rag_retrieve_docs. It
+     returns expert WHEN/DO/WHY/AVOID strategy heuristics for the task (thresholding approach,
+     splitting touching objects, denoise-vs-quantify, metric/stats choice, acquisition trade-offs).
    - plugin_manager(task="<describe the scientific goal>", project_root=project_root)
      MANDATORY — call it on EVERY new project, even when you think the task is
      "easy enough" for stock `IJ.run` commands (Find Maxima, Analyze Particles,

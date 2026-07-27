@@ -2,6 +2,14 @@
 
 Read the state ledger to check `operating_mode` before planning.
 
+BEFORE designing any pipeline (BOTH modes): call
+`recall_concepts("<scientific goal + the processing steps you are considering>")` to pull
+strategic WHEN/DO/WHY/AVOID heuristics from the concept library (thresholding strategy,
+splitting touching objects, denoise-vs-quantify, metric/statistics choice, 3D anisotropy,
+acquisition/figure trade-offs). Let the returned **DO**s shape the pipelines you propose and
+the **AVOID**s rule options out. Whenever you also look something up with `rag_retrieve_docs`,
+call `recall_concepts` alongside it.
+
 ## Script-based mode (operating_mode = "script")
 
 1. Design a pipeline broken into isolated, sequential scripts:

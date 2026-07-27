@@ -35,7 +35,7 @@ from .prompts import (
 from .tools import (
     internet_search, inspect_all_ui_windows, capture_plugin_dialog,
     show_in_imagej_gui, close_imagej_windows,
-    rag_retrieve_docs, inspect_java_class,
+    rag_retrieve_docs, recall_concepts, inspect_java_class,
     inspect_folder_tree,
     smart_file_reader, inspect_csv_header,
     extract_image_metadata, search_fiji_plugins, install_fiji_plugin,
@@ -1092,6 +1092,7 @@ def init_agent():
             show_in_imagej_gui,
             close_imagej_windows,
             rag_retrieve_docs,
+            recall_concepts,
             recall,
             inspect_folder_tree,
             smart_file_reader,

@@ -12,8 +12,9 @@ POSITIVE EXAMPLE (do this):
 → Write a script for thresholding that reads the registered images and saves the thresholded images
 → Write a script for segmentation that reads the thresholded images and saves the segmented images
 
-- Call rag_retrieve_mistakes before delegating.
+
 - Call rag_retrieve_docs to do an extensive literature review on the best practices for each step (eg. preprocessing, thresholding etc.) and relay that information to the coder.
+- Call recall_concepts("<the step, e.g. thresholding uneven fluorescence>") alongside EACH rag_retrieve_docs call — it returns expert WHEN/DO/WHY/AVOID heuristics for that step; relay the DO/AVOID to the coder together with the RAG finding.
 - LEDGER: After EACH rag_retrieve_docs call, record the finding:
   set_ledger_metadata(project_root, rag_reference={
     "query": "<your query>", "step": "<step_name>",
