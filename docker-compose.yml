@@ -54,6 +54,9 @@ services:
       - ./.imagentj:/app/.imagentj:ro
       - ./gui_runner.py:/app/gui_runner.py:ro
       - ./setup_wizard.py:/app/setup_wizard.py:ro
+      # Runtime config (LLM per role + Vision/QA switches). Edit on the host and
+      # it takes effect next run — no rebuild. See imagentj_config.yaml.
+      - ./imagentj_config.yaml:/app/imagentj_config.yaml:ro
       # Folder to save data
       - ./data:/app/data
       # User home — persists api_keys.env (outside /app/data so agent can't read it)

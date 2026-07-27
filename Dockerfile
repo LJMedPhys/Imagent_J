@@ -484,6 +484,14 @@ RUN groupadd -g 1000 imagentj \
 WORKDIR /app
 COPY . /app
 
+# ── Runtime config baked into the image ──────────────────────────────────────
+# imagentj_config.yaml (LLM-per-role + Vision/QA switches) is already included
+# by `COPY . /app` above; this explicit copy documents the contract and keeps
+# the file present even if the build context is trimmed. docker-compose.yml
+# bind-mounts the host copy over this one, so host edits still win at runtime
+# without a rebuild; a bare `docker run` (no mount) falls back to this baked default.
+COPY imagentj_config.yaml /app/imagentj_config.yaml
+
 # Use keys_template.py as keys.py (keys.py is .dockerignored since it has real secrets)
 RUN cp /app/src/config/keys_template.py /app/src/config/keys.py
 
