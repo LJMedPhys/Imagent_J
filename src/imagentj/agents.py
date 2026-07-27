@@ -336,6 +336,11 @@ elif openai_key:
 else:
     llm_vlm = None
 
+# Start supervising script runs. Imported here rather than in run_control so the
+# watchdog's lazy `from .agents import llm_nano` can never race module init.
+from . import watchdog as _watchdog
+_watchdog.install()
+
 # ---------------------------------------------------------------------------
 # Subagent instances — created once at module level, stateless invocation
 # ---------------------------------------------------------------------------

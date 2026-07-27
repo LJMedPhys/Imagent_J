@@ -1,13 +1,13 @@
 import os
 import pandas as pd
 import re
-import subprocess
 import sys
 import textwrap
 import io
-import threading
 from langchain_core.tools import tool
 import tempfile
+
+from imagentj import run_control
 
 # ---------------------------------------------------------------------------
 # Conda envs the Python agent may execute in.
@@ -64,39 +64,6 @@ def _resolve_interpreter(env: str) -> tuple[str | None, str | None]:
         )
     return interpreter, None
 
-# ---------------------------------------------------------------------------
-# Global process registry — lets the Stop button kill running subprocesses
-# ---------------------------------------------------------------------------
-_registry_lock = threading.Lock()
-_running_processes: list[subprocess.Popen] = []
-
-
-def _register_process(proc: subprocess.Popen) -> None:
-    with _registry_lock:
-        _running_processes.append(proc)
-
-
-def _unregister_process(proc: subprocess.Popen) -> None:
-    with _registry_lock:
-        try:
-            _running_processes.remove(proc)
-        except ValueError:
-            pass
-
-
-def kill_running_processes() -> int:
-    """Kill all tracked subprocesses. Called by the Stop button. Returns count killed."""
-    killed = 0
-    with _registry_lock:
-        for proc in list(_running_processes):
-            try:
-                proc.kill()
-                killed += 1
-            except Exception:
-                pass
-        _running_processes.clear()
-    return killed
-
 @tool
 def inspect_csv_header(file_path: str):
     """
@@ -144,7 +111,7 @@ def inspect_csv_header(file_path: str):
         return f"Error reading file at {file_path}: {str(e)}"
 
 
-def run_python_code(code: str, output_directory: str):
+def run_python_code(code: str, output_directory: str, purpose: str = ""):
 
     """
     Executes Python code with full PC access.
@@ -214,33 +181,37 @@ def run_python_code(code: str, output_directory: str):
         f.write(full_script)
 
     try:
-        proc = subprocess.Popen(
-            [interpreter, script_path],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+        run = run_control.SupervisedProcess(
+            [interpreter, script_path], language="python", code=code, purpose=purpose,
         )
-        _register_process(proc)
-        try:
-            stdout, stderr = proc.communicate(timeout=600)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            stdout, stderr = proc.communicate()
-            return "SYSTEM ERROR: Python script timed out after 600 seconds."
-        finally:
-            _unregister_process(proc)
-
-        if proc.returncode != 0:
-            return (
-                f"CRASH DETECTED IN PYTHON (env='{env}'):\n"
-                f"STDOUT: {stdout}\nSTDERR: {stderr}"
-            )
-        # The leading "SUCCESS:" is load-bearing: learned_memory._run_succeeded gates the
-        # background Librarian on out.lstrip().startswith("SUCCESS:"). Keep the colon
-        # immediately after SUCCESS or Python runs stop being learned as recipes.
-        return f"SUCCESS: (env='{env}')\n{stdout}"
     except Exception as e:
         return f"SYSTEM ERROR: {str(e)}"
-    
+
+    with run:
+        try:
+            run.wait()
+            stdout, stderr = run.stdout, run.stderr
+
+            if run.handle.terminated:
+                return (
+                    f"{run_control.stop_headline(run.handle)} (env='{env}').\n"
+                    f"{run_control.stop_guidance(run.handle)}\n"
+                    f"Partial STDOUT before termination:\n{stdout[-2000:]}\n"
+                    f"Partial STDERR:\n{stderr[-1000:]}"
+                )
+
+            if run.returncode != 0:
+                return (
+                    f"CRASH DETECTED IN PYTHON (env='{env}'):\n"
+                    f"STDOUT: {stdout}\nSTDERR: {stderr}"
+                )
+            # The leading "SUCCESS:" is load-bearing: learned_memory._run_succeeded gates the
+            # background Librarian on out.lstrip().startswith("SUCCESS:"). Keep the colon
+            # immediately after SUCCESS or Python runs stop being learned as recipes.
+            return f"SUCCESS: (env='{env}')\n{stdout}"
+        except Exception as e:
+            return f"SYSTEM ERROR: {str(e)}"
+
+
 
 python_analyst_tools = [inspect_csv_header, run_python_code]
