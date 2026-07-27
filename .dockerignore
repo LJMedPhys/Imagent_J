@@ -19,6 +19,11 @@ src/config/keys.py
 *.swp
 *.swo
 *~
+
+# Large local Apptainer artifacts
+.apptainer/
+*.sif
+
 # Models are bind-mounted at runtime — do not send to build context
 models/
 models.zip

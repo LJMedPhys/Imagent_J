@@ -1,0 +1,8 @@
+{
+  "agent_dir": "/absolute/path/to/Imagent_J",
+  "sif_path": "/absolute/path/to/agenticj.sif",
+  "interactive": false,
+  "unattended": true,
+  "nv": true,
+  "timeout": 14400
+}

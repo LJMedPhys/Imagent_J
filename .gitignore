@@ -44,3 +44,9 @@ checkpoints*
 conversation_history.json
 
 extra_packages/
+
+# Local Apptainer build cache, persistent volumes, SIFs, and OCI archives.
+# These artifacts are large and machine-specific; see hpc/README.md.
+.apptainer/
+*.sif
+hpc/adapter.json
