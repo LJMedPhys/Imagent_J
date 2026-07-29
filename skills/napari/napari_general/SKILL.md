@@ -47,8 +47,8 @@ may legitimately mix all three — e.g. Fiji-register → micro_sam-segment (nap
 
 1. **Interactive (backend = "napari")** — the **supervisor** drives the live viewer with the MCP tools:
    - `mcp__napari_mcp__add_layer(path)` — open an image/label layer (call once, stop on status=ok)
-   - `mcp__napari_mcp__execute_code(code)` — run arbitrary Python **inside the napari process** (this
-     is how micro_sam is launched or scripted in-viewer; `micro_sam` is importable there)
+   - `mcp__napari_mcp__execute_code(code)` — run Python **inside the napari process**
+     (`micro_sam` is importable there)
    - `mcp__napari_mcp__install_packages(...)` — add a package to the napari env at runtime
    - `mcp__napari_mcp__list_layers`, `mcp__napari_mcp__screenshot`, `mcp__napari_mcp__session_information`
    Use in-container paths like `/app/data/...`. On `status=error`, report the exact message.
@@ -56,7 +56,25 @@ may legitimately mix all three — e.g. Fiji-register → micro_sam-segment (nap
 2. **Headless / batch (backend = "python_data_analyst", env = "napari-mcp")** — the analyst writes a
    normal Python script whose first line is `# imagentj-env: napari-mcp`. It runs in the same env that
    backs the viewer, so a mask made in a script and a mask made interactively come from an identical
-   model. No window opens. Best for processing a whole folder.
+   model. No window opens.
+
+### Which backend does what — this split is not optional
+
+`execute_code` runs on napari's **main Qt thread** under a **90 s** timeout
+(`IMAGENTJ_MCP_TOOL_TIMEOUT_SECONDS`). The analyst subprocess gets **7200 s**
+(`IMAGENTJ_SCRIPT_HARD_TIMEOUT`) plus stop-button and memory-watchdog coverage.
+
+| Do this in the **analyst** (env `napari-mcp`) | Do this over **MCP** |
+|---|---|
+| model download / build, embedding precompute | `add_layer`, `viewer.add_image/add_labels` |
+| automatic segmentation, any per-pixel compute | reading layer state, `list_layers`, `screenshot` |
+| batch over a folder | opening the annotator against a **precomputed** embedding cache |
+
+Putting compute in `execute_code` fails **two** ways at once: the viewer and the whole VNC
+desktop freeze (no progress bar), *and* the call dies with `TimeoutError` while the work
+keeps running invisibly in the server. Batch is not just "for folders" — it is where **all**
+compute belongs, including for a single image that will be shown interactively afterwards.
+See `../micro_sam/SKILL.md` → Backend B for the two-step patterns.
 
 ## What napari is NOT for here
 

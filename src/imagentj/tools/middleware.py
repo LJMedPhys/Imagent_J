@@ -289,6 +289,126 @@ class PhaseGuardMiddleware(AgentMiddleware):
         return False
 
 
+class NapariComputeGuardMiddleware(AgentMiddleware):
+    """
+    Reject heavy compute sent to napari's ``execute_code`` before it runs.
+
+    ``mcp__napari_mcp__execute_code`` runs its payload on napari's MAIN Qt THREAD,
+    wrapped in a hard IMAGENTJ_MCP_TOOL_TIMEOUT_SECONDS (90 s) timeout. Putting a
+    model build, an embedding precompute, or a segmentation in there fails twice
+    over: the event loop stalls (viewer AND the whole VNC desktop freeze, with no
+    progress bar), and the call dies with TimeoutError while the work keeps running
+    invisibly inside the server — leaving, e.g., a half-written checkpoint.
+
+    The same code in python_data_analyst with ``# imagentj-env: napari-mcp`` runs in
+    a supervised subprocess: IMAGENTJ_SCRIPT_HARD_TIMEOUT (7200 s), plus stop-button
+    and memory-watchdog coverage. Same conda env, so identical models and results.
+
+    The skills document this rule, but documentation is advice. This guard makes it
+    an actual constraint: the offending call never reaches the viewer, and the model
+    gets back a ToolMessage naming the correct two-step route instead of a 90-second
+    hang it cannot learn from.
+
+    Deliberately narrow — it blocks only the known-heavy micro_sam entry points, so
+    display work (add_image / add_labels / list_layers / screenshot) is untouched.
+    Opening an annotator is allowed IF it passes ``embedding_path=`` (embeddings then
+    load from the cache instead of being computed on the Qt thread).
+
+    Escape hatch, matching this codebase's other magic-comment overrides
+    (``# imagentj-env:``, ``// imagentj-exec:``)::
+
+        # imagentj-allow-heavy: <why this is safe here>
+    """
+
+    # mcp_host_tools namespaces MCP tools as mcp__<server>__<tool>, so the napari
+    # server's code-exec tool is mcp__napari_mcp__execute_code. Match loosely so a
+    # renamed server ("napari", "napari-mcp", …) is still covered.
+    _TARGET_TOOL_RE = re.compile(r"napari.*execute_code", re.IGNORECASE)
+
+    _OVERRIDE_RE = re.compile(r"^\s*#\s*imagentj-allow-heavy:", re.IGNORECASE | re.MULTILINE)
+
+    # Always heavy: each one downloads weights, builds a model, or runs per-pixel
+    # inference. None of these belong on the GUI thread under any circumstances.
+    _ALWAYS_HEAVY = {
+        "get_predictor_and_segmenter": "builds/downloads a SAM model",
+        "automatic_instance_segmentation": "runs full instance segmentation",
+        "precompute_state": "computes image embeddings",
+        "get_sam_model": "builds/downloads a SAM model",
+        "train_sam": "trains a model",
+        "get_trainable_sam_model": "builds a trainable model",
+        "train_instance_segmentation": "trains a model",
+    }
+
+    # Heavy only when it would compute embeddings inline, i.e. no embedding_path.
+    _ANNOTATORS = ("annotator_2d", "annotator_3d", "annotator_tracking",
+                   "image_series_annotator", "image_folder_annotator")
+
+    def _code_from(self, args) -> str:
+        """Concatenate the string args — the payload key varies across MCP servers."""
+        if isinstance(args, str):
+            return args
+        if not isinstance(args, dict):
+            return ""
+        # Prefer the conventional keys, but fall back to every string value so a
+        # server using an unexpected parameter name is still inspected.
+        for key in ("code", "python_code", "script", "source"):
+            value = args.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+        return "\n".join(v for v in args.values() if isinstance(v, str))
+
+    def _violation(self, code: str):
+        """Return (symbol, why) for the first heavy call found, else None."""
+        for symbol, why in self._ALWAYS_HEAVY.items():
+            # Match a call, not a bare mention, so an explanatory comment or a
+            # string naming the function doesn't trip the guard.
+            if re.search(rf"\b{re.escape(symbol)}\s*\(", code):
+                return symbol, why
+        for symbol in self._ANNOTATORS:
+            if re.search(rf"\b{re.escape(symbol)}\s*\(", code) and "embedding_path" not in code:
+                return symbol, "computes embeddings inline (no embedding_path= given)"
+        return None
+
+    def wrap_tool_call(self, request: ToolCallRequest, handler):
+        tool_name = request.tool_call.get("name", "") or ""
+        if not self._TARGET_TOOL_RE.search(tool_name):
+            return handler(request)
+
+        code = self._code_from(request.tool_call.get("args"))
+        if not code or self._OVERRIDE_RE.search(code):
+            return handler(request)
+
+        found = self._violation(code)
+        if not found:
+            return handler(request)
+
+        symbol, why = found
+        print(f"[NAPARI GUARD] blocked {symbol}() in {tool_name} — {why}")
+        return ToolMessage(
+            content=(
+                f"BLOCKED: `{symbol}()` {why}, and this tool runs on napari's main Qt "
+                f"thread under a 90 s timeout. Running it here freezes the viewer and "
+                f"the whole VNC desktop, then times out while the work continues "
+                f"invisibly in the server.\n\n"
+                f"Route it through python_data_analyst instead — same conda env, "
+                f"7200 s limit, stop-button and memory-watchdog covered:\n\n"
+                f"  STEP 1 (python_data_analyst, first line `# imagentj-env: napari-mcp`):\n"
+                f"    do the compute and WRITE THE RESULT TO DISK — a label TIFF for\n"
+                f"    segmentation, or an embedding cache via\n"
+                f"    micro_sam.precompute_state.precompute_state(..., output_path=...).\n\n"
+                f"  STEP 2 (this tool, once step 1 finishes):\n"
+                f"    load that file and display it — tifffile.imread(...) then\n"
+                f"    viewer.add_labels(...). To open the annotator, pass\n"
+                f"    embedding_path=<the cache from step 1> so it loads instead of computes.\n\n"
+                f"See skills/napari/micro_sam/SKILL.md -> Backend B for both patterns. "
+                f"If this really must run in-viewer, add a first line "
+                f"`# imagentj-allow-heavy: <reason>` to override."
+            ),
+            tool_call_id=request.tool_call.get("id", ""),
+            status="error",
+        )
+
+
 class TodoDisplayMiddleware(TodoListMiddleware):
     def on_end(self, input, output, **kwargs):
         todos = getattr(self, "todos", [])

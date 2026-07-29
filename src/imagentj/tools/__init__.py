@@ -19,6 +19,7 @@ from .middleware import (
     NarrationReminderMiddleware,
     PhaseGuardMiddleware,
     VisionOptionMiddleware,
+    NapariComputeGuardMiddleware,
 )
 from .vision_tools import (
     capture_ij_window,
@@ -49,6 +50,7 @@ __all__ = [
     'internet_search', 'inspect_java_class',
     'search_fiji_plugins', 'install_fiji_plugin', 'check_plugin_installed',
     'SafeToolLoggerMiddleware', 'TodoDisplayMiddleware', 'NarrationReminderMiddleware', 'PhaseGuardMiddleware', 'VisionOptionMiddleware',
+    'NapariComputeGuardMiddleware',
     'get_vec_store_docs', 'is_rag_available', 'is_plugin_db_available',
     'set_dialog_vision_llm',
     'run_python_code', 'inspect_csv_header', 'mkdir_copy','save_script', 'edit_script', 'copy_file', 'execute_script', 'get_script_info', 'load_script', 'get_script_history',

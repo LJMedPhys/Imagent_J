@@ -72,47 +72,86 @@ Cellpose mask.
 
 ## Backend B — interactive in the live napari viewer (supervisor via napari MCP)
 
-The supervisor drives it with `mcp__napari_mcp__execute_code`. Two patterns:
+> ### THE ONE RULE: never compute inside `mcp__napari_mcp__execute_code`
+>
+> That tool runs your code **on napari's main Qt thread**, wrapped in a hard
+> `IMAGENTJ_MCP_TOOL_TIMEOUT_SECONDS` timeout (**90 s** default). So anything slow —
+> model build, embeddings, segmentation — has two failure modes at once:
+> the event loop stalls (viewer + whole VNC desktop freeze, no progress bar), AND the
+> call dies with `TimeoutError` while the work keeps running invisibly in the server.
+>
+> Meanwhile `python_data_analyst` with `# imagentj-env: napari-mcp` runs in a
+> supervised subprocess with a **7200 s** limit (`IMAGENTJ_SCRIPT_HARD_TIMEOUT`),
+> covered by the stop button and the memory watchdog — **80x the headroom, and
+> interruptible**. It is the same conda env, so the model and results are identical.
+>
+> **Route every heavy step there, and let MCP do only what is instant: adding a layer.**
 
-**Automatic seg, then hand the user a correctable label layer:**
+### Pattern 1 — automatic segmentation (two steps)
+
+**Step 1 — compute in `python_data_analyst`** (supervised, not the viewer):
+```python
+# imagentj-env: napari-mcp
+import tifffile, torch, numpy as np
+from micro_sam.automatic_segmentation import get_predictor_and_segmenter, automatic_instance_segmentation
+
+IMG  = "/app/data/projects/demo/raw_images/cells.tif"
+MASK = "/app/data/projects/demo/processed/cells_masks.tif"
+MODEL = "vit_b_lm" if torch.cuda.is_available() else "vit_t_lm"
+
+img = tifffile.imread(IMG)
+predictor, segmenter = get_predictor_and_segmenter(model_type=MODEL, device=None, segmentation_mode="ais")
+labels = automatic_instance_segmentation(
+    predictor=predictor, segmenter=segmenter, input_path=img, ndim=2,
+    output_path=MASK, verbose=False,
+)
+print("objects:", len(np.unique(labels)) - 1)
+```
+
+**Step 2 — display it via MCP** (a file read + a layer add; milliseconds):
 ```python
 # code passed to mcp__napari_mcp__execute_code
-import numpy as np, tifffile, torch
-from micro_sam.automatic_segmentation import get_predictor_and_segmenter, automatic_instance_segmentation
-img = tifffile.imread("/app/data/projects/demo/raw_images/cells.tif")
-MODEL = "vit_b_lm" if torch.cuda.is_available() else "vit_t_lm"   # tiny on CPU — see WARNING below
-predictor, segmenter = get_predictor_and_segmenter(model_type=MODEL, device=None, segmentation_mode="ais")  # device=None → GPU if available, else CPU
-labels = automatic_instance_segmentation(predictor=predictor, segmenter=segmenter, input_path=img, ndim=2, verbose=False)
-viewer.add_image(img, name="raw"); viewer.add_labels(labels.astype("uint32"), name="micro_sam")
+import tifffile
+img    = tifffile.imread("/app/data/projects/demo/raw_images/cells.tif")
+labels = tifffile.imread("/app/data/projects/demo/processed/cells_masks.tif")
+viewer.add_image(img, name="raw")
+viewer.add_labels(labels.astype("uint32"), name="micro_sam")   # user can now correct it
 ```
 (`viewer` is pre-bound inside napari-mcp's execute_code.)
 
-**Full click-prompted annotator (human corrects with points/boxes):**
+### Pattern 2 — click-prompted annotator (human corrects with points/boxes)
+
+The annotator cannot compute embeddings on the Qt thread without freezing — so
+**precompute them to disk first**, then point the annotator at that cache.
+
+**Step 1 — precompute embeddings in `python_data_analyst`:**
+```python
+# imagentj-env: napari-mcp
+import torch
+from micro_sam.precompute_state import precompute_state
+
+MODEL = "vit_b_lm" if torch.cuda.is_available() else "vit_t_lm"
+precompute_state(
+    input_path="/app/data/projects/demo/raw_images/cells.tif",
+    output_path="/app/data/projects/demo/processed/embed.zarr",   # the embedding cache
+    model_type=MODEL,
+    ndim=2,
+)
+```
+
+**Step 2 — open the annotator against that cache via MCP** (loads, does not compute):
 ```python
 from micro_sam.sam_annotator import annotator_2d
 import tifffile, torch
 img = tifffile.imread("/app/data/projects/demo/raw_images/cells.tif")
 MODEL = "vit_b_lm" if torch.cuda.is_available() else "vit_t_lm"
-annotator_2d(img, model_type=MODEL, viewer=viewer)   # opens the micro_sam widgets in the running viewer
+annotator_2d(img, model_type=MODEL, viewer=viewer,
+             embedding_path="/app/data/projects/demo/processed/embed.zarr")
 ```
 
-> **WARNING — this call runs on napari's main Qt thread.** Anything slow inside it
-> (downloading a checkpoint, building the model, computing embeddings) blocks the
-> event loop, so the viewer stops repainting and the whole VNC desktop looks frozen.
-> A cold `vit_t_lm` build alone is ~47 s; `vit_b_lm` on CPU is far worse, and the
-> MCP call gives up at `IMAGENTJ_MCP_TOOL_TIMEOUT_SECONDS` (90 s by default) while
-> the work keeps running invisibly in the server.
->
-> **Always warm the cache first, outside the viewer**, via `python_data_analyst`
-> with `# imagentj-env: napari-mcp` (that path is subprocess-supervised, so the
-> stop button and memory watchdog actually cover it):
-> ```python
-> # imagentj-env: napari-mcp
-> from micro_sam.automatic_segmentation import get_predictor_and_segmenter
-> get_predictor_and_segmenter(model_type="vit_t_lm", device="cpu", segmentation_mode="ais")
-> ```
-> Only open the annotator once that has completed. On CPU also pass an
-> `embedding_path` so embeddings are computed once and reused.
+`embedding_path` is **required practice here, not an optimisation** — without it the
+annotator recomputes embeddings on the Qt thread and you are back to a frozen viewer.
+Reuse the same path across sessions on the same image and startup is near-instant.
 
 The plugin is also in the napari GUI: **Plugins → Segment Anything for Microscopy**. After the user
 finishes, save the committed label layer to a TIFF so the next pipeline step can read it.

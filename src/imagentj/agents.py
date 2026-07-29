@@ -43,6 +43,7 @@ from .tools import (
     get_script_info, load_script, get_script_history,
     setup_analysis_workspace, save_markdown,
     NarrationReminderMiddleware, PhaseGuardMiddleware, VisionOptionMiddleware,
+    NapariComputeGuardMiddleware,
     update_state_ledger, read_state_ledger, set_ledger_metadata, get_ledger_context,
     check_environment,
     set_dialog_vision_llm,
@@ -1072,6 +1073,10 @@ def init_agent():
         ),
         NarrationReminderMiddleware(),
         PhaseGuardMiddleware(),
+        # Blocks heavy micro_sam compute from reaching napari's execute_code, which
+        # runs on the Qt thread under a 90 s cap — the combination that freezes the
+        # viewer AND times out. Redirects the model to the supervised analyst path.
+        NapariComputeGuardMiddleware(),
         # Innermost user middleware: per-chat final say on Vision prompt + tool exposure.
         VisionOptionMiddleware(
             enabled_prompt=vision_prompt,
