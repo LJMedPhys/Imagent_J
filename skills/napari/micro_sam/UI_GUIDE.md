@@ -54,10 +54,11 @@ certainly have the wrong layer selected. This is the #1 beginner mistake.
   `viewer` is already bound):
   ```python
   from micro_sam.sam_annotator import annotator_2d   # or annotator_3d / annotator_tracking
-  import tifffile
+  import tifffile, torch
   img = tifffile.imread("/app/data/projects/demo/raw_images/cells.tif")
-  annotator_2d(img, model_type="vit_b_lm", viewer=viewer,
-               embedding_path="/app/data/projects/demo/processed/embed.zarr")  # optional cache
+  MODEL = "vit_b_lm" if torch.cuda.is_available() else "vit_t_lm"   # tiny on CPU
+  annotator_2d(img, model_type=MODEL, viewer=viewer,
+               embedding_path="/app/data/projects/demo/processed/embed.zarr")  # cache — do NOT skip on CPU
   ```
 
 The micro_sam panel appears on the right; its layers appear in the layer list.
@@ -81,7 +82,9 @@ The micro_sam panel appears on the right; its layers appear in the layer list.
 1. **Click "Compute Embeddings"** (in the micro_sam panel). Nothing else works until you do —
    until then you'll see *"Image embeddings are not yet computed"*. This is the slow step
    (on the `gpu-local` image it uses the A100; on the CPU image it's slow).
-   *First ever run also downloads the model (~375 MB for `vit_b_lm`), so be patient once.*
+   *First ever run also downloads the model (~375 MB for `vit_b_lm`, ~85 MB for `vit_t_lm` incl.
+   decoder). Warm that download from a script BEFORE opening the annotator — inside the viewer it
+   blocks the Qt event loop and the whole desktop appears frozen with no progress bar.*
 
 2. **Select the `point_prompts` layer** in the layer list (bottom-left). Then in **layer
    controls** (top-left) click the **"Add points"** tool (the `+` icon).

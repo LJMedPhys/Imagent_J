@@ -11,9 +11,11 @@ description: >-
   mcp__napari_mcp__execute_code, launching annotator_2d/annotator_3d for click-prompted correction);
   or headless batch (backend "python_data_analyst", first line `# imagentj-env: napari-mcp`) using
   get_predictor_and_segmenter + automatic_instance_segmentation to write a label mask. Default model
-  vit_b_lm; use *_lm for light microscopy, *_em_organelles for EM, *_histopathology for H&E. vit_t
-  (tiny, fastest on CPU) additionally needs mobile_sam. Prefer StarDist/Cellpose for standard nuclei/
-  cells (faster, often better) — micro_sam is the specialist for the hard/novel/interactive cases.
+  is device-dependent: vit_t_lm on a CPU build, vit_b_lm on a GPU build. Use *_lm for light
+  microscopy, *_em_organelles for EM, *_histopathology for H&E. vit_t needs mobile_sam (installed
+  here). Warm the model cache from a script before opening the interactive annotator — downloading
+  inside it blocks napari's Qt thread and freezes the viewer. Prefer StarDist/Cellpose for standard
+  nuclei/cells (faster, often better) — micro_sam is the specialist for hard/novel/interactive cases.
 ---
 
 # micro_sam — Segment Anything for Microscopy
@@ -43,8 +45,13 @@ from micro_sam.automatic_segmentation import (
 
 image = tifffile.imread("/app/data/projects/demo/raw_images/cells.tif")   # 2D grayscale or RGB
 
+import torch
+# Pick the backbone from the hardware, don't hard-code it: vit_b_lm is ~9x larger
+# and far slower to embed on CPU. See "Model selection" below.
+MODEL = "vit_b_lm" if torch.cuda.is_available() else "vit_t_lm"
+
 predictor, segmenter = get_predictor_and_segmenter(
-    model_type="vit_b_lm",        # LM default; see model table below
+    model_type=MODEL,             # vit_t_lm on CPU builds, vit_b_lm on GPU
     device=None,                  # None auto-selects the GPU when available, else CPU.
                                    # Do NOT hard-code "cuda" — it crashes on the CPU-only image.
     segmentation_mode="ais",      # decoder-based Automatic Instance Segmentation (recommended)
@@ -70,10 +77,11 @@ The supervisor drives it with `mcp__napari_mcp__execute_code`. Two patterns:
 **Automatic seg, then hand the user a correctable label layer:**
 ```python
 # code passed to mcp__napari_mcp__execute_code
-import numpy as np, tifffile
+import numpy as np, tifffile, torch
 from micro_sam.automatic_segmentation import get_predictor_and_segmenter, automatic_instance_segmentation
 img = tifffile.imread("/app/data/projects/demo/raw_images/cells.tif")
-predictor, segmenter = get_predictor_and_segmenter(model_type="vit_b_lm", device=None, segmentation_mode="ais")  # device=None → GPU if available, else CPU
+MODEL = "vit_b_lm" if torch.cuda.is_available() else "vit_t_lm"   # tiny on CPU — see WARNING below
+predictor, segmenter = get_predictor_and_segmenter(model_type=MODEL, device=None, segmentation_mode="ais")  # device=None → GPU if available, else CPU
 labels = automatic_instance_segmentation(predictor=predictor, segmenter=segmenter, input_path=img, ndim=2, verbose=False)
 viewer.add_image(img, name="raw"); viewer.add_labels(labels.astype("uint32"), name="micro_sam")
 ```
@@ -82,10 +90,30 @@ viewer.add_image(img, name="raw"); viewer.add_labels(labels.astype("uint32"), na
 **Full click-prompted annotator (human corrects with points/boxes):**
 ```python
 from micro_sam.sam_annotator import annotator_2d
-import tifffile
+import tifffile, torch
 img = tifffile.imread("/app/data/projects/demo/raw_images/cells.tif")
-annotator_2d(img, model_type="vit_b_lm", viewer=viewer)   # opens the micro_sam widgets in the running viewer
+MODEL = "vit_b_lm" if torch.cuda.is_available() else "vit_t_lm"
+annotator_2d(img, model_type=MODEL, viewer=viewer)   # opens the micro_sam widgets in the running viewer
 ```
+
+> **WARNING — this call runs on napari's main Qt thread.** Anything slow inside it
+> (downloading a checkpoint, building the model, computing embeddings) blocks the
+> event loop, so the viewer stops repainting and the whole VNC desktop looks frozen.
+> A cold `vit_t_lm` build alone is ~47 s; `vit_b_lm` on CPU is far worse, and the
+> MCP call gives up at `IMAGENTJ_MCP_TOOL_TIMEOUT_SECONDS` (90 s by default) while
+> the work keeps running invisibly in the server.
+>
+> **Always warm the cache first, outside the viewer**, via `python_data_analyst`
+> with `# imagentj-env: napari-mcp` (that path is subprocess-supervised, so the
+> stop button and memory watchdog actually cover it):
+> ```python
+> # imagentj-env: napari-mcp
+> from micro_sam.automatic_segmentation import get_predictor_and_segmenter
+> get_predictor_and_segmenter(model_type="vit_t_lm", device="cpu", segmentation_mode="ais")
+> ```
+> Only open the annotator once that has completed. On CPU also pass an
+> `embedding_path` so embeddings are computed once and reused.
+
 The plugin is also in the napari GUI: **Plugins → Segment Anything for Microscopy**. After the user
 finishes, save the committed label layer to a TIFF so the next pipeline step can read it.
 
@@ -100,25 +128,47 @@ caching.
 `model_type` = a SAM backbone (`vit_t` < `vit_b` < `vit_l` < `vit_h`, bigger = slower + more accurate)
 optionally suffixed with a domain finetune:
 
-| Suffix | Domain | Use for |
-|---|---|---|
-| `_lm` | Light microscopy | Fluorescence / brightfield cells & nuclei — **the default (`vit_b_lm`)** |
-| `_em_organelles` | Electron microscopy | Organelles / structures in EM |
-| `_histopathology` | H&E histopathology | Stained tissue sections |
-| `_medical_imaging` | Medical | CT / MRI-style data |
-| *(none)* | Natural-image SAM | Non-microscopy fallback (`vit_b`, `vit_l`, `vit_h`) |
+| Suffix | Domain | `vit_t`? | Use for |
+|---|---|---|---|
+| `_lm` | Light microscopy | ✅ **baked** | Fluorescence / brightfield cells & nuclei — **the default** |
+| `_em_organelles` | Electron microscopy | ✅ **baked** | Organelles / structures in EM |
+| `_histopathology` | H&E histopathology | ❌ none — `vit_b` is the floor (~419 MB) | Stained tissue sections |
+| `_medical_imaging` | Medical | ❌ none — `vit_b` is the floor (~772 MB) | CT / MRI-style data |
+| *(none)* | Natural-image SAM | ✅ but **no AIS decoder** | Non-microscopy fallback only |
+
+**`vit_t` does not exist for every domain.** LM and EM have a tiny variant (both pre-baked);
+histopathology and medical imaging start at `vit_b` and must be downloaded before use.
 
 `segmentation_mode`: `"ais"` (decoder-based Automatic Instance Segmentation — recommended, uses the
 `*_lm`/`*_em` finetuned decoder) · `"amg"` (Automatic Mask Generation — original SAM, slower, no
 finetuned decoder) · `"apg"`. Default picks AIS when a decoder model is available.
+
+> **Model choice and `segmentation_mode` are coupled — the un-suffixed models have NO decoder.**
+> With a generic `vit_t`/`vit_b`/`vit_l`/`vit_h`, `segmentation_mode="ais"` raises
+> `RuntimeError: ...your model does not contain a decoder`, and `segmentation_mode=None` silently
+> falls back to `"amg"`. That fallback is the usual cause of an automatic run blowing past the
+> 90 s MCP timeout: AIS is ~one decoder pass per image, while AMG runs the mask decoder over a
+> dense grid of point prompts — hundreds to thousands of passes. If automatic segmentation is
+> mysteriously slow, check you are on a `_lm`/`_em`-suffixed model, not a generic one.
+>
+> Interactive point/box prompting works on **every** model, decoder or not — the decoder gap only
+> affects automatic mode.
 
 ## Pitfalls that actually bite
 
 1. **`vit_t` / `vit_t_lm` (tiny) needs `mobile_sam`.** Without it: `RuntimeError: 'mobile_sam' is
    required for the vit-tiny`. It is installed in this env; if a rebuild drops it, `vit_b_lm` is the
    safe default. Tiny is the **fastest on CPU** — prefer it there once mobile_sam is present.
-2. **First use downloads the checkpoint** (`vit_b_lm` ≈ 375 MB; `vit_t_lm` ≈ 40 MB) to the micro_sam
-   cache. The first call is slow; later calls reuse the cache. Do this on the verification image first.
+2. **Two models are PRE-BAKED into the image; everything else downloads on first use.**
+   Baked (no download, works offline): **`vit_t_lm`** and **`vit_t_em_organelles`**, each with its AIS
+   decoder — the tiny tier, ~162 MB, in `$MICROSAM_CACHEDIR` (`/home/imagentj/.cache/micro_sam`).
+   These run on GPU too, so the same cache serves the CPU and GPU builds.
+
+   Any OTHER model downloads on first use (`vit_b_*` ≈ 375 MB + decoder; `vit_b_medical_imaging`'s
+   decoder is a 397 MB outlier). **Never let that first call be an interactive one** — a download
+   inside `annotator_2d` freezes the viewer with no progress indicator, and an interrupted one leaves
+   a partial temp file that never resumes. Warm it from a `# imagentj-env: napari-mcp` script first
+   (see the WARNING under Backend B), then work on the verification image.
 3. **GPU vs CPU — pass `device=None` and let it auto-select** (`"cuda"` if a GPU is present, else
    `"cpu"`). GPU acceleration is available only in the **GPU image build** (`USE_GPU=true`, which ships
    a CUDA torch); the default CPU image runs micro_sam on CPU. Never hard-code `device="cuda"` — it

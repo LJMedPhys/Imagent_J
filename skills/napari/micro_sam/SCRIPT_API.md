@@ -35,7 +35,11 @@ automatic_instance_segmentation(
 
 ## Interactive napari widgets — `micro_sam.sam_annotator`
 
-Call these inside napari (via `mcp__napari_mcp__execute_code`), passing the running `viewer`:
+Call these inside napari (via `mcp__napari_mcp__execute_code`), passing the running `viewer`.
+
+> The `model_type="vit_b_lm"` below is **micro_sam's own upstream default**, not the right choice on
+> this CPU build — pass `vit_t_lm` explicitly there. These calls also run on napari's Qt thread, so
+> warm the model cache from a script first (see `SKILL.md` → Backend B) or the viewer will freeze.
 
 ```python
 annotator_2d(image: np.ndarray, model_type="vit_b_lm", embedding_path=None,

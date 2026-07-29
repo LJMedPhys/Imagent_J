@@ -27,13 +27,18 @@ from micro_sam.automatic_segmentation import (
 # ---- CONFIG -----------------------------------------------------------------
 INPUT_DIR = "/app/data/projects/demo/raw_images"
 OUTPUT_DIR = "/app/data/projects/demo/processed"
-MODEL_TYPE = "vit_b_lm"        # LM default; vit_t_lm is faster on CPU; *_em_organelles for EM
+MODEL_TYPE = None              # None = auto-pick by device (see below). Pin a string to
+                               # override, e.g. "vit_b_lm", or "*_em_organelles" for EM.
 SEG_MODE = "ais"               # decoder-based Automatic Instance Segmentation (recommended)
 EXTS = ("*.tif", "*.tiff", "*.png")
 # -----------------------------------------------------------------------------
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 device = "cuda" if torch.cuda.is_available() else "cpu"
+# vit_b_lm is ~9x larger than vit_t_lm and much slower to embed on CPU, so the
+# tiny backbone is the right default on a CPU build.
+if MODEL_TYPE is None:
+    MODEL_TYPE = "vit_b_lm" if device == "cuda" else "vit_t_lm"
 print(f"micro_sam: model={MODEL_TYPE} mode={SEG_MODE} device={device}")
 
 # Build the model ONCE (loads weights / downloads the checkpoint on first use).
