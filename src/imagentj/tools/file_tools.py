@@ -28,6 +28,13 @@ MAX_CONTEXT_PDF_PAGES = 3  # Small enough for immediate reading
 def shadow_ingest_upgrade(file_path: str, vector_store, file_hash: str):
     """
     Background worker that replaces fast chunks with high-quality Docling chunks.
+
+    docling is not installed in the shipped runtime image (see environment.yml —
+    it pulls in torch+transformers, ~4.7 GB, otherwise unused here). This upgrade
+    is therefore a no-op in that environment: the file stays searchable at "fast"
+    (RecursiveCharacterTextSplitter) quality indefinitely, it just never reaches
+    "high" (layout-aware) quality. That's the expected, permanent behavior here,
+    not a transient failure — the except below logs it accordingly.
     """
     try:
         print(f"[Shadow] Starting high-quality re-index: {file_path}")
@@ -76,6 +83,10 @@ def shadow_ingest_upgrade(file_path: str, vector_store, file_hash: str):
         vector_store.add_documents(high_quality_splits)
         print(f"[Shadow] Upgrade complete for: {file_path}")
 
+    except ImportError as e:
+        print(f"[Shadow] Upgrade skipped for {file_path}: docling not installed "
+              f"in this environment (expected — the fast-tier index stays in "
+              f"use for this file). {e}")
     except Exception as e:
         print(f"[Shadow] Upgrade failed for {file_path}: {e}")
 
