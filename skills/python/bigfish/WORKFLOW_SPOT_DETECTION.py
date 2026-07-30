@@ -23,7 +23,7 @@ import bigfish.detection as detection
 
 # ─────────────────────────── CONFIG ───────────────────────────
 # A single image file, or a FOLDER. A folder is processed in batch with ONE shared
-# threshold, which is what makes counts comparable across the set (pitfall B5).
+# threshold, which is what makes counts comparable across the set (pitfall B7).
 INPUT_PATH = "/app/data/spots.tif"
 
 # Both in NANOMETRES, ordered (z, y, x) for 3D or (y, x) for 2D — z first, x last.
@@ -91,7 +91,7 @@ def check_units(image, voxel_size, spot_radius):
 
 
 def detect(images):
-    """One automatic threshold shared across every image (pitfall B5)."""
+    """One automatic threshold shared across every image (pitfall B7)."""
     for img in images:
         check_units(img, VOXEL_SIZE_NM, SPOT_RADIUS_NM)
 
@@ -114,7 +114,7 @@ def detect(images):
 
 
 def to_frame(spots_list, names):
-    """Flatten to a tidy table, converting (z,y,x) order to x/y/z columns (pitfall B2)."""
+    """Flatten to a tidy table, converting (z,y,x) order to x/y/z columns (pitfall B3)."""
     rows = []
     for name, spots in zip(names, spots_list):
         if len(spots) == 0:
@@ -132,7 +132,7 @@ def to_frame(spots_list, names):
 
 
 def qc_plot(images, threshold, path):
-    """Elbow curve. A clean bend = the automatic threshold is trustworthy (pitfall B6)."""
+    """Elbow curve. A clean bend = the automatic threshold is trustworthy (pitfall B8)."""
     thresholds, log_counts, auto = detection.get_elbow_values(
         images=images, voxel_size=VOXEL_SIZE_NM, spot_radius=SPOT_RADIUS_NM)
     # get_elbow_values returns counts already on a LOG scale (and smoothed), so

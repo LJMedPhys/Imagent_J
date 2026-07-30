@@ -141,8 +141,8 @@ shallow plateau (real spots). The chosen threshold sits at the bend.
 
 **Read this plot whenever a count looks wrong.** A clean bend means the automatic
 choice is trustworthy. No visible bend means the image does not have a separable
-spot population — too few spots, no spots, or a background problem (pitfalls B6,
-B7), and the count should not be reported without a caveat.
+spot population — too few spots, no spots, or a background problem (pitfalls B8,
+B10), and the count should not be reported without a caveat.
 
 Lower-level pieces, if you need to drive the steps yourself:
 

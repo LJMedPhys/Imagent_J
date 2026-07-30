@@ -17,8 +17,8 @@ description: >-
   diffraction-limited spots — a mismatched radius silently destroys detection; detect_spots returns
   POINTS, so never stamp fixed-radius disks and call the result a segmentation; both parameters and
   the returned INTEGER PIXEL coordinates are ordered (z,y,x) for 3D / (y,x) for 2D, never (x,y).
-  Prefer TrackMate when spots must be LINKED across time (tracking), and the Radial Symmetry
-  (RS-FISH) Fiji plugin when SUB-PIXEL localization accuracy is required.
+  Prefer TrackMate when spots must be LINKED across time (tracking). For SUB-PIXEL accuracy stay
+  here and use detection.fit_subpixel, which refines the detected spots in place.
 ---
 
 # Big-FISH — Documentation Index
@@ -55,9 +55,9 @@ Installed in the main env (`local_imagent_J`) — no env switch needed, scripts 
   thousands. No tuning, no model, no GPU. **Start here.** For per-object **area and
   intensity** use `WORKFLOW_SPOT_SEGMENTATION.py`, which adds real object extent on
   top of the detection.
-- **Radial Symmetry / RS-FISH (Fiji plugin)** — when you need **sub-pixel**
-  coordinates (e.g. measuring inter-spot distances near the diffraction limit) or
-  must stream very large N5/HDF5 volumes. Costs you a sigma + threshold to tune.
+- **`detection.fit_subpixel` (this skill)** — when you need **sub-pixel**
+  coordinates, e.g. measuring inter-spot distances near the diffraction limit.
+  Refines `detect_spots` output in place; no second tool required (pitfall B5).
 - **TrackMate** — when spots must be **linked across time** into tracks. Big-FISH
   detects per-image; it does not track.
 - **skimage `blob_log` / `peak_local_max`** — when you want the raw primitives and
@@ -89,8 +89,9 @@ a 2D image.
 | `WORKFLOW_SPOT_DETECTION.py` | Ready-to-run: image (or folder) → spot coordinates CSV + per-image counts + elbow QC plot; edit the CONFIG block |
 | `WORKFLOW_SPOTS_PER_CELL.py` | Ready-to-run: spots + a cell/nucleus LABEL image (from cellpose/stardist) → spots-per-cell CSV, the standard smFISH readout |
 | `WORKFLOW_SPOT_SEGMENTATION.py` | Ready-to-run: image → per-object **segmentation mask** + area/mean/integrated-density CSV + contour QC. Reads calibration from the file, measures the object radius, splits touching objects. Use this whenever you need object EXTENT, not just position |
-| `TEST_SPOT_DETECTION.py` | Self-contained validation on synthetic Gaussian spots with known ground truth; prints `RESULT: PASS/FAIL`, exits nonzero on failure |
-| `TESTS.md` | How to run the test in the container |
+
+Each workflow falls back to synthetic data when its configured input is missing, so
+running one untouched is the quickest way to check the skill still works.
 
 ## Critical pitfalls
 
@@ -170,14 +171,16 @@ a 2D image.
   per-spot signal quality number, compute it yourself from the image.
 - **B12 — Big-FISH is unmaintained upstream (last release 0.6.2, April 2022).** It
   runs correctly on this env's numpy 2.5 / scikit-image 0.26 (verified end-to-end),
-  but do not expect fixes upstream; pin behaviour with the bundled test.
+  but do not expect fixes upstream. If a numpy or scikit-image upgrade changes
+  behaviour, re-check B11 first — that is where the version rot shows up.
 
 ## Verified
 
-`TEST_SPOT_DETECTION.py` passes in the container. On synthetic Gaussian spots the
-automatic threshold recovers 64/64 spots in 2D and 32/32 in 3D with zero false
-positives, no threshold supplied — and recall stays **1.00** from 5 to 400 spots
-*provided `spot_radius` matches the objects* (pitfall B2).
+Measured on synthetic Gaussian spots with known ground truth: the automatic
+threshold recovers 64/64 spots in 2D and 32/32 in 3D with zero false positives, no
+threshold supplied — and recall stays **1.00** from 5 to 400 spots *provided
+`spot_radius` matches the objects* (pitfall B2). `fit_subpixel` lowers median
+localization error from 0.345 px to 0.012 px.
 
 `WORKFLOW_SPOT_SEGMENTATION.py` was validated against a real 2048×2048 confocal
 image and an independent Fiji reference segmentation of the same file:

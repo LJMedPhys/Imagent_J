@@ -63,7 +63,7 @@ def assign_spots_to_labels(spots, labels):
     """
     Look up each spot's label. Spot coords are (z,y,x)/(y,x) integer indices, so they
     index the label image directly — but a 3D detection against a 2D label image must
-    drop z first (pitfall B2).
+    drop z first (pitfall B3).
     """
     if len(spots) == 0:
         return np.empty(0, dtype=labels.dtype)
