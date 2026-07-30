@@ -1463,6 +1463,76 @@ def copy_file(source_path: str, directory: str, filename: str, description: str)
 
 
 
+# ── Pre-flight static checks (catch known-bad patterns before touching the JVM) ──
+#
+# This deployment's Cellpose model directory (/home/imagentj/.cellpose/models) renamed
+# the nuclei model from "nuclei" to "nucleitorch_0". The old name is not merely stale
+# documentation: cellpose CLI passed the wrong/missing model id, which quietly finds 0
+# objects on a plausible-looking run or errors deep inside the BIOP wrapper. The name
+# keeps resurfacing because it is baked into MANY existing script files (old project
+# scripts, learned-memory recipes) that the coder can legally reuse verbatim via
+# copy_file — fixing the recipe library alone does not fix those. A dict (not a single
+# constant) so a future re-map only needs a new entry here.
+_RENAMED_CELLPOSE_MODELS = {
+    "nuclei": "nucleitorch_0",
+}
+
+_MODEL_ASSIGN_RE = re.compile(r"\.model\b\s*=\s*(.+?)\s*(?://.*)?$", re.MULTILINE)
+_STRING_LITERAL_RE = re.compile(r"""^(['"])(.*)\1$""", re.DOTALL)
+_VAR_STRING_DEF_RE = re.compile(r"\b(?:def|final\s+String|String)\s+(\w+)\s*=\s*(['\"])(.*?)\2")
+
+
+def _resolve_string_value(rhs: str, code: str) -> Optional[str]:
+    """Resolve a right-hand side to its string value: either a literal directly, or a
+    variable traced back to its own string-literal assignment earlier in the script.
+    Returns None if it can't be resolved statically (e.g. built from concatenation or a
+    method call) — such cases are skipped, never flagged, so this only ever reports what
+    it can prove is wrong."""
+    rhs = rhs.strip().rstrip(";")
+    lit = _STRING_LITERAL_RE.match(rhs)
+    if lit:
+        return lit.group(2)
+    m = re.match(r"^(\w+)$", rhs)
+    if not m:
+        return None
+    var = m.group(1)
+    for name, _, value in _VAR_STRING_DEF_RE.findall(code):
+        if name == var:
+            return value
+    return None
+
+
+def _check_cellpose_model_name(code: str) -> Optional[str]:
+    """Static guard: reject a Groovy script whose BIOP Cellpose `.model` is set to a
+    renamed/retired model id (see _RENAMED_CELLPOSE_MODELS) before it ever reaches the
+    JVM. Returns an error report in the same SUMMARY/STATUS/LANGUAGE shape as a real
+    execution failure, or None if nothing is wrong (or nothing could be statically
+    resolved)."""
+    if "cellpose" not in code.lower():
+        return None
+    for m in _MODEL_ASSIGN_RE.finditer(code):
+        value = _resolve_string_value(m.group(1), code)
+        if value in _RENAMED_CELLPOSE_MODELS:
+            correct = _RENAMED_CELLPOSE_MODELS[value]
+            return (
+                f"SUMMARY: ERROR — Cellpose model '{value}' is renamed to '{correct}' "
+                "on this deployment\n"
+                "STATUS: ERROR\n"
+                "LANGUAGE: Groovy\n"
+                "PRE-FLIGHT CHECK FAILED (script never executed):\n"
+                f"This deployment's Cellpose model directory no longer has a model "
+                f"called '{value}' — it was renamed to '{correct}' "
+                "(/home/imagentj/.cellpose/models). Using the old name silently finds "
+                "0 objects or fails deep inside the BIOP wrapper, not as a clear "
+                "'model not found' error.\n"
+                f"FIX: set the model to '{correct}' instead of '{value}'.\n"
+                "This value was likely copied from an older script or a stale learned-"
+                "memory recipe — check for other '" + value + "' occurrences if you "
+                "based this script on an existing file."
+            )
+    return None
+
+
 @tool("execute_script")
 def execute_script(directory: str, filename: str) -> str:
     """
@@ -1496,6 +1566,11 @@ def execute_script(directory: str, filename: str) -> str:
 
     with open(full_path, 'r', encoding='utf-8') as f:
         code_content = f.read()
+
+    if filename.endswith('.groovy'):
+        preflight_error = _check_cellpose_model_name(code_content)
+        if preflight_error:
+            return preflight_error
 
     # The registered description is what the script is *supposed* to do — the
     # watchdog needs it to tell "slow but on track" from "doing the wrong thing".
