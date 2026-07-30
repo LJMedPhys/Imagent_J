@@ -320,21 +320,6 @@ ENV LIBGL_ALWAYS_SOFTWARE=1
 # Omnipose 1.x is built on cellpose 3.x, so they share one env.
 # The micromamba shim routes both '-n cellpose' and '-n omnipose' here.
 # Snapshot (2026-04-30): Python 3.10.20, cellpose 3.1.1.2, omnipose 1.1.4, torch 2.11.0+cpu|cu124
-#
-# Plain 'cellpose', not 'cellpose[gui]': the [gui] extra pulls in PyQt6 (~260 MB)
-# for Cellpose's OWN standalone annotation window, which this container never
-# opens — Cellpose only ever runs headlessly here, either via the Fiji BIOP
-# wrapper (ch.epfl.biop.wrappers.cellpose, which shells out to the CLI with
-# explicit flags) or direct Python API calls from python_data_analyst. Verified
-# no skill/script anywhere in this repo invokes the interactive GUI.
-#
-# tifffile is bumped to 2025.5.10 AFTER cellpose installs: the version cellpose
-# (with or without [gui]) originally pinned was old enough (2023.2.28) to call
-# ndarray.newbyteorder() (removed in NumPy 2.0) when reading the big-endian
-# ('MM') TIFFs that ImageJ/Fiji writes. The BIOP Cellpose wrapper feeds cellpose
-# an ImageJ-written TIFF, so without the bump cellpose crashes on read. Done as
-# a separate pip call so the resolver doesn't fight aicsimageio's stale
-# <2023.3.15 pin (aicsimageio is not on the cellpose read path).
 RUN /opt/conda/bin/conda create -n cellpose python=3.10 -y \
     && if [ "$TARGETARCH" = "arm64" ]; then \
         /opt/conda/envs/cellpose/bin/pip install --no-cache-dir \
