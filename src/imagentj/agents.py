@@ -1104,7 +1104,8 @@ def init_agent():
     # (→ python) or .groovy (→ ImageJ in the GUI), and save_script writes it
     # first. No pipeline tools (workspace/coder/plugin/ledger), so education can
     # demonstrate a concept but not run the student's analysis project.
-    demo_tools = [save_script, execute_script, show_in_imagej_gui, inspect_all_ui_windows, close_imagej_windows]
+    demo_tools = [save_script, execute_script, show_in_imagej_gui, inspect_all_ui_windows,
+                  capture_plugin_dialog, close_imagej_windows]
 
     quick_tools = [
         imagej_coder, imagej_debugger, plugin_manager, execute_script, save_script, load_script,

@@ -502,6 +502,18 @@ def inspect_all_ui_windows():
                     "title": title,
                     "content": text_content[-4000:] if len(text_content) > 4000 else text_content
                 })
+            elif not _is_main_imagej_window(title):
+                # Anything else visible and titled (a plugin's own parameter dialog,
+                # a "command not found" popup, ...) used to be silently dropped here,
+                # so it never showed up in this report even though it was genuinely
+                # open — the window enumeration above found it, this branch just had
+                # nowhere to put it. Surface at least its existence + title; call
+                # capture_plugin_dialog() for the actual fields/values/buttons.
+                all_inspections["tables_and_text"].append({
+                    "type": "Other Window (likely a plugin dialog)",
+                    "title": title,
+                    "note": "Call capture_plugin_dialog() to see its fields, values, and buttons.",
+                })
         except Exception as e:
             print(f"[inspect_ui] Skipped window: {e}")
 
