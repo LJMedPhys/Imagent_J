@@ -138,10 +138,29 @@ def _md_to_html(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 class _BubbleLabel(QLabel):
-    """QLabel that lets its parent layout freely constrain its width."""
+    """QLabel that lets its parent layout freely constrain its width.
+
+    Also pads its reported height by a few px: QLabel's own heightForWidth()/
+    sizeHint() for word-wrapped rich text can undercount by a couple of pixels,
+    most visibly on a wrapped line that mixes bold and plain spans (e.g. markdown
+    **bold**, common in these messages) — Qt's own document layout renders that
+    line slightly taller than the hint it reports. Since a widget always clips
+    its own painting to its allotted rect, the shortfall clips that line's
+    descenders against the bubble's bottom edge. A small fixed safety margin
+    absorbs the discrepancy regardless of its exact per-line cause.
+    """
+    _HEIGHT_SLACK = 6  # px
+
     def minimumSizeHint(self):
         sh = super().minimumSizeHint()
-        return QSize(1, sh.height())
+        return QSize(1, sh.height() + self._HEIGHT_SLACK)
+
+    def heightForWidth(self, width):
+        return super().heightForWidth(width) + self._HEIGHT_SLACK
+
+    def sizeHint(self):
+        sh = super().sizeHint()
+        return QSize(sh.width(), sh.height() + self._HEIGHT_SLACK)
 
 
 class MessageBubble(QFrame):
@@ -200,6 +219,11 @@ class MessageBubble(QFrame):
             self._label.setText(f'<div align="right">{content}</div>')
         else:
             self._label.setText(content)
+        # Streamed updates keep replacing this same label's text as tokens arrive;
+        # force the layout to re-check its size hint each time rather than trust
+        # a cached one from an earlier, shorter version of this bubble.
+        self._label.updateGeometry()
+        self.updateGeometry()
 
 
 class ChatScrollArea(QWidget):
