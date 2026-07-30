@@ -58,7 +58,8 @@ certainly have the wrong layer selected. This is the #1 beginner mistake.
   img = tifffile.imread("/app/data/projects/demo/raw_images/cells.tif")
   MODEL = "vit_b_lm" if torch.cuda.is_available() else "vit_t_lm"   # tiny on CPU
   annotator_2d(img, model_type=MODEL, viewer=viewer,
-               embedding_path="/app/data/projects/demo/processed/embed.zarr")  # cache — do NOT skip on CPU
+               embedding_path="/app/data/projects/demo/processed/embed.zarr",  # cache — do NOT skip on CPU
+               return_viewer=True)  # dock into the running viewer; without it napari.run() blocks forever
   ```
 
 The micro_sam panel appears on the right; its layers appear in the layer list.

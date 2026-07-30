@@ -146,12 +146,31 @@ import tifffile, torch
 img = tifffile.imread("/app/data/projects/demo/raw_images/cells.tif")
 MODEL = "vit_b_lm" if torch.cuda.is_available() else "vit_t_lm"
 annotator_2d(img, model_type=MODEL, viewer=viewer,
-             embedding_path="/app/data/projects/demo/processed/embed.zarr")
+             embedding_path="/app/data/projects/demo/processed/embed.zarr",
+             return_viewer=True)
 ```
 
 `embedding_path` is **required practice here, not an optimisation** — without it the
 annotator recomputes embeddings on the Qt thread and you are back to a frozen viewer.
 Reuse the same path across sessions on the same image and startup is near-instant.
+
+`return_viewer=True` is **mandatory over MCP**. Without it `annotator_2d` ends by calling
+`napari.run()`, which blocks until the user closes the annotator window — so the tool call
+can never return while annotation is in progress. No timeout value fixes that; the call is
+designed never to return. Worse, the resulting bare `TimeoutError` kills the entire agent
+turn, so you get no usable error back — just a blank "Agent error".
+With `return_viewer=True` the annotator docks into the viewer `init_viewer` already created
+and the call returns, leaving the widget live for the user to annotate in VNC. A second
+`napari.run()` event loop would be wrong here in any case.
+
+**Budget ~85 s for the launch, and raise the MCP cap before calling.** `return_viewer=True`
+alone is not enough: `initialize_predictor` always rebuilds the model via `util.get_sam_model`
+(there is no way to inject a cached predictor), and that call alone measures **~60 s for
+`vit_t_lm`** — on GPU *and* CPU; it is state-dict loading, not device transfer. Measured
+end-to-end through MCP with embeddings precomputed, the full `annotator_2d` launch took
+**83.9 s** — inside the 90 s default by ~6 s, i.e. it straddles the limit and fails on a
+slow run. Set `IMAGENTJ_MCP_TOOL_TIMEOUT_SECONDS=300` (the adapter hard-clamps to 600)
+before launching an annotator. A larger backbone such as `vit_b_lm` will exceed 90 s outright.
 
 The plugin is also in the napari GUI: **Plugins → Segment Anything for Microscopy**. After the user
 finishes, save the committed label layer to a TIFF so the next pipeline step can read it.
