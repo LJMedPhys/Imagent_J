@@ -1,0 +1,196 @@
+---
+name: bigfish
+description: >-
+  Big-FISH detects and counts small bright fluorescent spots (smFISH/RNA transcripts, puncta,
+  foci, granules, vesicles) in 2D images and 3D stacks, and is the DEFAULT spot-detection tool
+  because it needs NO parameter tuning and NO deep-learning model. It runs a Laplacian-of-Gaussian
+  filter plus local-maximum detection, then picks the intensity threshold ITSELF via the elbow
+  method — you pass `threshold=None` and supply only two PHYSICAL values, `voxel_size` and
+  `spot_radius`, both in NANOMETRES. In the MAIN env; `import bigfish.detection`. Use it for
+  counting spots per image or per cell, spots in 3D confocal stacks, and batch runs over many
+  images where hand-tuning a threshold is impractical. It ALSO produces true per-object
+  SEGMENTATION (area, mean, integrated density per punctum) via WORKFLOW_SPOT_SEGMENTATION.py,
+  which thresholds for object extent and uses the detected spots as watershed seeds. CRITICAL
+  PITFALLS: voxel_size must be READ from the image calibration, never guessed (ImageJ writes
+  ResolutionUnit=1 and hides the unit in its own metadata, so naive readers silently fall back to
+  a wrong value); spot_radius must MATCH the actual object size and 150 nm applies ONLY to
+  diffraction-limited spots — a mismatched radius silently destroys detection; detect_spots returns
+  POINTS, so never stamp fixed-radius disks and call the result a segmentation; both parameters and
+  the returned INTEGER PIXEL coordinates are ordered (z,y,x) for 3D / (y,x) for 2D, never (x,y).
+  Prefer TrackMate when spots must be LINKED across time (tracking). For SUB-PIXEL accuracy stay
+  here and use detection.fit_subpixel, which refines the detected spots in place.
+---
+
+# Big-FISH — Documentation Index
+
+Big-FISH finds **small bright spots** in fluorescence images and tells you where
+they are and how many there are. It is a classical (non-deep-learning) detector:
+Laplacian-of-Gaussian filtering followed by local-maximum detection and an
+intensity threshold.
+
+**Why this is the default spot detector: the threshold is automatic.** The usual
+pain of spot detection is hand-tuning an intensity cutoff per image. Big-FISH
+removes it — call `detect_spots(..., threshold=None)` and it builds the curve of
+"spot count vs. threshold", finds the elbow (the kink where fast-decaying false
+positives give way to the slowly-decaying true spots) and uses that value. The
+only numbers you provide are physical facts about the acquisition:
+
+| You supply | How to OBTAIN it | Units |
+|---|---|---|
+| `voxel_size` | **read from the file's calibration** — never guessed (pitfall B1) | **nanometres**, `(z,y,x)` or `(y,x)` |
+| `spot_radius` | **measured from your objects** — 150 nm only if they are truly diffraction-limited (pitfall B2) | **nanometres**, `(z,y,x)` or `(y,x)` |
+
+Neither is a knob to sweep — but neither is a constant you may assume. Both must be
+*obtained from the data*. Assuming them is the single most common way this tool
+fails, and it fails **silently**: measured on real data, a `spot_radius` 12× too
+small still returned a plausible-looking spot list while the detections no longer
+corresponded to the objects.
+
+Installed in the main env (`local_imagent_J`) — no env switch needed, scripts do
+**not** need an `# imagentj-env:` header.
+
+## When to use this vs. alternatives
+
+- **Big-FISH (this skill)** — counting spots/puncta/foci, 2D or 3D, one image or
+  thousands. No tuning, no model, no GPU. **Start here.** For per-object **area and
+  intensity** use `WORKFLOW_SPOT_SEGMENTATION.py`, which adds real object extent on
+  top of the detection.
+- **`detection.fit_subpixel` (this skill)** — when you need **sub-pixel**
+  coordinates, e.g. measuring inter-spot distances near the diffraction limit.
+  Refines `detect_spots` output in place; no second tool required (pitfall B5).
+- **TrackMate** — when spots must be **linked across time** into tracks. Big-FISH
+  detects per-image; it does not track.
+- **skimage `blob_log` / `peak_local_max`** — when you want the raw primitives and
+  intend to supply your own threshold.
+
+## Minimal example
+
+```python
+import bigfish.detection as detection
+
+spots, threshold = detection.detect_spots(
+    images=image,               # 2D (y,x) or 3D (z,y,x) numpy array
+    threshold=None,             # ← automatic; do not hand-tune
+    return_threshold=True,
+    voxel_size=(300, 100, 100), # nm, (z,y,x)
+    spot_radius=(400, 150, 150))# nm, (z,y,x)
+
+print(f"{len(spots)} spots (auto threshold={threshold})")
+```
+
+`spots` is an `(N, 3)` integer array of `(z, y, x)` — or `(N, 2)` of `(y, x)` for
+a 2D image.
+
+## Files
+
+| File | What it covers |
+|------|---------------|
+| `SCRIPT_API.md` | Full reference: `detect_spots`, `get_elbow_values`, `decompose_dense`, `detect_clusters`, background removal, batch/shared-threshold mode, 2D vs 3D, coordinate conventions, and how the automatic threshold works |
+| `WORKFLOW_SPOT_DETECTION.py` | Ready-to-run: image (or folder) → spot coordinates CSV + per-image counts + elbow QC plot; edit the CONFIG block |
+| `WORKFLOW_SPOTS_PER_CELL.py` | Ready-to-run: spots + a cell/nucleus LABEL image (from cellpose/stardist) → spots-per-cell CSV, the standard smFISH readout |
+| `WORKFLOW_SPOT_SEGMENTATION.py` | Ready-to-run: image → per-object **segmentation mask** + area/mean/integrated-density CSV + contour QC. Reads calibration from the file, measures the object radius, splits touching objects. Use this whenever you need object EXTENT, not just position |
+
+Each workflow falls back to synthetic data when its configured input is missing, so
+running one untouched is the quickest way to check the skill still works.
+
+## Critical pitfalls
+
+- **B1 — READ the pixel size; never fall back to a guess.** Units are **nanometres**
+  (`voxel_size=(300, 100, 100)` = 300 nm in z, 100 nm in x/y), and microns (`0.1`)
+  or pixels (`1`) produce a nonsense LoG kernel. But the dangerous case is a
+  *plausible* wrong value: a real run silently used a 100 nm/px fallback on an image
+  whose true size was **322 nm/px**, a 3.2× error that no range check catches and
+  that corrupts every physical column downstream.
+  The trap is that **ImageJ writes `ResolutionUnit = 1` ("no absolute unit")** and
+  puts the real unit in its own metadata block, so code handling only unit 2 (inch)
+  and 3 (cm) finds nothing. Use `read_pixel_size_nm()` from
+  `WORKFLOW_SPOT_SEGMENTATION.py`, which handles that case and **raises** rather
+  than guessing. If calibration is genuinely absent, get it from the acquisition
+  metadata — do not invent it.
+- **B2 — `spot_radius` must MATCH your objects, and 150 nm is only for
+  diffraction-limited spots.** This is the highest-impact parameter and it fails
+  silently. Measured on real data (parasites, median diameter 12.1 px ≈ 3900 nm):
+  leaving the smFISH default of 150 nm — ~12× too small — produced detections that
+  no longer corresponded to the objects, while still returning a plausible-looking
+  spot list. Conversely, with the radius matched to the objects the automatic
+  threshold is exact: recall **1.00** at every density from 5 to 400 spots.
+  Measure it rather than assuming: threshold the denoised image and take the median
+  `equivalent_diameter / 2` (see `measure_object_radius_nm()`). **Caveat:** that
+  median is taken over threshold *regions*, so when most objects touch it reports
+  the radius of the merged clumps — then set the single-object radius explicitly.
+- **B3 — axis order is `(z, y, x)`, not `(x, y, z)`.** This applies to
+  `voxel_size`, `spot_radius`, and the **returned coordinates**. To write an
+  x/y CSV or overlay on an image you must swap: `x = spots[:, -1]`,
+  `y = spots[:, -2]`, `z = spots[:, 0]` (3D only).
+- **B4 — Big-FISH returns POINTS. Never stamp fixed disks and call it a
+  segmentation.** `detect_spots` gives one coordinate per spot and nothing about
+  extent. Drawing a constant-radius disk at each point yields a mask of identical
+  circles that overshoot small objects, truncate large ones, and make every
+  area/intensity measurement meaningless — a real run produced 34 objects with only
+  18 distinct areas, against 55 objects spanning 12–847 px for a true segmentation
+  of the same image. If you need per-object **area or integrated intensity**, use
+  `WORKFLOW_SPOT_SEGMENTATION.py`: threshold for extent, Big-FISH spots as
+  watershed seeds to split touching objects.
+- **B5 — `detect_spots` coordinates are integer pixel indices, not sub-pixel.**
+  It returns the local-maximum voxel, so localization error is up to ~0.5 px
+  (measured: 0.345 px median on synthetic spots). If you need sub-pixel accuracy,
+  do **not** reach for another tool — pass the result through
+  `detection.fit_subpixel(image, spots, voxel_size, spot_radius)`, which Gaussian-fits
+  each spot and returns float coordinates (measured: 0.012 px median error, a 29×
+  improvement). Counting does not need this; distance measurements do.
+- **B6 — a 3D stack must be one `(z, y, x)` array.** If you pass a *list* of 2D
+  planes, `detect_spots` treats them as unrelated 2D images and returns a list of
+  per-plane results with one shared threshold. That list mode is for **batch over
+  many images**, which is a feature (see B7) — just don't use it for a volume.
+- **B7 — batch mode shares one threshold across the list, which is what you want.**
+  Passing `images=[img1, img2, ...]` computes a *single* auto threshold from all of
+  them. For a set of images acquired under identical settings this makes counts
+  comparable across the set; detecting each image separately gives each its own
+  threshold and makes counts non-comparable.
+- **B8 — `threshold=None` needs enough spots to form an elbow, and can CRASH when
+  it doesn't.** On an image with very few spots the elbow is ill-defined: the count
+  becomes unreliable, and `detect_spots` can raise
+  `ValueError: False is not in list` from `get_breaking_point` outright (observed on
+  a 6-spot image). Wrap the call in `try/except` for anything unattended, and
+  sanity-check with `get_elbow_values()` and the QC plot in
+  `WORKFLOW_SPOT_DETECTION.py` before trusting a low-count result.
+- **B9 — `get_elbow_values` returns `log(count)`, not the count.** The second return
+  value is log-scaled *and* smoothed by a moving average, and its tail is truncated
+  below ~7 spots (so you get ~197 points, not 200). Take `np.exp(...)` to recover
+  real counts. Plotting the raw value on a log y-axis gives log-of-log and a curve
+  that misrepresents where the elbow is.
+- **B10 — uneven background breaks the assumption.** Big-FISH expects spots on a
+  roughly flat background. For strong autofluorescence gradients apply
+  `bigfish.stack.remove_background_gaussian(image, sigma=...)` first (the LoG
+  filter handles mild gradients on its own).
+- **B11 — `compute_snr_spots()` is BROKEN on this env and must not be called.** It
+  raises `AttributeError: module 'numpy' has no attribute 'int'` — Big-FISH 0.6.2
+  (April 2022) still uses the `np.int` alias that numpy 2.x removed. This is the
+  *only* reachable breakage: `detect_spots`, `get_elbow_values`, `fit_subpixel`,
+  `decompose_dense` and `detect_clusters` are all verified working. If you need a
+  per-spot signal quality number, compute it yourself from the image.
+- **B12 — Big-FISH is unmaintained upstream (last release 0.6.2, April 2022).** It
+  runs correctly on this env's numpy 2.5 / scikit-image 0.26 (verified end-to-end),
+  but do not expect fixes upstream. If a numpy or scikit-image upgrade changes
+  behaviour, re-check B11 first — that is where the version rot shows up.
+
+## Verified
+
+Measured on synthetic Gaussian spots with known ground truth: the automatic
+threshold recovers 64/64 spots in 2D and 32/32 in 3D with zero false positives, no
+threshold supplied — and recall stays **1.00** from 5 to 400 spots *provided
+`spot_radius` matches the objects* (pitfall B2). `fit_subpixel` lowers median
+localization error from 0.345 px to 0.012 px.
+
+`WORKFLOW_SPOT_SEGMENTATION.py` was validated against a real 2048×2048 confocal
+image and an independent Fiji reference segmentation of the same file:
+
+| | objects | area px (min/median/max) |
+|---|---|---|
+| Fiji reference (Otsu + Analyze Particles) | 55 | 12 / 115 / 847 |
+| **this workflow** | **54** | **21 / 104 / 578** |
+| stamping fixed disks at spot coords (**wrong**, pitfall B4) | 34 | 97 / 102 / 329 |
+
+Calibration was read correctly from the file as 322.2 nm/px (the run that guessed
+100 nm/px was 3.2× off), and the object radius was measured at 1836 nm — against
+the 150 nm default that caused the failure.

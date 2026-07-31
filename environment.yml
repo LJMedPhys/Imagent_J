@@ -58,6 +58,12 @@ dependencies:
       - anthropic
       - antlr4-python3-runtime
       - beautifulsoup4
+      # Big-FISH: non-deep-learning smFISH/puncta spot detection (LoG + local maxima)
+      # whose intensity threshold is chosen AUTOMATICALLY by the elbow method, so the
+      # agent supplies only physical values (voxel size + spot radius in nm). Pulls
+      # `mrc` as its only new transitive dep; every other requirement is a lower bound
+      # already satisfied by this env (verified: no downgrades on install).
+      - big-fish
       - click
       - colorlog
       # CellProfiler's measurement engine as a library. MUST come from GitHub —
