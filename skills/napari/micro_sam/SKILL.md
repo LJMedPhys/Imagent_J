@@ -154,6 +154,11 @@ annotator_2d(img, model_type=MODEL, viewer=viewer,
 annotator recomputes embeddings on the Qt thread and you are back to a frozen viewer.
 Reuse the same path across sessions on the same image and startup is near-instant.
 
+`precompute_state` also takes `precompute_amg_state=True`, which additionally caches the AMG/AIS
+**decoder** state (speeds up a later "Automatic Segmentation" click in-session) — it does **NOT**
+touch the ~60 s model-weight loading below, so it does not help with the 90 s MCP timeout risk.
+Embeddings + a raised timeout are the only fix for that.
+
 `return_viewer=True` is **mandatory over MCP**. Without it `annotator_2d` ends by calling
 `napari.run()`, which blocks until the user closes the annotator window — so the tool call
 can never return while annotation is in progress. No timeout value fixes that; the call is
@@ -212,6 +217,19 @@ finetuned decoder) · `"apg"`. Default picks AIS when a decoder model is availab
 > Interactive point/box prompting works on **every** model, decoder or not — the decoder gap only
 > affects automatic mode.
 
+**Fine-tuned / custom weights instead of a stock model:** `get_predictor_and_segmenter(checkpoint=...)`
+(batch) or `checkpoint_path=`/`decoder_path=` (interactive annotators — see `SCRIPT_API.md` for the
+per-function asymmetry, e.g. `image_series_annotator` has no `decoder_path`). Actually fine-tuning a new
+checkpoint (`micro_sam.training`) is a separate, GPU-hours, labeled-data workflow **out of scope for
+this skill** — only reach for it if no stock `*_lm`/`*_em`/`*_histopathology` model is remotely usable.
+
+**Before a heavy run, a free sanity check:** the `napari-mcp` env installs `micro_sam.info` as a CLI
+command — run it by **full path** (its `bin/` is not on PATH just from the `# imagentj-env` header) in
+a `python_data_analyst` script:
+`subprocess.run(["/opt/conda/envs/napari-mcp/bin/micro_sam.info"], capture_output=True, text=True)`.
+~2 s, prints the installed version, cache directory, every supported model with its checkpoint version
+tag, and whether this process actually sees a GPU. Cheaper than finding out 60 s into a launch.
+
 ## Pitfalls that actually bite
 
 1. **`vit_t` / `vit_t_lm` (tiny) needs `mobile_sam`.** Without it: `RuntimeError: 'mobile_sam' is
@@ -246,5 +264,5 @@ finetuned decoder) · `"apg"`. Default picks AIS when a decoder model is availab
 | File | What it covers |
 |---|---|
 | `UI_GUIDE.md` | **Operating the interactive napari annotator**, written for someone who has never used napari: window/layer orientation, the micro_sam layers (`point_prompts`, `prompts`, `current_object`, `committed_objects`, `auto_segmentation`), the click→`S`→correct→`C` workflow, positive/negative prompts (`T`), 3D `Shift+S` propagation, tracking, keyboard shortcuts, embedding caching, saving results |
-| `SCRIPT_API.md` | Verified signatures (`get_predictor_and_segmenter`, `automatic_instance_segmentation`, the annotator widgets), the full model-name list, and mode semantics |
+| `SCRIPT_API.md` | Verified signatures (`get_predictor_and_segmenter`, `automatic_instance_segmentation`, `precompute_state`, all four annotator widgets incl. `checkpoint_path`/`decoder_path`), the full model-name list, mode semantics, the `micro_sam.info` CLI check, and CLI entry points |
 | `WORKFLOW_AUTOMATIC_SEGMENTATION.py` | Batch script (`# imagentj-env: napari-mcp`): folder → per-image label TIFF + object counts CSV, model built once, GPU/CPU auto-select |
