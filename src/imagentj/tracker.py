@@ -40,6 +40,21 @@ CHATS_DIR = Path(os.environ.get("CHAT_DATA_PATH", "/app/data/chats"))
 PRICE_TABLE: dict[str, tuple[float, float, float]] = {
     # model-name-substring                          input    output  cache_factor
     # cache_factor = fraction of p_in charged for cached tokens (None = no caching)
+    #
+    # Keys match as substrings, LONGEST KEY FIRST (see _price_for_model), so
+    # "gpt-5.4-mini" wins over "gpt-5.4" no matter what order they appear in here.
+    # Prefer UNPREFIXED keys: the tracker sees the provider prefix stripped on
+    # OpenAI-direct installs ("gpt-5.4") but intact via OpenRouter
+    # ("openai/gpt-5.4"), and a bare key matches both spellings.
+    #
+    # ── models this deployment configures (imagentj_config.yaml) ──────────────
+    # Rates verified 2026-07-29 against developers.openai.com/api/docs/pricing
+    # and openrouter.ai. Cached input is 10% of input on all of them -> 0.10.
+    "gpt-5.4-mini":              (0.75,   4.50,  0.10),  # curator / Librarian
+    "gpt-5.4-nano":              (0.20,   1.25,  0.10),  # nano fast-path
+    "gpt-5.4":                   (2.50,  15.00,  0.10),  # supervisor
+    "gpt-5.3-codex":             (1.75,  14.00,  0.10),  # worker + analyst
+    "gemini-3.5-flash":          (1.50,   9.00,  0.10),  # vision judge
     "gpt-4o-mini":               (0.15,   0.60,  0.50),
     "gpt-4o":                    (2.50,  10.00,  0.50),
     "gpt-4.1-nano":              (0.10,   0.40,  0.25),
@@ -47,11 +62,13 @@ PRICE_TABLE: dict[str, tuple[float, float, float]] = {
     "gpt-4.1":                   (2.00,   8.00,  0.25),
     "o4-mini":                   (1.10,   4.40,  0.50),
     "o4":                        (10.00, 40.00,  0.50),
-    "openai/gpt-5-nano":         (0.05,   0.40,  0.50),
-    "openai/gpt-5.2":            (1.75,  14.00,  0.50),
-    "openai/gpt-5.3-codex":      (1.75,  14.00,  0.50),
+    # Bare keys, not "openai/…": a prefixed key is LONGER than the bare key for a
+    # more specific model, so "openai/gpt-5" used to shadow "gpt-5.4" under
+    # longest-first matching. Bare keys match both spellings and sort correctly.
+    "gpt-5-nano":                (0.05,   0.40,  0.50),
+    "gpt-5.2":                   (1.75,  14.00,  0.50),
     "gpt-5.6-luna":              (1.00,   6.00,  0.10),
-    "openai/gpt-5":              (2.00,  16.00,  0.50),  # 5.x fallback
+    "gpt-5":                     (1.25,  10.00,  0.10),  # 5.x fallback (unknown 5.x)
     "default":                   (1.00,   3.00,  None),  # fallback, no cache discount
     "gemini-3-flash-preview":    (0.50,   3.00,  None),
     "kimi-k2.5":                 (0.45,   2.25,  None),
@@ -70,11 +87,21 @@ PRICE_TABLE: dict[str, tuple[float, float, float]] = {
     "google/gemini-3.1-pro-preview-customtools": (2.00, 12.00, None),
 }
 
+# Longest-first so the most specific key wins: "gpt-5.4-mini" must beat "gpt-5.4",
+# and "openai/gpt-5.3-codex" must beat "openai/gpt-5". The old first-match-on-dict-
+# order rule made correctness depend on how the table happened to be written, which
+# is how every gpt-5.x model silently fell through to "default" ($1/$3, no cache
+# discount) and produced cost figures unrelated to real pricing.
+_PRICE_KEYS_BY_SPECIFICITY = sorted(
+    (k for k in PRICE_TABLE if k != "default"), key=len, reverse=True
+)
+
+
 def _price_for_model(model_name: str) -> tuple[float, float, float | None]:
     lower = model_name.lower()
-    for key, prices in PRICE_TABLE.items():
-        if key != "default" and key in lower:
-            return prices
+    for key in _PRICE_KEYS_BY_SPECIFICITY:
+        if key in lower:
+            return PRICE_TABLE[key]
     return PRICE_TABLE["default"]
 
 
@@ -808,6 +835,18 @@ class UsageTrackerCallback(BaseCallbackHandler):
         cached_in = 0
         if isinstance(usage, dict):
             cached_in = (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
+        if not cached_in:
+            # Streaming responses often carry no llm_output["token_usage"] at all —
+            # the counts only arrive on the message's normalized usage_metadata,
+            # where the cached figure is input_token_details["cache_read"]. Without
+            # this the discount silently never applied on the streaming path, even
+            # though real cache hit rates run ~70%.
+            for gen_list in response.generations:
+                for gen in gen_list:
+                    meta = getattr(getattr(gen, "message", None), "usage_metadata", None)
+                    if meta:
+                        details = meta.get("input_token_details") or {}
+                        cached_in = max(cached_in, details.get("cache_read", 0))
         if not cached_in:
             for gen_list in response.generations:
                 for gen in gen_list:
