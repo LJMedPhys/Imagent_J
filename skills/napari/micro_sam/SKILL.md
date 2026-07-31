@@ -6,14 +6,11 @@ description: >-
   (EM), histopathology and medical imaging. Route a SEGMENTATION step here when there is NO trained
   StarDist/Cellpose model for the object, when objects are arbitrary/novel, when the data are difficult
   (EM, low contrast), or when the user wants promptable, human-in-the-loop, correctable segmentation.
-  Installed in the `napari-mcp` conda env (micro_sam 1.8.2, torch, segment-anything). TWO backends:
-  interactive in the live napari viewer (backend "napari" — supervisor drives it via
-  mcp__napari_mcp__execute_code, launching annotator_2d/annotator_3d for click-prompted correction);
-  or headless batch (backend "python_data_analyst", first line `# imagentj-env: napari-mcp`) using
-  get_predictor_and_segmenter + automatic_instance_segmentation to write a label mask. Default model
-  vit_b_lm; use *_lm for light microscopy, *_em_organelles for EM, *_histopathology for H&E. vit_t
-  (tiny, fastest on CPU) additionally needs mobile_sam. Prefer StarDist/Cellpose for standard nuclei/
-  cells (faster, often better) — micro_sam is the specialist for the hard/novel/interactive cases.
+  Prefer StarDist/Cellpose for standard nuclei and cells (faster, often better) — micro_sam is the
+  specialist for the hard, novel or interactive cases. Installed in the `napari-mcp` conda env. TWO
+  backends: interactive in the live napari viewer (backend "napari"), or headless batch (backend
+  "python_data_analyst", first line `# imagentj-env: napari-mcp`). The model table, the annotator
+  commands and the batch API are in the files listed at the end.
 ---
 
 # micro_sam — Segment Anything for Microscopy

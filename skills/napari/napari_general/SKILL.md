@@ -4,14 +4,13 @@ description: >-
   napari is the Python-native n-dimensional image viewer available inside this container as the
   napari-mcp server. Use it as a ROUTING option, not a default. Reach for napari when the task needs
   (1) INTERACTIVE, promptable, human-in-the-loop segmentation or correction — this is where micro_sam
-  (Segment Anything for Microscopy) lives, see the napari/micro_sam skill; (2) fluid viewing and
-  overlaying of n-D data — 3D/4D volumes, multi-channel stacks, label/point/shape layers — that Fiji
-  shows awkwardly; or (3) a Python-ecosystem plugin with no Fiji equivalent. Do NOT use napari to
-  replace mature Fiji plugins (StarDist, Cellpose, MorphoLibJ, TrackMate) for hands-off batch work, and
-  do NOT use it for statistics or plotting (that is python_data_analyst). Two backends: interactive in
-  the live viewer, driven by the supervisor via the mcp__napari_mcp__* tools; or headless/batch, run by
-  python_data_analyst with `# imagentj-env: napari-mcp`. Fiji/ImageJ remains the DEFAULT for bioimage
-  analysis; napari is the specialist for interactive SAM segmentation and n-D visualisation.
+  lives, see the napari/micro_sam skill; (2) fluid viewing of n-D data — 3D/4D volumes, multi-channel
+  stacks, label/point/shape layers — that Fiji shows awkwardly; or (3) a Python-ecosystem plugin with
+  no Fiji equivalent. Fiji/ImageJ remains the DEFAULT: do NOT use napari to replace mature Fiji plugins
+  (StarDist, Cellpose, MorphoLibJ, TrackMate) for hands-off batch work, and do NOT use it for
+  statistics or plotting (that is python_data_analyst). Two backends: the live viewer, driven by the
+  supervisor via the mcp__napari_mcp__* tools; or headless/batch, run by python_data_analyst with
+  `# imagentj-env: napari-mcp`.
 ---
 
 # napari — when to route here vs Fiji / Fiji plugins
