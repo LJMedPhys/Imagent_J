@@ -1,6 +1,15 @@
 ---
 name: cellpose_documentation
-description: Cellpose (BIOP wrapper) is a Fiji/ImageJ plugin for deep-learning instance segmentation of cells and nuclei in 2D — cytoplasm, whole cells, bright-field, and non-star-convex objects where StarDist is weak. It runs Cellpose DIRECTLY (ch.epfl.biop.wrappers.cellpose) and returns the label image in-process as `cp.cellpose_imp`, with NO TrackMate and NO scraping of masks from /tmp. Use the pre-downloaded models in ~/.cellpose/models (cyto3, nuclei, cyto2, tissuenet, livecell, bact_*, cpsam, ...) or your own custom model file. Tune segmentation with `--cellprob_threshold` and `--flow_threshold`, which are NOT settable fields — they are passed through `additional_flags` as a COMMA-separated list of flags AND values (a space-separated string silently breaks the run and returns null labels). For bright-field images with a BRIGHT background (dark cells), invert in ImageJ first — Cellpose expects objects brighter than their background, and `--invert` is a no-op in Cellpose 4/cpsam. Use this skill for single-image (or per-frame) Cellpose segmentation. For linking objects across TIME (tracking), use TrackMate-Cellpose instead. Read the files listed at the end for the verified API, models, flags, and pitfalls.
+description: >-
+  Cellpose (BIOP wrapper) is a Fiji/ImageJ plugin for deep-learning instance segmentation of cells
+  and nuclei in 2D — cytoplasm, whole cells, bright-field, and non-star-convex objects where StarDist
+  is weak. It runs Cellpose DIRECTLY (ch.epfl.biop.wrappers.cellpose) and returns the label image
+  in-process as `cp.cellpose_imp` — no TrackMate, no scraping masks from /tmp. Route a SEGMENTATION
+  step here for a single still image or for per-frame masks; for LINKING objects across TIME
+  (tracking), use TrackMate-Cellpose instead. Uses the pre-downloaded models in ~/.cellpose/models
+  (cyto3, nucleitorch_0, cyto2, tissuenet, livecell, bact_*, cpsam, ...) or a custom model file.
+  Read the files listed at the end for the verified API, the model list, `additional_flags` syntax,
+  bright-field handling, and pitfalls.
 ---
 
 # Cellpose (BIOP wrapper) — Documentation Index
