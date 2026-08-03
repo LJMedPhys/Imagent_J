@@ -11,6 +11,7 @@ and only land here after review. `CORE.md` is intentionally left empty (no alway
 floor for concepts at this time).
 
 Promoted from review on 2026-07-22: 99 entries.
+Added 2026-08-03: 2 entries (`lj-verify-per-subgroup`, `lj-nuclei-within-cell-mask`) — 101 total.
 
 ---
 
@@ -706,3 +707,17 @@ Promoted from review on 2026-07-22: 99 entries.
   **WHY**  the labels image is the portable bridge between a Python/deep-learning segmenter and ImageJ's measurement tools; mixing learned + classical steps handles compartments no single tool segments well
   **AVOID** treating the model output as a dead end because it isn't already ImageJ ROIs
   SRC: image.sc · "Cell detection with unstained nucleus" (t/115496)
+
+<!--c:lj-verify-per-subgroup status:approved src:lukas modality:general task:validation kw:subgroup,subgroups,stratified,per condition,per group,per folder,per subfolder,condition,conditions,treatment,genotype,timepoint,replicate,batch,slide,well,plate,acquisition session,directory structure,folder structure,subfolders,spot check,sanity check,representative sample,sample of images,test on a few images,check a few images,validate the pipeline,verify the pipeline,before the full run,whole dataset,pooled sample,random sample-->
+- **WHEN** validating a pipeline on a subset before running it over a dataset that contains distinct subgroups (conditions, treatments, genotypes, timepoints, slides/wells/plates, acquisition sessions) — in practice, whenever the input directory has **subfolders**
+  **DO**   read the subgroups off the **directory structure** (the usual layout is one folder per condition/timepoint/slide) and draw the verification sample **per subgroup**, checking each one separately; if the layout is flat, ask which field of the filename encodes the group
+  **WHY**  one subgroup can differ from the rest in intensity, morphology, density or artifacts and silently break a pipeline tuned on the others, while a pooled sample still looks fine — the failure then propagates through the whole analysis unseen
+  **AVOID** validating on a single pooled random sample over all images and declaring the pipeline good
+  SRC: Lukas (internal domain expert) — see also [[reinke-aggregation]]
+
+<!--c:lj-nuclei-within-cell-mask status:approved src:lukas modality:general task:segmentation kw:nuclei,nucleus,nuclear,nuclei mask,nuclear mask,cell mask,cytoplasm,cytoplasmic,whole-cell,compartment,compartments,two channels,ch2,nuclear channel,segment nuclei and cells,nuclei inside cells,nuclei within cells,assign nuclei to cells,one nucleus per cell,orphan nuclei,parent child,relate objects,match nuclei to cells,cellpose channels,derive nuclei from cells,constrain segmentation-->
+- **WHEN** nuclei must be segmented in data where a cell / cytoplasm mask already exists (an earlier Cellpose or StarDist run, or a whole-cell channel)
+  **DO**   reuse that mask to constrain the nuclei step — segment nuclei *inside* each existing cell label, or hand the nucleus channel to Cellpose as the second channel (`ch2`) so one model call returns both — instead of segmenting nuclei independently over the whole field
+  **WHY**  each nucleus is then assigned to exactly one cell by construction; orphan nuclei outside any cell, double assignments and background false positives disappear, and the per-cell table needs no matching step
+  **AVOID** segmenting nuclei globally and matching them to cells afterwards by overlap or centroid distance
+  SRC: Lukas (internal domain expert) — see also [[sc-labels-to-rois-bridge]]
