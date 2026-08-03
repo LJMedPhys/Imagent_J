@@ -74,6 +74,65 @@ println("FINAL STATUS: SUCCESS")
 
 `cp.cellpose_imp` is a label image: background = 0, each object a unique integer 1..N (max pixel value = object count). For ROIs: `IJ.run(labels, "Label image to ROIs", "")` (same BIOP jar).
 
+## Batch (many images) — one subprocess launch for the whole set, not one per image
+
+Every `cp.run()` call restarts a fresh Python process **and reloads the model from disk**.
+For one image that's a fixed cost; looping `new Cellpose(); cp.imp = <single image>; cp.run()`
+once per file in a folder pays that cost every single time. Measured on a real 265-image,
+two-channel batch: one `Cellpose()` call per image (530 subprocess launches total) took
+**~79 minutes**; batching the same work into one call per channel (below) dropped it to
+**~20 minutes**.
+
+The wrapper (`CellposeAbstractCommand`, verified from the BIOP source) already batches
+internally — but only across the **time (T) axis of a hyperstack**, not across separate
+`cp.imp` calls: it exports every T-frame to one temp folder and invokes the cellpose
+subprocess **once** for the whole folder, then reassembles the per-frame masks back into one
+output stack. Give it one frame per image instead of one image per call:
+
+```groovy
+import ij.ImageStack
+import ij.ImagePlus
+
+// images: List<ImagePlus>, all the SAME width/height, one channel to segment each,
+// same model/diameter/flags for the whole batch.
+ImageStack stack = new ImageStack(images[0].getWidth(), images[0].getHeight())
+images.each { stack.addSlice(it.getProcessor()) }
+def batchImp = new ImagePlus("batch", stack)
+batchImp.setDimensions(1, 1, images.size())   // 1 channel, 1 z-slice, N frames — T is the axis CellposeAbstractCommand batches over
+
+def cp = new Cellpose()
+ctx.inject(cp)
+cp.imp              = batchImp                // ONE call for all N images
+cp.env_path         = new File("/opt/conda/envs/cellpose")
+cp.env_type         = "conda"
+cp.model            = "cyto3"
+cp.diameter         = 30f
+cp.ch1              = 0
+cp.ch2              = 0
+cp.additional_flags = "--use_gpu"
+cp.verbose          = Boolean.TRUE
+cp.run()
+
+def labelsStack = cp.cellpose_imp   // one label frame per input image, SAME ORDER as `images`
+// labelsStack.getStack().getProcessor(i + 1) is the mask for images[i]
+```
+
+Rules for this to actually help:
+- **One model/diameter/flags per batch.** A single `cp.run()` applies ONE set of parameters
+  to every frame — if nuclei and cytoplasm need different models, build and run two separate
+  batches (one stack per model), not one mixed stack.
+- **Same width/height across the batch** — `ImageStack` requires it; group by size first (or
+  pad/crop) if the input set isn't uniform.
+- Frame order in `cellpose_imp` matches the order frames were added — keep a parallel list of
+  source filenames/stems to re-associate each output mask with its input image.
+- **Prefer StarDist over Cellpose for nuclei** when applicable (see "When to use this vs.
+  alternatives" above) before reaching for this — StarDist runs in-process with no subprocess
+  cost at all, so it doesn't need batching in the first place.
+
+For a handful of images the single-image template above is simpler and the fixed cost is
+negligible. Reach for batching once a folder has dozens or more images to segment with the
+same model/settings — that is exactly the shape of most benchmark/project batch tasks.
+
 ## Flags (`additional_flags`) — comma-separated, always
 
 **This is the single most common way to break a Cellpose script.** The wrapper does
@@ -161,6 +220,10 @@ Differences from v3:
 
 ## Pitfalls (read before generating a script)
 
+- **Segmenting a folder of images? Don't call `cp.run()` once per image.** Each call restarts
+  the Python subprocess and reloads the model from disk; for dozens+ of images this dominates
+  the whole run (measured: 530 calls ≈ 79 min vs. ~20 min batched). Use the batch pattern
+  above — one stack, one `cp.run()` — for any same-model batch of meaningful size.
 - **No helper methods.** In Fiji's SciJava Groovy runner (`#@`-param scripts) a script-level `def`/`final` — even `@Field` — is NOT reliably visible inside a method body: referencing it throws `MissingPropertyException: No such property: X for class: script`, so `cp.run()` never happens and you get a downstream `cellpose_imp is null` NPE. Keep the call in the main body, or pass everything (`env_path`/`model`/`diameter`/`ch1`/`ch2`/flags) as method arguments.
 - **`additional_flags` is COMMA-separated, never space-separated** — `"--use_gpu, --cellprob_threshold, -1.0"`, not `"--use_gpu --cellprob_threshold -1.0"`. The space form makes cellpose exit with `unrecognized arguments`, which surfaces only as null labels + `NullPointerException ... "cellpose_t_imp" is null`. Never diagnose that NPE as "bad threshold value" — check the flag string first.
 - **`cellprob_threshold` / `flow_threshold` are flags, not fields.** `cp.flow_threshold = 0.6` throws `MissingPropertyException`.
