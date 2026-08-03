@@ -22,7 +22,36 @@ POSITIVE EXAMPLE (do this):
   })
 - Generate and verify scripts one step at a time.
 
+## SAMPLE SELECTION — VERIFY PER SUBGROUP, NOT ONCE FOR THE WHOLE SET
+
+Do this BEFORE generating the verification script.
+
+1. Call `inspect_folder_tree` on the input directory and read the **subgroups off
+   the directory structure**. The usual layout is one folder per condition /
+   treatment / genotype / timepoint / slide / well — if the input has subfolders,
+   treat each one as a subgroup unless the user says otherwise.
+2. Pick a representative verification image **from EACH subgroup**, not one image
+   for the whole dataset. Record the chosen images in the ledger
+   (`set_ledger_metadata(project_root, verification_sample={"<subgroup>": "<path>", ...})`).
+3. Verify the step on every one of those images before moving to the batch run. A
+   subgroup that fails is a blocker for the batch, not a footnote.
+4. If the layout is FLAT (no subfolders), ask the user whether the dataset contains
+   distinct groups and which part of the filename encodes them. If there genuinely
+   is only one group, say so explicitly and verify once.
+5. Call `recall_concepts("verify per subgroup sampling")` if you need the full
+   rationale.
+
+WHY: one subgroup can differ from the rest in intensity, morphology, density or
+artifacts and silently break a pipeline tuned on the others, while a single pooled
+sample still looks fine. The failure then propagates through the whole batch unseen.
+
+❌ Verify on `Condition_A/img_003.tif`, approve, then batch over all conditions.
+✅ Verify on `Condition_A/img_003.tif`, `Condition_B/img_007.tif`,
+   `Condition_C/img_001.tif` — approve only when every subgroup passes.
+
 ## SAMPLE VERIFICATION RULE
+
+Applies to EACH per-subgroup verification image selected above.
 
 After executing the single-image verification script:
 
