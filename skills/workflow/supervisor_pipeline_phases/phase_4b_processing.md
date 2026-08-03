@@ -26,19 +26,31 @@ POSITIVE EXAMPLE (do this):
 
 Do this BEFORE generating the verification script.
 
-1. Call `inspect_folder_tree` on the input directory and read the **subgroups off
-   the directory structure**. The usual layout is one folder per condition /
-   treatment / genotype / timepoint / slide / well — if the input has subfolders,
-   treat each one as a subgroup unless the user says otherwise.
-2. Pick a representative verification image **from EACH subgroup**, not one image
+1. Work out what the subgroups are. Try these IN ORDER and stop at the first that
+   gives a clear answer — do NOT jump straight to asking the user:
+   a. **State ledger** — call `read_state_ledger` first. If the grouping for this
+      dataset was already established earlier in the project, reuse it. Do not
+      re-derive it and do not ask the user again.
+   b. **Directory structure** — call `inspect_folder_tree` on the input directory.
+      The usual layout is one folder per condition / treatment / genotype /
+      timepoint / slide / well; treat each such subfolder as a subgroup.
+   c. **Filename pattern** — a FLAT folder very often still encodes the grouping in
+      the names: `ctrl_*` vs `treated_*`, a well ID (`A01`, `B12`), a genotype or
+      dose token, a date/run prefix. Compare the filenames and look for the field
+      that varies systematically across the set rather than uniquely per image.
+   d. **Ask the user** — only when the above disagree or reveal nothing. Ask which
+      part of the path or filename identifies the experimental group.
+2. State the grouping you inferred, and how you inferred it, and have the user
+   confirm it before relying on it — a wrong inferred grouping is worse than none.
+   Then record it:
+   `set_ledger_metadata(project_root, subgroups={"<group>": "<how it was identified>"})`.
+3. Pick a representative verification image **from EACH subgroup**, not one image
    for the whole dataset. Record the chosen images in the ledger
    (`set_ledger_metadata(project_root, verification_sample={"<subgroup>": "<path>", ...})`).
-3. Verify the step on every one of those images before moving to the batch run. A
+4. Verify the step on every one of those images before moving to the batch run. A
    subgroup that fails is a blocker for the batch, not a footnote.
-4. If the layout is FLAT (no subfolders), ask the user whether the dataset contains
-   distinct groups and which part of the filename encodes them. If there genuinely
-   is only one group, say so explicitly and verify once.
-5. Call `recall_concepts("verify per subgroup sampling")` if you need the full
+5. If there genuinely is only one group, say so explicitly and verify once.
+6. Call `recall_concepts("verify per subgroup sampling")` if you need the full
    rationale.
 
 WHY: one subgroup can differ from the rest in intensity, morphology, density or
@@ -46,8 +58,12 @@ artifacts and silently break a pipeline tuned on the others, while a single pool
 sample still looks fine. The failure then propagates through the whole batch unseen.
 
 ❌ Verify on `Condition_A/img_003.tif`, approve, then batch over all conditions.
+❌ See a flat folder, conclude "one group", and verify once — the grouping was in
+   the filenames (`ctrl_01.tif`, `ctrl_02.tif`, `dose10_01.tif`, `dose50_01.tif`).
 ✅ Verify on `Condition_A/img_003.tif`, `Condition_B/img_007.tif`,
    `Condition_C/img_001.tif` — approve only when every subgroup passes.
+✅ Flat folder, names give it away: verify one `ctrl_*`, one `dose10_*`, one
+   `dose50_*`.
 
 ## SAMPLE VERIFICATION RULE
 
