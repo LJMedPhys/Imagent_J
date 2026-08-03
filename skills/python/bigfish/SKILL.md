@@ -159,10 +159,13 @@ running one untouched is the quickest way to check the skill still works.
   below ~7 spots (so you get ~197 points, not 200). Take `np.exp(...)` to recover
   real counts. Plotting the raw value on a log y-axis gives log-of-log and a curve
   that misrepresents where the elbow is.
-- **B10 — uneven background breaks the assumption.** Big-FISH expects spots on a
-  roughly flat background. For strong autofluorescence gradients apply
+- **B10 — uneven background breaks the assumption, and background flattening is
+  NOT denoising.** Big-FISH expects spots on a roughly flat background. For strong
+  autofluorescence gradients apply
   `bigfish.stack.remove_background_gaussian(image, sigma=...)` first (the LoG
-  filter handles mild gradients on its own).
+  filter handles mild gradients on its own). But note what that call does: it
+  subtracts a large-scale estimate, it does **not** suppress noise. Smoothing is a
+  separate decision — see B13.
 - **B11 — `compute_snr_spots()` is BROKEN on this env and must not be called.** It
   raises `AttributeError: module 'numpy' has no attribute 'int'` — Big-FISH 0.6.2
   (April 2022) still uses the `np.int` alias that numpy 2.x removed. This is the
@@ -173,6 +176,49 @@ running one untouched is the quickest way to check the skill still works.
   runs correctly on this env's numpy 2.5 / scikit-image 0.26 (verified end-to-end),
   but do not expect fixes upstream. If a numpy or scikit-image upgrade changes
   behaviour, re-check B11 first — that is where the version rot shows up.
+- **B13 — if you smooth before thresholding, use an EDGE-PRESERVING filter, never a
+  plain Gaussian.** A Gaussian blurs across the dark gap *between* two neighbouring
+  spots as happily as it flattens noise, so a subsequent threshold sees one
+  connected bright region and returns one object with the summed area. Use
+  total-variation (`skimage.restoration.denoise_tv_chambolle`, works in 2D **and**
+  3D) or bilateral (`denoise_bilateral`, 2D only); both flatten noise while keeping
+  the intensity step at the spot border. This is what ImageJ's
+  `Anisotropic Diffusion 2D` and AICS's `edge_preserving_smoothing_3d` (ITK
+  GradientAnisotropicDiffusion) exist for.
+  **Measured, and the effect is real but narrow.** 512×512 synthetic, σ=2 px spots,
+  24 pairs, noise σ=10, 5 noise seeds, Otsu + connected components:
+
+  | pair separation | none | tv | bilateral | gaussian σ=1 |
+  |---|---|---|---|---|
+  | ≤ 4.0 σ | 24–26 | 24 | 24 | 24 |
+  | **4.5 σ** | **48** | **48** | **48** | **42–48** (median 45) |
+  | ≥ 5.0 σ | 48 | 48 | 48 | 48 |
+
+  Ground truth is 48. Below 4.5 σ the spots genuinely overlap and nothing separates
+  them; above 5 σ every filter copes. Only in the band right at the resolution limit
+  does the choice bite — there the Gaussian silently merged up to 6 of 24 pairs while
+  TV and bilateral got all 24 on every seed.
+  **But do not conclude "skip smoothing".** At 4 σ the *unsmoothed* image produced
+  spurious extra objects (25–26 where 24 is correct) from noise fragments, which all
+  three filters avoided. Smoothing is needed; TV is how you get it without paying the
+  merge.
+  Second effect, present at every separation: the Gaussian **inflates areas**. On the
+  workflow's own synthetic run, area px min/median went from 45/71 (tv) to 57/78
+  (gaussian).
+  **Where this applies:** the threshold-based `WORKFLOW_SPOT_SEGMENTATION.py`, which
+  now defaults to `SMOOTHING = "tv"`. It does **not** apply to plain `detect_spots`:
+  that path takes local *maxima* separated by `minimum_distance`, not connected
+  components, so it does not fuse neighbours and needs no pre-smoothing (B14).
+  Note also that with `SPLIT_TOUCHING = True` the Big-FISH watershed seeding repairs
+  most merges — all four modes returned the same object count on the workflow's
+  synthetic data. The smoothing choice therefore matters most for **area accuracy**,
+  and for counting only when seeding fails.
+- **B14 — do not pre-smooth before `detect_spots`.** Its LoG filter is already the
+  smoothing step, sized from `voxel_size`/`spot_radius`, and blurring first widens
+  the effective kernel and shifts the automatic threshold. B13 is about the
+  *threshold-based segmentation* path only. If `detect_spots` is finding noise
+  peaks, the fix is a correct `spot_radius` (B2) or background removal (B10), not a
+  Gaussian.
 
 ## Verified
 
@@ -194,3 +240,8 @@ image and an independent Fiji reference segmentation of the same file:
 Calibration was read correctly from the file as 322.2 nm/px (the run that guessed
 100 nm/px was 3.2× off), and the object radius was measured at 1836 nm — against
 the 150 nm default that caused the failure.
+
+The `SMOOTHING` options were verified by running the workflow under all four modes
+(`tv`, `bilateral`, `gaussian`, `none`) plus the separation sweep in pitfall B13;
+`denoise_tv_chambolle` was confirmed to work on a 3D array, so the default survives
+if the workflow is extended past 2D.

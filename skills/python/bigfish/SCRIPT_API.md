@@ -202,7 +202,7 @@ and truncate large ones (pitfall B4).
 The working pattern splits the job between the two things each tool is good at:
 
 ```python
-flat  = denoise(image)                      # Gaussian -> median -> background
+flat  = denoise(image)                      # EDGE-PRESERVING smooth -> median -> background
 mask  = flat > filters.threshold_otsu(flat) # EXTENT comes from the threshold
 spots = detection.detect_spots(images=flat, threshold=None,
                                voxel_size=px, spot_radius=radius)
@@ -214,8 +214,13 @@ labels = segmentation.watershed(-flat, markers=markers, mask=mask)
 props  = measure.regionprops(labels, intensity_image=image)   # measure the ORIGINAL
 ```
 
-Two details that matter:
+Three details that matter:
 
+- **`denoise` must smooth with an EDGE-PRESERVING filter, not a Gaussian.** This is
+  the threshold path, so anything that blurs across the gap between two neighbouring
+  spots makes Otsu return them as one object. The workflow defaults to
+  `SMOOTHING = "tv"` (`restoration.denoise_tv_chambolle`); `"gaussian"` is kept only
+  for well-separated objects and prints a warning. See pitfall B13.
 - **Regions with no seed must keep their own label**, or objects Big-FISH missed
   vanish from the result. The workflow relabels them back in.
 - **Measure on the original image**, never on the denoised or background-subtracted
@@ -285,9 +290,19 @@ stack.focus_projection(image, proportion=0.75, neighborhood_size=7, method="medi
 ```
 
 The LoG filter inside `detect_spots` already suppresses mild background gradients,
-so **do not preprocess by default**. Reach for `remove_background_gaussian` only
-when there is visible large-scale autofluorescence; use a `sigma` several times the
-spot radius in pixels so you remove background and not signal.
+so **do not preprocess before `detect_spots` by default**. Reach for
+`remove_background_gaussian` only when there is visible large-scale
+autofluorescence; use a `sigma` several times the spot radius in pixels so you
+remove background and not signal. Do **not** pre-smooth this path at all — the LoG
+*is* the smoothing step, and blurring first widens the effective kernel and shifts
+the automatic threshold (pitfall B14).
+
+**That advice does not carry over to the segmentation path.** `bigfish.stack` has
+no edge-preserving filter — only `mean_filter`, `median_filter`, `gaussian_filter`,
+`log_filter`, min/max, dilation/erosion and the two `remove_background_*` calls — so
+when you threshold for object extent, smooth with
+`skimage.restoration.denoise_tv_chambolle` (nD) or `denoise_bilateral` (2D) instead.
+A plain Gaussian there merges neighbouring spots (pitfall B13).
 
 Prefer detecting in the full 3D volume over max-projecting first: projection merges
 spots that overlap in x/y at different z and undercounts.
