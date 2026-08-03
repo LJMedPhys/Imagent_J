@@ -48,6 +48,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && locale-gen en_US.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
 
+# ── Register the NVIDIA OpenCL driver (GPU builds only) ──────────────────────
+# CLIJ/CLIJ2 reach the GPU through OpenCL, NOT CUDA — a separate stack from the
+# torch/TensorFlow wheels below. The container runtime (CDI) already mounts
+# libnvidia-opencl.so.1 into the GPU container, but it does NOT write the ICD
+# registration file, and the OpenCL loader discovers platforms ONLY by reading
+# /etc/OpenCL/vendors/*.icd. Without this line the sole registered vendor is
+# pocl.icd, so CLIJ2 silently enumerates just the CPU and every "GPU-accelerated"
+# CLIJ call runs on POCL — usually SLOWER than plain ImageJ, because the
+# host<->device copies are paid without any GPU speedup in return.
+#
+# Verified in the live gpu-local container (2026-08-03): before, CLIJ reported
+# one device, "cpu-haswell-AMD EPYC 7742"; after adding this file it reported
+# 8x "NVIDIA A100-SXM4-40GB" plus the CPU.
+#
+# pocl.icd is deliberately kept as the fallback (and is the only vendor on CPU
+# builds); CLIJ picks the best available device.
+RUN if [ "$USE_GPU" = "true" ] && [ "$TARGETARCH" != "arm64" ]; then \
+        mkdir -p /etc/OpenCL/vendors \
+        && echo "libnvidia-opencl.so.1" > /etc/OpenCL/vendors/nvidia.icd; \
+    fi
+
 # ── Install Fiji ──────────────────────────────────────────────────────────────
 RUN set -e; \
     if [ "$TARGETARCH" = "arm64" ]; then \
