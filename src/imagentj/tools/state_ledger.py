@@ -78,7 +78,6 @@ def _format_ledger(ledger: dict) -> str:
     lines.append(f"PROJECT: {ledger.get('project_root', 'unknown')}")
     lines.append(f"SCIENTIFIC GOAL: {ledger.get('scientific_goal', '[not set]')}")
     lines.append(f"OPERATING MODE: {ledger.get('operating_mode', '[not set]')}")
-    lines.append(f"TRACK: {ledger.get('track', '[not set]')}")
     lines.append(f"CURRENT PHASE: {ledger.get('current_phase', '[not set]')}")
 
     # Pipeline plan
@@ -304,7 +303,6 @@ def set_ledger_metadata(
     project_root: str,
     scientific_goal: Optional[str] = None,
     operating_mode: Optional[str] = None,
-    track: Optional[str] = None,
     pipeline_plan: Optional[list[str]] = None,
     key_decision: Optional[str] = None,
     image_metadata: Optional[dict] = None,
@@ -329,12 +327,6 @@ def set_ledger_metadata(
         operating_mode:  How the user wants to work: "script" (automated Groovy scripts, default)
                          or "ui" (step-by-step guidance through the Fiji GUI).
                          Set this once in Phase 1 after asking the user.
-        track:           Which pipeline track the supervisor chose for this request:
-                         "fast" (single self-contained operation — segment/threshold/count/
-                         filter/convert one dataset, minimal ceremony) or "full" (the complete
-                         multi-phase study pipeline with planning, statistics, plotting, QA).
-                         Set this as soon as the track is decided. Re-set to "full" when a
-                         fast request is escalated into a larger study.
         pipeline_plan:   Ordered list of processing step names.
                          Example: ["preprocessing", "thresholding", "watershed_segmentation", "measurement"]
         key_decision:    A single decision to append to the decisions log.
@@ -396,9 +388,6 @@ def set_ledger_metadata(
 
     if operating_mode is not None:
         ledger["operating_mode"] = operating_mode
-
-    if track is not None:
-        ledger["track"] = track
 
     if pipeline_plan is not None:
         ledger["pipeline_plan"] = pipeline_plan
@@ -473,7 +462,6 @@ def set_ledger_metadata(
         name for name, val in (
             ("scientific_goal", scientific_goal),
             ("operating_mode", operating_mode),
-            ("track", track),
             ("pipeline_plan", pipeline_plan),
             ("key_decision", key_decision),
             ("image_metadata", image_metadata),
