@@ -24,6 +24,7 @@ Design notes
   `show_figure` returns the caption for the tutor to talk over.
 """
 
+import copy
 import json
 import os
 from pathlib import Path
@@ -384,7 +385,10 @@ def update_course_progress(
         status:     "studying" or "completed".
         note:       Optional short note about the student (struggles, interests).
     """
-    prog = dict(state.get("course_progress") or {})
+    # Deep-copy, not dict(): a shallow copy would alias the "completed"/"notes"
+    # LISTS held in graph state, so the appends below would mutate the checkpointed
+    # value in place before (and regardless of whether) this Command is applied.
+    prog = copy.deepcopy(state.get("course_progress") or {})
     prog.setdefault("completed", [])
     prog.setdefault("notes", [])
     prog["current"] = chapter_id
