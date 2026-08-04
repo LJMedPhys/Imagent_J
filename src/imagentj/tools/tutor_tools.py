@@ -83,6 +83,17 @@ def _open_figure_in_gui(abs_path: str, title: str | None = None) -> str | None:
     return status if isinstance(status, str) and status.startswith("Opened") else None
 
 
+def _chapter_title(chapter_id: str, ch: dict) -> str:
+    """Display title for a chapter. The build script leaves `title` empty for at
+    least one page (0.1, the book's Preface), which would otherwise render as a
+    nameless entry in the course plan — fall back to the slug, then the id."""
+    t = (ch.get("title") or "").strip()
+    if t:
+        return t
+    slug = (ch.get("slug") or "").strip()
+    return slug.replace("-", " ").replace("_", " ").title() if slug else chapter_id
+
+
 def _figure_label(fig_id: str, entry: dict) -> str:
     """Build a stable, human-readable window title, e.g. 'Fig 1.1-2 — image as array'.
     This is BOTH the ImageJ window title and the name the tutor cites in prose."""
@@ -157,7 +168,7 @@ def list_curriculum() -> str:
             if ch.get("subpages"):
                 tag.append(f"{len(ch['subpages'])} sub-page(s)")
             suffix = f"   [{', '.join(tag)}]" if tag else ""
-            lines.append(f"  - {cid}  {ch.get('title','?')}{suffix}")
+            lines.append(f"  - {cid}  {_chapter_title(cid, ch)}{suffix}")
         lines.append("")
     lines.append("Use load_chapter(id) to teach a chapter's concept, then "
                  "load_track(id, 'imagej'|'python') for the hands-on demonstration.")
@@ -192,7 +203,7 @@ def load_chapter(chapter_id: str) -> str:
     tracks = list(ch.get("tracks", {}).keys())
     subpages = ch.get("subpages", [])
     header = [
-        f"# Chapter {chapter_id}: {ch.get('title')}   (Part {ch.get('part')})",
+        f"# Chapter {chapter_id}: {_chapter_title(chapter_id, ch)}   (Part {ch.get('part')})",
         f"Tracks available: {', '.join(tracks) if tracks else 'none (concept only)'}",
         f"Practicals: {ch.get('n_practicals', 0)}"
         + (f" — call list_practicals('{chapter_id}')" if ch.get('n_practicals') else ""),
