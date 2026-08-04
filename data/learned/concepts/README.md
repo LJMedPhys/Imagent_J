@@ -26,6 +26,12 @@ guesses into "expert wisdom". Current approved sources:
 - **schmied2024** — Schmied et al., *Community-developed checklists for publishing images and image analyses*, Nat Methods 2024, doi:10.1038/s41592-023-01987-9
 - **reinke2024** — Reinke et al., *Understanding metric-related pitfalls in image analysis validation*, Nat Methods 2024, doi:10.1038/s41592-023-02150-0
 - **davide** — internal domain expert (coworker) contributions and edits, made during the human review of this queue
+- **lukas** — internal domain expert (project maintainer) contributions, authored directly rather than drafted and reviewed
+
+Internal-expert sources (`davide`, `lukas`) are the one admitted exception to the
+"external, authoritative source" rule: the citation is to a *named human who is
+accountable for the claim*, which is what the rule is actually protecting against —
+the model laundering its own guesses. An entry with no named source is still refused.
 
 ## Review workflow (human-in-the-loop)
 Machine-drafted candidates land in `_pending.md`. A domain expert skims each one and
