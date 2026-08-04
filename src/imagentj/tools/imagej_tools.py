@@ -13,6 +13,26 @@ from .metadata_tools import extract_file_metadata
 _SKILLS_DIR = Path(os.environ.get("SKILLS_DIR", "/app/skills"))
 
 
+def _message_text(content) -> str:
+    """Normalize a LangChain message's .content to plain text.
+
+    Some providers (and multimodal responses in general) return content as a
+    list of blocks (e.g. [{"type": "text", "text": "..."}]) instead of a bare
+    string, so callers should not assume `.content` is always str.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and isinstance(block.get("text"), str):
+                parts.append(block["text"])
+        return "".join(parts)
+    return str(content or "")
+
+
 def _find_ui_docs_for_dialog(dialog_title: str) -> str:
     """
     Given a dialog title (e.g. 'CiliaQ on Linux - detection preferences'),
@@ -600,7 +620,7 @@ def capture_plugin_dialog() -> str:
                      "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "high"}},
                 ]),
             ])
-            raw = response.content.strip()
+            raw = _message_text(response.content).strip()
             if raw.startswith("```"):
                 raw = re.sub(r"^```(?:json)?\n?", "", raw).rstrip("` \n")
             parsed = json.loads(raw)

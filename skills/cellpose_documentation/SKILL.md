@@ -1,6 +1,15 @@
 ---
 name: cellpose_documentation
-description: Cellpose (BIOP wrapper) is a Fiji/ImageJ plugin for deep-learning instance segmentation of cells and nuclei in 2D — cytoplasm, whole cells, bright-field, and non-star-convex objects where StarDist is weak. It runs Cellpose DIRECTLY (ch.epfl.biop.wrappers.cellpose) and returns the label image in-process as `cp.cellpose_imp`, with NO TrackMate and NO scraping of masks from /tmp. Use the pre-downloaded models in ~/.cellpose/models (cyto3, nuclei, cyto2, tissuenet, livecell, bact_*, cpsam, ...) or your own custom model file. Tune segmentation with `--cellprob_threshold` and `--flow_threshold`, which are NOT settable fields — they are passed through `additional_flags` as a COMMA-separated list of flags AND values (a space-separated string silently breaks the run and returns null labels). For bright-field images with a BRIGHT background (dark cells), invert in ImageJ first — Cellpose expects objects brighter than their background, and `--invert` is a no-op in Cellpose 4/cpsam. Use this skill for single-image (or per-frame) Cellpose segmentation. For linking objects across TIME (tracking), use TrackMate-Cellpose instead. Read the files listed at the end for the verified API, models, flags, and pitfalls.
+description: >-
+  Cellpose (BIOP wrapper) is a Fiji/ImageJ plugin for deep-learning instance segmentation of cells
+  and nuclei in 2D — cytoplasm, whole cells, bright-field, and non-star-convex objects where StarDist
+  is weak. It runs Cellpose DIRECTLY (ch.epfl.biop.wrappers.cellpose) and returns the label image
+  in-process as `cp.cellpose_imp` — no TrackMate, no scraping masks from /tmp. Route a SEGMENTATION
+  step here for a single still image or for per-frame masks; for LINKING objects across TIME
+  (tracking), use TrackMate-Cellpose instead. Uses the pre-downloaded models in ~/.cellpose/models
+  (cyto3, nucleitorch_0, cyto2, tissuenet, livecell, bact_*, cpsam, ...) or a custom model file.
+  Read the files listed at the end for the verified API, the model list, `additional_flags` syntax,
+  bright-field handling, and pitfalls.
 ---
 
 # Cellpose (BIOP wrapper) — Documentation Index
@@ -17,7 +26,7 @@ The **direct** Cellpose path: the BIOP wrapper (`ch.epfl.biop.wrappers.cellpose`
 Check the GPU state (`check_environment`, query `"cuda"` → the **CUDA** row), then choose:
 
 - **GPU active → prefer `cpsam` (Cellpose-SAM / Cellpose 4).** It is the most accurate, most general model. Use the **`CellposeSAM` command + `cellpose4` env** (see the Cellpose-SAM section).
-- **CPU only → prefer a v3 model (`cyto3`, `nuclei`, …).** cpsam is far too slow on CPU. Use the **`Cellpose` command + `cellpose` env** (the main template below).
+- **CPU only → prefer a v3 model (`cyto3`, `nucleitorch_0`, …).** cpsam is far too slow on CPU. Use the **`Cellpose` command + `cellpose` env** (the main template below).
 
 In one line: **cpsam is the default whenever the GPU is on; v3 (cyto3/nuclei) is the fallback** — and the preferred choice on CPU-only deployments.
 
@@ -38,7 +47,7 @@ if (imp == null) { println("FINAL STATUS: FAILURE - could not open image"); retu
 def cp = new Cellpose()
 ctx.inject(cp)                                        // REQUIRED — injects LogService/PlatformService
 cp.imp              = imp
-cp.env_path         = new File("/opt/conda/envs/cellpose")  // cellpose 3.1.1.2 (v3 models: cyto3, nuclei, ...)
+cp.env_path         = new File("/opt/conda/envs/cellpose")  // cellpose 3.1.1.2 (v3 models: cyto3, nucleitorch_0, ...)
 cp.env_type         = "conda"
 cp.model            = "cyto3"                          // v3 model (CPU-preferred). On GPU, prefer cpsam — see Cellpose-SAM below
 cp.diameter         = 30f                              // px; 0f = auto-estimate (cyto* only)
@@ -117,7 +126,7 @@ the cells themselves and destroys them.
 
 `additional_flags` selects it: `"--use_gpu"` (default) uses the GPU when present and **falls back to CPU automatically**; `""` forces CPU (use to avoid GPU contention on a shared node). Safe to leave `--use_gpu` on everywhere. To confirm the container's actual state, call `check_environment` (query `"cuda"`) and read the **CUDA** row. On GPU, cellpose logs `>>>> using GPU (CUDA)`.
 
-**Speed & model choice:** GPU ≈ seconds → **prefer cpsam** there. On CPU, cyto3 is ~minutes per ~1 MP image (flow-dynamics dominates) and **cpsam is far too slow** (many minutes even for a small crop) → **prefer `cyto3`/`nuclei`** on CPU.
+**Speed & model choice:** GPU ≈ seconds → **prefer cpsam** there. On CPU, cyto3 is ~minutes per ~1 MP image (flow-dynamics dominates) and **cpsam is far too slow** (many minutes even for a small crop) → **prefer `cyto3`/`nucleitorch_0`** on CPU.
 
 ## Custom / pre-downloaded models
 
@@ -126,7 +135,7 @@ Set `model_path`, leave `model` empty:
 cp.model = ""
 cp.model_path = new File("/home/imagentj/.cellpose/models/my_model")
 ```
-Built-ins live in `/home/imagentj/.cellpose/models`: `cyto3`, `cyto2`, `nuclei`, `tissuenet_cp3`, `livecell_cp3`, `bact_*`, `cpsam`, … (full list + which env each needs → `SCRIPT_API.md`). Note: cyto3/nuclei expect microscopy images — on a non-cell image (e.g. a photo) they legitimately find ~0 objects; that is not a failure.
+Built-ins live in `/home/imagentj/.cellpose/models`: `cyto3`, `cyto2`, `nucleitorch_0`, `tissuenet_cp3`, `livecell_cp3`, `bact_*`, `cpsam`, … (full list + which env each needs → `SCRIPT_API.md`). Note: cyto3/nuclei expect microscopy images — on a non-cell image (e.g. a photo) they legitimately find ~0 objects; that is not a failure.
 
 ## Cellpose-SAM (cpsam) — newest, most general model (prefer this when the GPU is active)
 
