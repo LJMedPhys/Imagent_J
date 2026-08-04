@@ -218,6 +218,26 @@ per-function asymmetry, e.g. `image_series_annotator` has no `decoder_path`). Ac
 checkpoint (`micro_sam.training`) is a separate, GPU-hours, labeled-data workflow **out of scope for
 this skill** — only reach for it if no stock `*_lm`/`*_em`/`*_histopathology` model is remotely usable.
 
+> **A fine-tuned checkpoint never reaches "the rest of the folder" on its own — in either mode.**
+> - **Automatic/batch** (`WORKFLOW_AUTOMATIC_SEGMENTATION.py`): the model is built ONCE, before the
+>   per-image loop, from whatever `CHECKPOINT_PATH`/`checkpoint=` was passed at that call. If you
+>   fine-tuned on image 1's corrected labels and want images 2..N segmented with the new weights,
+>   the fine-tuning **must finish first**, then the script is (re-)run with `CHECKPOINT_PATH` set to
+>   the new checkpoint. There is no auto-detection of "a newer checkpoint appeared" — verified from
+>   `get_predictor_and_segmenter`'s source: it takes `checkpoint` once, at construction, full stop.
+> - **Interactive** (`image_series_annotator`, the "Next Image [N]" workflow): verified from
+>   `image_series_annotator.py` — the `predictor`/`decoder` are also built ONCE, before the image
+>   loop starts, and `next_image()` closes over those exact same objects for every subsequent image;
+>   there is also **no fine-tune/train control anywhere in the panel** (confirmed against the
+>   installed widget source — fine-tuning is only ever the separate offline `micro_sam.training`
+>   workflow above, never something triggered from inside the annotator). So there is **no way to
+>   fine-tune mid-session and have it apply to the next image in the same run** — the only path is:
+>   finish annotating/committing the current image (which is saved to `output_folder` immediately),
+>   fine-tune offline, then **restart** `image_series_annotator(..., checkpoint_path=<new checkpoint>)`.
+>   The default `skip_segmented=True` means the restart resumes at the first *un*-annotated image
+>   rather than re-doing image 1 — you don't lose that work, but you do need to consciously restart
+>   the tool, it will not pick up a new checkpoint by itself.
+
 **Before a heavy run, a free sanity check:** the `napari-mcp` env installs `micro_sam.info` as a CLI
 command — run it by **full path** (its `bin/` is not on PATH just from the `# imagentj-env` header) in
 a `python_data_analyst` script:

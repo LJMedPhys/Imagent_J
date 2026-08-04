@@ -139,6 +139,12 @@ using the click workflow above. Good when there are many objects.
 **Image series (`image_series_annotator`)** — a folder, one image at a time:
 - Annotate + commit, then press **`N`** (*Next Image*) to advance. Masks are written to the
   output folder as you go.
+- **The model is loaded once, at the start, for the whole folder — it does not change between
+  images.** There is no fine-tune/train button anywhere in this panel. If you want a model
+  fine-tuned on image 1's corrections to apply to the rest of the folder, fine-tuning has to
+  happen *outside* napari (`micro_sam.training`, a separate offline step) and you then
+  **restart** the series annotator pointed at the new checkpoint — pressing `N` alone never
+  picks up a new model mid-session. See `SKILL.md`'s "Fine-tuned / custom weights" section.
 
 ---
 

@@ -29,6 +29,12 @@ INPUT_DIR = "/app/data/projects/demo/raw_images"
 OUTPUT_DIR = "/app/data/projects/demo/processed"
 MODEL_TYPE = None              # None = auto-pick by device (see below). Pin a string to
                                # override, e.g. "vit_b_lm", or "*_em_organelles" for EM.
+CHECKPOINT_PATH = None         # Path to a FINE-TUNED checkpoint (e.g. produced by
+                               # micro_sam.training on a first, hand-corrected image), or
+                               # None for the stock MODEL_TYPE weights. THIS is the field
+                               # that must be set for a fine-tuned model to actually reach
+                               # the rest of the folder — MODEL_TYPE alone always loads the
+                               # stock weights, silently ignoring any fine-tuning you did.
 SEG_MODE = "ais"               # decoder-based Automatic Instance Segmentation (recommended)
 EXTS = ("*.tif", "*.tiff", "*.png")
 # -----------------------------------------------------------------------------
@@ -39,11 +45,16 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 # tiny backbone is the right default on a CPU build.
 if MODEL_TYPE is None:
     MODEL_TYPE = "vit_b_lm" if device == "cuda" else "vit_t_lm"
-print(f"micro_sam: model={MODEL_TYPE} mode={SEG_MODE} device={device}")
+print(f"micro_sam: model={MODEL_TYPE} checkpoint={CHECKPOINT_PATH or '(stock)'} "
+      f"mode={SEG_MODE} device={device}")
 
-# Build the model ONCE (loads weights / downloads the checkpoint on first use).
+# Build the model ONCE (loads weights / downloads the checkpoint on first use) and reuse
+# it for every image below — this is what makes "fine-tune once, apply to the rest of the
+# folder" work; CHECKPOINT_PATH is the only thing that actually carries a fine-tuned model
+# into this loop, `get_predictor_and_segmenter` has no separate decoder override, so a
+# custom checkpoint used with SEG_MODE="ais" must already carry a matching decoder.
 predictor, segmenter = get_predictor_and_segmenter(
-    model_type=MODEL_TYPE, device=device, segmentation_mode=SEG_MODE,
+    model_type=MODEL_TYPE, checkpoint=CHECKPOINT_PATH, device=device, segmentation_mode=SEG_MODE,
 )
 
 paths = sorted(p for ext in EXTS for p in glob.glob(os.path.join(INPUT_DIR, ext)))
