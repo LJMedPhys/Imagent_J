@@ -631,6 +631,142 @@ def capture_plugin_dialog() -> str:
     return json.dumps(results, indent=2)
 
 
+_NAPARI_VISION_SYSTEM = """You are a napari expert analysing a screenshot of the napari viewer window.
+
+The window has up to four regions: layer controls (top-left, tools for the SELECTED layer),
+layer list (bottom-left, one entry per open layer with an eye icon for visibility), the canvas
+(the image itself), and — if a plugin is running (e.g. the "Segment Anything for Microscopy" /
+micro_sam panel) — a docked widget panel, usually on the right, with its own fields and buttons.
+
+Your task: extract every interactive element visible so an AI agent can give the user precise,
+field-by-field guidance on what to click or set next.
+
+Return a JSON object with these fields:
+
+- window_title  : string — best guess at what's open (e.g. "napari — 2 layers, micro_sam panel
+                  open"); empty string if you cannot tell.
+- layers        : list of objects, one per row in the layer list:
+    { "name": string, "type": string — "image"|"labels"|"points"|"shapes"|"unknown",
+      "visible": boolean, "selected": boolean — true only if visually highlighted }
+- dock_widget    : object or null — the docked plugin panel if one is visible:
+    { "panel_title": string,
+      "fields": list of { "label": string, "type": string — "text_input"|"number_input"|
+                "dropdown"|"checkbox"|"radio_button"|"slider"|"button"|"progress"|"label_only",
+                "current_value": string, "options": list, "description": string },
+      "buttons": list of button labels visible in the panel }
+- canvas_state   : string — brief plain-English note on what the canvas shows (an image, points/
+                   masks overlaid, empty, a loading/progress indicator, ...)
+- warnings       : list of any warning/error/info text visible anywhere in the window (empty
+                   list if none)
+
+Be exhaustive on the dock widget panel specifically — that is usually what the user needs help
+with. Do not guess values that are not visible in the screenshot."""
+
+
+_NAPARI_SKILL_DOC_PATHS = (
+    _SKILLS_DIR / "napari" / "napari_general" / "SKILL.md",
+    _SKILLS_DIR / "napari" / "micro_sam" / "UI_GUIDE.md",
+)
+
+
+def _napari_ui_docs() -> str:
+    """Concatenate the napari layer-list/canvas primer and the micro_sam panel's UI guide,
+    so the vision LLM has ground truth for layer names, button labels, and keyboard shortcuts
+    instead of guessing them from pixels alone."""
+    parts = []
+    for path in _NAPARI_SKILL_DOC_PATHS:
+        try:
+            if path.exists():
+                parts.append(f"\n--- {path.parent.name}/{path.name} ---\n"
+                              + path.read_text(encoding="utf-8", errors="ignore"))
+        except Exception:
+            pass
+    return "\n".join(parts)
+
+
+def _extract_first_image_b64(mcp_content) -> str | None:
+    if not isinstance(mcp_content, list):
+        return None
+    for block in mcp_content:
+        if isinstance(block, dict) and block.get("type") == "image" and block.get("data"):
+            return block["data"]
+    return None
+
+
+@tool
+def capture_napari_window() -> str:
+    """
+    Screenshot the live napari window — canvas, layer list, AND any docked plugin panel
+    (e.g. the micro_sam "Segment Anything for Microscopy" panel) — and return a structured
+    description: open layers, every visible panel field (label/type/current value/options),
+    and buttons.
+
+    Call this when the user has napari open and asks about it — what a field means, which
+    layer is selected, why a button looks greyed out, what to click next — instead of asking
+    them to describe it or send a screenshot themselves. This is the napari equivalent of
+    capture_plugin_dialog for Fiji.
+
+    Returns a JSON object, or an object with an "error" key if napari isn't running or the
+    screenshot failed (e.g. no viewer open yet).
+    """
+    from .mcp_host_tools import load_mcp_server_configs, _call_server_tool, _run_async, _with_timeout
+
+    configs = load_mcp_server_configs()
+    server_name = "napari-mcp"
+    if server_name not in configs:
+        return json.dumps({"error": f"MCP server '{server_name}' is not configured."})
+
+    try:
+        call_result = _run_async(
+            _with_timeout(
+                _call_server_tool(server_name, configs[server_name], "screenshot",
+                                   {"canvas_only": False}),
+                90,
+            )
+        )
+    except Exception as e:
+        return json.dumps({"error": f"Could not reach napari-mcp: {e}"})
+
+    if call_result.get("status") != "ok":
+        return json.dumps({
+            "error": call_result.get("message") or "napari screenshot failed",
+            "detail": call_result,
+        })
+
+    content = call_result.get("result", {}).get("content")
+    b64 = _extract_first_image_b64(content)
+    if not b64:
+        return json.dumps({"error": "napari-mcp did not return an image", "detail": call_result})
+
+    llm = _get_vision_llm()
+    ui_docs = _napari_ui_docs()
+    text_prompt = "Analyze this napari window screenshot."
+    if ui_docs:
+        text_prompt += (
+            "\n\nThe following documentation describes napari's layers, the micro_sam panel's "
+            "fields, and keyboard shortcuts. Use it to enrich the 'description' field of each "
+            "dock-widget field with accurate, specific guidance:\n\n" + ui_docs
+        )
+
+    try:
+        response = llm.invoke([
+            SystemMessage(content=_NAPARI_VISION_SYSTEM),
+            HumanMessage(content=[
+                {"type": "text", "text": text_prompt},
+                {"type": "image_url",
+                 "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "high"}},
+            ]),
+        ])
+        raw = _message_text(response.content).strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```(?:json)?\n?", "", raw).rstrip("` \n")
+        parsed = json.loads(raw)
+    except Exception as e:
+        return json.dumps({"error": f"Vision analysis failed: {e}"})
+
+    return json.dumps(parsed, indent=2)
+
+
 @tool
 def extract_image_metadata(path: str) -> str:
     """Extract calibration, pixel intensity statistics, and suggested

@@ -157,14 +157,76 @@ Plus napari's own: **`Space`** (hold) = pan/zoom, **mouse wheel** = zoom.
 
 ---
 
-## 8. Embedding Settings (collapsible panel)
+## 8. Panel fields, field by field (ground truth — from micro_sam's own tooltips)
 
-- **Model family / size** — the `vit_*` backbone + domain finetune (model table in `SKILL.md`).
-- **Tiling** (`tile_shape` + `halo`) — for images too big to embed in one go; embeds in
-  overlapping tiles.
-- **Embeddings save path** — compute once, **reuse next session**. Reopening the same image
-  then *loads* embeddings instead of recomputing the expensive step. Strongly recommended on
-  the CPU image and for large/3D data.
+The panel is built from several stacked sub-widgets. Field names/tooltips below are copied
+verbatim from the installed package's `micro_sam/sam_annotator/_tooltips.py` and the widget
+docstrings in `_widgets.py` (1.8.2) — this is what napari literally shows as the hover tooltip
+for each field, not a paraphrase, so it's safe to quote when explaining a screenshot.
+
+### 8.1 Embedding widget (top of panel — always present)
+
+| Field (label shown) | Tooltip (verbatim) |
+|---|---|
+| `Image Layer:` | Select the napari image layer. |
+| `Model:` (model family) | Select the segment anything model family. Options: Light Microscopy, Electron Microscopy, Histopathology, Medical Imaging, Natural Images (SAM). |
+| `model size:` | Select the image encoder size of the segment anything model. Options: tiny/base/large/huge (availability depends on the chosen family). **Easy to miss in a screenshot** — it's a second, separate dropdown next to `Model:`, not part of it; the two combine into one `model_type` string (e.g. family=Light Microscopy + size=tiny → `vit_t_lm`). |
+| `device` | Select the computational device to use for processing. |
+| custom weights | Select custom model weights. For example for a model you have finetuned. |
+| `embeddings_save_path` | Select path to save or load the computed image embeddings. |
+| `tiling` | Enter tile size for computing tiled embeddings. Enter only x-value for quadratic size or both for non-quadratic. |
+| `halo` | Enter overlap values for computing tiled embeddings. Enter only x-value for quadratic size. Only active when tiling is used. |
+| **`Compute Embeddings`** (run button) | Compute embeddings or load embeddings if embedding_save_path is specified. |
+
+### 8.2 Segment Object widget (point/box-prompt driven)
+
+| Field | Tooltip / default (verbatim) |
+|---|---|
+| `prompt` (positive/negative dropdown) | Choose positive prompts to include regions or negative ones to exclude regions. Toggle between the settings by pressing [t]. |
+| `batched` (checkbox) | Choose if you want to segment multiple objects with point prompts. Default: **off**. |
+| **`Segment Object [S]`** (run button) | Runs `segment()` with the current prompts + `batched` setting. |
+
+### 8.3 Automatic Segmentation Settings (collapsible)
+
+| Field | Tooltip (verbatim) |
+|---|---|
+| `with_background` | Choose if your image has a large background area. |
+| `min_object_size` | Enter the minimal object size in pixels. This refers to the size per slice for volumetric segmentation. |
+| `apply_to_volume` *(3D only)* | Choose if automatic segmentation is run for the full volume or only the current slice. |
+| `gap_closing` *(3D only)* | Enter value for closing gaps across slices for volumetric segmentation. Higher values reduce artifacts from missing slices but may wrongly merge objects. |
+| `min_extent` *(3D only)* | Enter the minimal number of slices for objects in volumetric segmentation. Filters out small segmentation artifacts. |
+| `boundary_distance_thresh` *(AIS mode only)* | Enter the boundary distance threshold. |
+| `center_distance_thresh` *(AIS mode only)* | Enter the center distance threshold. |
+| `box_nms_thresh` *(AMG mode only)* | Enter the non-maximum suppression threshold. |
+| `pred_iou_thresh` *(AMG mode only)* | Enter the threshold for filtering objects based on the predicted IOU. |
+| `stability_score_thresh` *(AMG mode only)* | Enter the threshold for filtering objects based on the stability score. |
+| **`Automatic Segmentation`** (run button) | Run automatic segmentation. |
+
+AIS vs. AMG is the same `segmentation_mode` choice as the headless API (`SCRIPT_API.md`) — AIS-only
+fields appear when a model has a decoder, AMG-only fields otherwise.
+
+### 8.4 Commit widget (bottom of panel)
+
+| Field | Tooltip / default (verbatim) |
+|---|---|
+| `layer` | The layer to commit. Either `current_object` (default) to commit results from prompt-based segmentation, or `auto_segmentation` to commit results from automatic segmentation. |
+| `preserve_mode` | The mode for preserving already-committed objects, so a new commit doesn't overwrite them. `objects` (default) preserves per-object; `pixels` preserves per-pixel; `none` doesn't preserve. |
+| `preservation_threshold` | The overlap threshold for preserving objects (default **0.75**). Only used when `preserve_mode` is `objects`. |
+| `commit_path` | Optional path to a **zarr** file for saving committed objects, prompts, and other segmentation settings. Package docstring marks this **"still experimental"** — prefer the plain layer-save in §9 unless you specifically need this. |
+| **`Commit [C]`** / **`Clear Annotations [Shift+C]`** | See §7 keyboard table. |
+
+### 8.5 Tracking- and image-series-specific fields
+
+Only present in `annotator_tracking` / `image_series_annotator` respectively (§6):
+
+| Field | Tooltip (verbatim) |
+|---|---|
+| `track_id` | Select the id of the track you are currently annotating. |
+| `track_state` | Select the state of the current annotation. Choose 'division' if the object is dividing in the current frame. |
+| `folder` | Select the folder with the images to annotate. |
+| `output_folder` | Select the folder for saving the segmentation results. |
+| `pattern` | Select a pattern for selecting files, e.g. `*.tif`. By default all files in the input folder are selected. |
+| `is_volumetric` | Choose if the data you annotate is volumetric. |
 
 ---
 

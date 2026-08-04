@@ -33,7 +33,7 @@ from .prompts import (
     vlm_judge_prompt,
 )
 from .tools import (
-    internet_search, inspect_all_ui_windows, capture_plugin_dialog,
+    internet_search, inspect_all_ui_windows, capture_plugin_dialog, capture_napari_window,
     show_in_imagej_gui, close_imagej_windows,
     rag_retrieve_docs, recall_concepts, inspect_java_class,
     inspect_folder_tree,
@@ -1094,6 +1094,7 @@ def init_agent():
             internet_search,
             inspect_all_ui_windows,
             capture_plugin_dialog,
+            capture_napari_window,
             show_in_imagej_gui,
             close_imagej_windows,
             rag_retrieve_docs,
