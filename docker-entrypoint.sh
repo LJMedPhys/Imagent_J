@@ -47,6 +47,73 @@ _seed_volume "fiji_jars"    "$FIJI_HOME/jars.seed"    "$FIJI_HOME/jars"    "$FIJ
 _seed_volume "fiji_plugins" "$FIJI_HOME/plugins.seed" "$FIJI_HOME/plugins" "$FIJI_HOME/plugins/.seeded"
 _seed_volume "imagentj_home" "/home/imagentj.seed" "/home/imagentj" "/home/imagentj/.seeded"
 
+# ── Link user-provided fine-tuned Cellpose models into ~/.cellpose/models ────
+# data/fine-tuned-models is the host-writable bind mount (./data/fine-tuned-models on
+# the host) — the user drops a model file there and it becomes usable two ways:
+#   - cp.model_path = new File("/app/data/fine-tuned-models/<file>")  — works immediately,
+#     no restart needed, cellpose accepts any existing path directly.
+#   - cp.model = "<file>"  — the SAME bare-name convention as built-in models (cyto3,
+#     nucleitorch_0, ...). This is what the symlink+registration below enables: cellpose
+#     resolves a bare name by checking its built-in list plus every line in
+#     ~/.cellpose/models/gui_models.txt (cellpose/models.py get_user_models() /
+#     get_model_params()), and then expects the file to physically exist at
+#     ~/.cellpose/models/<name> — a symlink alone is not enough, gui_models.txt must list
+#     it too. Runs on every start (idempotent) so files added since the last start are
+#     picked up on the next restart.
+_FINE_TUNED_MODELS_DIR="/app/data/fine-tuned-models"
+_CELLPOSE_MODELS_DIR="/home/imagentj/.cellpose/models"
+mkdir -p "$_FINE_TUNED_MODELS_DIR" "$_CELLPOSE_MODELS_DIR"
+python3 - "$_FINE_TUNED_MODELS_DIR" "$_CELLPOSE_MODELS_DIR" <<'PYEOF'
+import sys
+from pathlib import Path
+
+src_dir, models_dir = Path(sys.argv[1]), Path(sys.argv[2])
+gui_list_path = models_dir / "gui_models.txt"
+
+existing_names = []
+if gui_list_path.exists():
+    existing_names = [l.strip() for l in gui_list_path.read_text().splitlines() if l.strip()]
+
+# Prune symlinks we created for files the user has since removed from
+# data/fine-tuned-models. Only ever touches symlinks pointing into src_dir —
+# never a real (non-symlink) model file, seeded or user-added.
+pruned = 0
+for entry in models_dir.iterdir():
+    if entry.is_symlink():
+        target = entry.resolve(strict=False)
+        if src_dir in target.parents and not target.exists():
+            entry.unlink()
+            pruned += 1
+
+linked = 0
+# Keep an existing registered name only if its file/symlink still exists — otherwise
+# a deleted fine-tuned model stays "registered" forever and cellpose fails on it with
+# a confusing missing-file error instead of a clean "unknown model" one.
+current_names = {n for n in existing_names if (models_dir / n).exists()}
+for f in (sorted(src_dir.iterdir()) if src_dir.exists() else []):
+    if not f.is_file() or f.name.startswith('.'):
+        continue
+    link = models_dir / f.name
+    if link.exists() and not link.is_symlink():
+        print(f'[entrypoint] WARNING: {f.name} already exists in .cellpose/models as a '
+              'real file — not overwriting', flush=True)
+        continue
+    try:
+        if link.is_symlink():
+            link.unlink()
+        link.symlink_to(f)
+        linked += 1
+        current_names.add(f.name)
+    except OSError as e:
+        print(f'[entrypoint] WARNING: could not link {f.name}: {e}', flush=True)
+
+if current_names != set(existing_names):
+    gui_list_path.write_text("\n".join(sorted(current_names)) + "\n")
+
+print(f'[entrypoint] fine-tuned Cellpose models: {linked} linked, {pruned} stale '
+      f'symlinks pruned, {len(current_names)} custom names registered', flush=True)
+PYEOF
+
 # ── Lock environment snapshot read-only ──────────────────────────────────────
 # The agent reads this file via check_environment() to know what's installed.
 # It must never be edited at runtime — frozen artifact of the image build.

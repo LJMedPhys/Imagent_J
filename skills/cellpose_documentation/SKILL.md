@@ -137,6 +137,42 @@ cp.model_path = new File("/home/imagentj/.cellpose/models/my_model")
 ```
 Built-ins live in `/home/imagentj/.cellpose/models`: `cyto3`, `cyto2`, `nucleitorch_0`, `tissuenet_cp3`, `livecell_cp3`, `bact_*`, `cpsam`, … (full list + which env each needs → `SCRIPT_API.md`). Note: cyto3/nuclei expect microscopy images — on a non-cell image (e.g. a photo) they legitimately find ~0 objects; that is not a failure.
 
+## Custom / fine-tuned models the user provides
+
+The user's own fine-tuned Cellpose model files (e.g. from `cellpose --train`) belong in
+`/app/data/fine-tuned-models/` (host: `./data/fine-tuned-models`) — never write a script that
+asks the user to place a model file directly under `/home/imagentj/.cellpose/models` (that's a
+named Docker volume, not something they can reach from a normal file browser). Two ways to use
+a file once it's there, with different readiness:
+
+- **`cp.model_path = new File("/app/data/fine-tuned-models/<file>")`** — works immediately, no
+  restart. `model_path` accepts any existing path directly; nothing needs registering.
+- **`cp.model = "<file>"`** — same bare-name convention as `cyto3`/`nucleitorch_0`, but only
+  works **after the container has been restarted once** since the file was added. On every
+  start, `docker-entrypoint.sh` symlinks each file in `data/fine-tuned-models/` into
+  `~/.cellpose/models/` AND registers its name in `~/.cellpose/models/gui_models.txt` — both
+  are required for cellpose to resolve a bare name (verified from the installed package's
+  `cellpose/models.py`: `get_model_params()` matches `model_type` against built-ins plus every
+  line in `gui_models.txt`, THEN expects the file at `~/.cellpose/models/<name>` — a symlink
+  with no `gui_models.txt` entry, or vice versa, does not work).
+
+**Expected file format:** a raw PyTorch `state_dict` (`torch.save(model.state_dict(), path)`) —
+verified from both loaders (`resnet_torch.py` for v3, `vit_sam.py` for cpsam): both call
+`torch.load(filename, weights_only=True)` then `load_state_dict(...)`, which rejects anything
+that isn't a plain tensor dict (no full pickled model, ONNX, or safetensors). The state dict's
+key names must match the architecture it was fine-tuned from — **v3 and cpsam are not
+interchangeable**: a v3-fine-tuned file (keys like `output.2.weight`) only loads through the
+`Cellpose` command (`env_path = .../envs/cellpose`); a cpsam-fine-tuned file only loads through
+`CellposeSAM` (`env_path = .../envs/cellpose4`). Loading one through the wrong command's env
+raises a `state_dict` key-mismatch error, not a clear "wrong model type" message — if a custom
+model fails immediately on load with missing/unexpected key errors, check which command was
+used before assuming the file is corrupt. A companion `size_<file>.npy` is optional (enables
+`diameter=0` auto-estimate, same as `size_cyto3.npy`); without it just pass `cp.diameter`.
+
+If the user just added a file and a script fails with "model not found" for a bare name, that
+almost always means the container hasn't been restarted since — prefer `model_path` if you
+can't ask them to restart, or tell them to restart first.
+
 ## Cellpose-SAM (cpsam) — newest, most general model (prefer this when the GPU is active)
 
 The default choice on a GPU deployment. Use the **`CellposeSAM` command + `cellpose4` env** (cellpose 4.1.1), NOT the v3 `Cellpose`:
