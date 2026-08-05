@@ -176,43 +176,77 @@ running one untouched is the quickest way to check the skill still works.
   runs correctly on this env's numpy 2.5 / scikit-image 0.26 (verified end-to-end),
   but do not expect fixes upstream. If a numpy or scikit-image upgrade changes
   behaviour, re-check B11 first — that is where the version rot shows up.
-- **B13 — if you smooth before thresholding, use an EDGE-PRESERVING filter, never a
-  plain Gaussian.** A Gaussian blurs across the dark gap *between* two neighbouring
-  spots as happily as it flattens noise, so a subsequent threshold sees one
-  connected bright region and returns one object with the summed area. Use
-  total-variation (`skimage.restoration.denoise_tv_chambolle`, works in 2D **and**
-  3D) or bilateral (`denoise_bilateral`, 2D only); both flatten noise while keeping
-  the intensity step at the spot border. This is what ImageJ's
-  `Anisotropic Diffusion 2D` and AICS's `edge_preserving_smoothing_3d` (ITK
-  GradientAnisotropicDiffusion) exist for.
-  **Measured, and the effect is real but narrow.** 512×512 synthetic, σ=2 px spots,
-  24 pairs, noise σ=10, 5 noise seeds, Otsu + connected components:
+- **B13 — if you smooth before thresholding, use ANISOTROPIC DIFFUSION, not a plain
+  Gaussian and not a hand-tuned denoiser.** A Gaussian blurs across the dark gap
+  *between* two neighbouring spots as happily as it flattens noise, so a subsequent
+  threshold sees one connected bright region and returns one object with the summed
+  area. The standard fix is Perona-Malik gradient anisotropic diffusion — Fiji's
+  `Anisotropic Diffusion 2D` plugin, and AICS's `edge_preserving_smoothing_3d`
+  (ITK `GradientAnisotropicDiffusionImageFilter`). `WORKFLOW_SPOT_SEGMENTATION.py`
+  ships it as `anisotropic_diffusion()`, a numpy port verified against ITK 5.4.6 to
+  **1.6e-07**, so no ITK install is needed and it works in 2D and 3D.
 
-  | pair separation | none | tv | bilateral | gaussian σ=1 |
-  |---|---|---|---|---|
-  | ≤ 4.0 σ | 24–26 | 24 | 24 | 24 |
-  | **4.5 σ** | **48** | **48** | **48** | **42–48** (median 45) |
-  | ≥ 5.0 σ | 48 | 48 | 48 | 48 |
+  **Why it beats the other edge-preserving filters here: its strength is
+  self-scaling.** ITK recomputes the image's mean squared gradient every iteration
+  and sets `K = -2 · conductance² · <|∇I|²>`, so `conductance` is a multiple of the
+  image's *own* RMS gradient. A fixed `TV_WEIGHT` or `sigma_spatial` is absolute, so
+  a value tuned on one image over-smooths the next.
 
-  Ground truth is 48. Below 4.5 σ the spots genuinely overlap and nothing separates
-  them; above 5 σ every filter copes. Only in the band right at the resolution limit
-  does the choice bite — there the Gaussian silently merged up to 6 of 24 pairs while
-  TV and bilateral got all 24 on every seed.
-  **But do not conclude "skip smoothing".** At 4 σ the *unsmoothed* image produced
-  spurious extra objects (25–26 where 24 is correct) from noise fragments, which all
-  three filters avoided. Smoothing is needed; TV is how you get it without paying the
-  merge.
-  Second effect, present at every separation: the Gaussian **inflates areas**. On the
-  workflow's own synthetic run, area px min/median went from 45/71 (tv) to 57/78
-  (gaussian).
+  **Measured on a real 2048×2048 confocal image** (parasites, 322 nm/px, a pair
+  13 px apart). "Margin" is what actually decides the merge: how far the intensity
+  valley between the two spots sits *below* the Otsu threshold — negative keeps them
+  separate. "Merged"/"lost" are counted against the unsmoothed run.
+
+  | smoothing | noise removed | margin | objects | merged | lost |
+  |---|---|---|---|---|---|
+  | none | 0% | −14.5 | 54 | 0 | 0 |
+  | **anisotropic (AICS defaults)** | **44%** | **−14.0** | **54** | **0** | **0** |
+  | Fiji `Anisotropic Diffusion 2D` | 33% | −14.0 | 54 | 0 | 0 |
+  | bilateral | 58% | −9.8 | 52 | 0 | 2 |
+  | tv `weight=0.01` | 60% | −8.2 | 55 | 0 | 0 |
+  | gaussian σ=1 | 54% | −4.4 | 54 | 1 | 0 |
+  | tv `weight=0.05` | 77% | −0.0 | **48** | **4** | **3** |
+
+  Anisotropic diffusion removes noise almost for free: 44% of it for 0.5 units of
+  margin. Every other filter trades margin away much faster, and `tv weight=0.05`
+  runs the margin to zero and fuses four pairs outright.
+  **The lesson is not "edge-preserving beats Gaussian" — it is that STRENGTH
+  dominates.** At matched noise removal the edge-preserving filters do win (bilateral
+  and Gaussian both remove 54%; bilateral keeps 9.8 of margin against 4.4). But an
+  edge-preserving filter turned up too high merges spots just as a Gaussian does.
+
+  **The one case where the default is the wrong choice: a noise-dominated image.**
+  The same self-scaling that makes anisotropic diffusion safe makes it protect
+  whatever dominates the gradient statistics — and when that is the noise, it
+  faithfully preserves the noise. On the parasite image with 3× its native noise,
+  the default returned **9774** objects (54 is correct), and it took 60 iterations
+  and 4× the runtime to get to 51. `SMOOTHING = "tv"` with `TV_WEIGHT = 0.05` — the
+  weight that is wrong as a default — returned **54 objects with one merge in 14 s**.
+  An absolute weight ignores the image's statistics, which is a liability on clean
+  data and an asset here. So: keep `anisotropic`, and switch to `tv` at
+  `TV_WEIGHT ≈ 0.05` when a run returns thousands of tiny objects.
+
+  **Watch out for hot pixels, whichever filter you pick.** Smoothing runs *before*
+  the median in the ladder, so an isolated hot pixel is first spread into a blob too
+  wide for `MEDIAN_RADIUS_PX = 1` to remove. With 0.05% hot pixels injected, the
+  unsmoothed path was untouched (54 objects — the median kills single pixels), while
+  bilateral produced 155 objects (119 spurious) and the Gaussian lost 43. Anisotropic
+  degraded least (54 objects, one merge). Despeckle first if your camera has hot
+  pixels.
+  **Do not conclude "skip smoothing" either.** On synthetic data the *unsmoothed*
+  image produced spurious extra objects (25–26 where 24 is correct) from noise
+  fragments, which every filter avoided.
+  Second effect: the Gaussian **inflates areas** — median area 110 px against 99
+  unsmoothed on the objects all modes agree on, and 104 vs 91 over the whole image.
   **Where this applies:** the threshold-based `WORKFLOW_SPOT_SEGMENTATION.py`, which
-  now defaults to `SMOOTHING = "tv"`. It does **not** apply to plain `detect_spots`:
-  that path takes local *maxima* separated by `minimum_distance`, not connected
-  components, so it does not fuse neighbours and needs no pre-smoothing (B14).
-  Note also that with `SPLIT_TOUCHING = True` the Big-FISH watershed seeding repairs
-  most merges — all four modes returned the same object count on the workflow's
-  synthetic data. The smoothing choice therefore matters most for **area accuracy**,
-  and for counting only when seeding fails.
+  defaults to `SMOOTHING = "anisotropic"`. It does **not** apply to plain
+  `detect_spots`: that path takes local *maxima* separated by `minimum_distance`, not
+  connected components, so it does not fuse neighbours and needs no pre-smoothing
+  (B14). One caveat inside this workflow: `split_touching()` passes the *smoothed*
+  image to `detect_spots` for seeding, so the smoothing choice does move the seeds
+  (52 seeds unsmoothed, 46 at `tv weight=0.05`). When smoothing fuses a pair at the
+  threshold step and Big-FISH seeded only one of them, the watershed cannot undo it —
+  that is exactly how the four merges above happened.
 - **B14 — do not pre-smooth before `detect_spots`.** Its LoG filter is already the
   smoothing step, sized from `voxel_size`/`spot_radius`, and blurring first widens
   the effective kernel and shifts the automatic threshold. B13 is about the
@@ -234,14 +268,20 @@ image and an independent Fiji reference segmentation of the same file:
 | | objects | area px (min/median/max) |
 |---|---|---|
 | Fiji reference (Otsu + Analyze Particles) | 55 | 12 / 115 / 847 |
-| **this workflow** | **54** | **21 / 104 / 578** |
+| **this workflow, shipped default** | **54** | **16 / 98 / 419** |
 | stamping fixed disks at spot coords (**wrong**, pitfall B4) | 34 | 97 / 102 / 329 |
 
 Calibration was read correctly from the file as 322.2 nm/px (the run that guessed
-100 nm/px was 3.2× off), and the object radius was measured at 1836 nm — against
+100 nm/px was 3.2× off), and the object radius was measured at 1776 nm — against
 the 150 nm default that caused the failure.
 
-The `SMOOTHING` options were verified by running the workflow under all four modes
-(`tv`, `bilateral`, `gaussian`, `none`) plus the separation sweep in pitfall B13;
+`anisotropic_diffusion()` was checked against `itk.GradientAnisotropicDiffusionImageFilter`
+(ITK 5.4.6) on real 2D and 3D data over a sweep of iterations, conductance and time
+step: **max absolute difference 1.6e-07**, i.e. float32 round-off. The port is the
+same filter, so the AICS defaults carry over unchanged.
+
+The `SMOOTHING` options were verified by running the workflow under every mode
+(`anisotropic`, `tv`, `bilateral`, `gaussian`, `none`) on two real datasets plus the
+separation sweep in pitfall B13;
 `denoise_tv_chambolle` was confirmed to work on a 3D array, so the default survives
 if the workflow is extended past 2D.

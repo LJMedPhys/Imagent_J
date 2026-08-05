@@ -216,11 +216,17 @@ props  = measure.regionprops(labels, intensity_image=image)   # measure the ORIG
 
 Three details that matter:
 
-- **`denoise` must smooth with an EDGE-PRESERVING filter, not a Gaussian.** This is
-  the threshold path, so anything that blurs across the gap between two neighbouring
+- **`denoise` must smooth with ANISOTROPIC DIFFUSION, not a Gaussian.** This is the
+  threshold path, so anything that blurs across the gap between two neighbouring
   spots makes Otsu return them as one object. The workflow defaults to
-  `SMOOTHING = "tv"` (`restoration.denoise_tv_chambolle`); `"gaussian"` is kept only
-  for well-separated objects and prints a warning. See pitfall B13.
+  `SMOOTHING = "anisotropic"` — Perona-Malik gradient anisotropic diffusion, the
+  filter behind Fiji's `Anisotropic Diffusion 2D` and AICS's
+  `edge_preserving_smoothing_3d`, shipped as `anisotropic_diffusion()` (a numpy port
+  of ITK's `GradientAnisotropicDiffusionImageFilter`, verified to 1.6e-07, so no ITK
+  install). Its conductance is a multiple of the image's own RMS gradient, so it
+  self-scales; `"tv"` and `"bilateral"` are also edge-preserving but take absolute
+  strengths that need re-tuning per image. `"gaussian"` is kept only for
+  well-separated objects and prints a warning. See pitfall B13.
 - **Regions with no seed must keep their own label**, or objects Big-FISH missed
   vanish from the result. The workflow relabels them back in.
 - **Measure on the original image**, never on the denoised or background-subtracted
@@ -299,10 +305,11 @@ the automatic threshold (pitfall B14).
 
 **That advice does not carry over to the segmentation path.** `bigfish.stack` has
 no edge-preserving filter — only `mean_filter`, `median_filter`, `gaussian_filter`,
-`log_filter`, min/max, dilation/erosion and the two `remove_background_*` calls — so
-when you threshold for object extent, smooth with
-`skimage.restoration.denoise_tv_chambolle` (nD) or `denoise_bilateral` (2D) instead.
-A plain Gaussian there merges neighbouring spots (pitfall B13).
+`log_filter`, min/max, dilation/erosion and the two `remove_background_*` calls — and
+neither does `skimage`. So when you threshold for object extent, use
+`anisotropic_diffusion()` from `WORKFLOW_SPOT_SEGMENTATION.py` (nD, no extra
+dependency); `skimage.restoration.denoise_tv_chambolle` (nD) and `denoise_bilateral`
+(2D) are the fallbacks. A plain Gaussian there merges neighbouring spots (pitfall B13).
 
 Prefer detecting in the full 3D volume over max-projecting first: projection merges
 spots that overlap in x/y at different z and undercounts.
