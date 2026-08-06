@@ -631,6 +631,440 @@ def capture_plugin_dialog() -> str:
     return json.dumps(results, indent=2)
 
 
+# ── Cellpose diameter estimation from user-drawn ROIs ────────────────────────
+# Cellpose v3 rescales the image by (diameter / model_training_diameter), so a wrong
+# `diameter` is the single biggest quality lever on a NON-fine-tuned stock model. These
+# helpers turn hand-drawn polygons into that number.
+
+def _equivalent_circular_diameter(area_px: float) -> float:
+    """Diameter of the circle with the same area — 2*sqrt(A/pi).
+
+    Area MUST be in pixels: cellpose's `diameter` is strictly px (SCRIPT_API.md), while
+    ImageJ reports ImageStatistics.area in CALIBRATED units on a calibrated image. On a
+    0.645 um/px image a 40x40 px ROI reports area=665.64 (um^2) but pixelCount=1600 —
+    feeding the former here yields 29.1 px instead of 45.1 px, a silent 1.55x error.
+    Always source this from `pixelCount`.
+    """
+    import numpy as np
+    return float(2.0 * np.sqrt(area_px / np.pi))
+
+
+def _best_two_cluster_split(log_values):
+    """Exact 1-D 2-means, by exhaustive split search on sorted values.
+
+    For 1-D data the optimal 2-cluster partition is always a split of the sorted order, so
+    trying every cut is exact — no initialisation sensitivity or iteration like general
+    k-means. Operates on LOG diameters so separation is judged multiplicatively: a 2x gap
+    counts the same at 20 px as at 200 px, which is what matters for cellpose rescaling.
+
+    Returns (within_sse, split_index, left_mean, right_mean) in log space.
+    """
+    import numpy as np
+    v = np.sort(np.asarray(log_values, dtype=float))
+    best = None
+    for i in range(1, len(v)):
+        left, right = v[:i], v[i:]
+        sse = float(((left - left.mean()) ** 2).sum() + ((right - right.mean()) ** 2).sum())
+        if best is None or sse < best[0]:
+            best = (sse, i, float(left.mean()), float(right.mean()))
+    return best
+
+
+def _out_of_tolerance_fraction(diameters, reference, tolerance):
+    """Fraction of objects a single `reference` diameter would scale badly.
+
+    Cellpose presents an object of true diameter d to the network at
+    d * (train_diam / reference) px, so detection quality tracks the RATIO d/reference,
+    not the absolute difference. Anything outside [1/tolerance, tolerance] is counted as
+    poorly served by that reference.
+    """
+    import numpy as np
+    d = np.asarray(diameters, dtype=float)
+    ratio = d / reference
+    return float(((ratio < 1.0 / tolerance) | (ratio > tolerance)).mean())
+
+
+@tool
+def estimate_cellpose_diameter(
+    scale_tolerance: float = 1.5,
+    max_out_of_tolerance: float = 0.25,
+) -> str:
+    """Turn the user's hand-drawn ROIs into a Cellpose `diameter` (px), and say whether
+    ONE segmentation run is enough or the objects need TWO runs at different diameters.
+
+    Use this for a NON-fine-tuned stock Cellpose v3 model (cyto3, nucleitorch_0, ...),
+    where `diameter` is the main accuracy lever. Ask the user to open the image in Fiji,
+    draw a polygon/freehand outline around ~8-15 representative objects (whatever they
+    want segmented — whole cell outline, or just the nucleus), pressing **T** after each
+    to add it to the ROI Manager. Then call this with no arguments.
+
+    Reads every ROI in the ROI Manager, converts each to an equivalent circular diameter
+    (2*sqrt(area/pi)) in PIXELS, and reports the distribution plus a recommendation.
+
+    Args:
+        scale_tolerance: How far off a single diameter may be before an object counts as
+            badly scaled, as a ratio (1.5 = anything under 1/1.5x or over 1.5x the chosen
+            diameter). Heuristic — see the skill docs.
+        max_out_of_tolerance: Fraction of badly-scaled objects tolerated before
+            recommending two runs (0.25 = split once more than a quarter are off).
+
+    Returns:
+        JSON: per-ROI diameters, summary stats, and `recommendation` with the
+        diameter(s) in px to pass as `cp.diameter`.
+    """
+    import numpy as np
+    from scyjava import jimport
+
+    if scale_tolerance <= 1.0:
+        return json.dumps({"error": "scale_tolerance must be > 1.0 (it is a ratio, e.g. 1.5)."})
+
+    try:
+        get_ij()  # ensure the JVM/Fiji is up
+        RoiManager = jimport('ij.plugin.frame.RoiManager')
+        rm = RoiManager.getInstance()
+    except Exception as e:
+        return json.dumps({"error": f"Could not reach the ImageJ ROI Manager: {e}"})
+
+    if rm is None or rm.getCount() == 0:
+        return json.dumps({
+            "error": "no_rois",
+            "message": (
+                "The ROI Manager is empty. Ask the user to open the image in Fiji, pick the "
+                "polygon or freehand selection tool, outline ~8-15 representative objects, "
+                "and press T after each one to add it to the ROI Manager."
+            ),
+        })
+
+    # Pixel areas. Roi.getStatistics() works standalone (no image attached) and its
+    # pixelCount is always a raw pixel count, so this is immune to image calibration
+    # and does not disturb whatever selection the user currently has active.
+    areas_px, skipped = [], []
+    for i in range(rm.getCount()):
+        try:
+            roi = rm.getRoi(i)
+            n_px = float(roi.getStatistics().pixelCount)
+            if n_px <= 0:
+                skipped.append({"index": i, "reason": "zero-area ROI"})
+                continue
+            areas_px.append(n_px)
+        except Exception as exc:
+            skipped.append({"index": i, "reason": str(exc)})
+
+    if not areas_px:
+        return json.dumps({"error": "no_measurable_rois", "skipped": skipped})
+
+    areas = np.asarray(areas_px, dtype=float)
+    diameters = np.array([_equivalent_circular_diameter(a) for a in areas])
+    n = int(diameters.size)
+
+    mean_d = float(diameters.mean())
+    # Summarise on the MEDIAN area, then convert — robust to one sloppily-drawn outline,
+    # unlike the mean-area variant (sqrt is concave, so averaging areas is dominated by the
+    # largest ROIs: a single oversized polygon among 11 tight nuclei pulled that variant to
+    # 42.7 px against a true ~30 px).
+    #
+    # d = 2*sqrt(A/pi) is monotonic, so order statistics are preserved: for ODD n this is
+    # exactly the median of the per-ROI diameters. For EVEN n numpy averages the two middle
+    # values, and averaging areas is not the same as averaging their diameters — usually a
+    # rounding-level difference, but it grows when the two middle values straddle a gap
+    # (measured: 43.0 vs 48.3 px on a bimodal 12-ROI set). That case is precisely where a
+    # single diameter is the wrong answer anyway and the two-run split below takes over, so
+    # it does not change the recommendation.
+    median_d = _equivalent_circular_diameter(float(np.median(areas)))
+
+    p10, p90 = (float(x) for x in np.percentile(diameters, [10, 90]))
+    cv = float(diameters.std(ddof=1) / mean_d) if n > 1 else 0.0
+    spread_ratio = float(p90 / p10) if p10 > 0 else float("inf")
+
+    single_bad = _out_of_tolerance_fraction(diameters, median_d, scale_tolerance)
+
+    result = {
+        "n_rois": n,
+        "per_roi_diameter_px": [round(float(d), 1) for d in np.sort(diameters)],
+        "summary": {
+            # The recommended single-run value. Named for how it is computed so it is not
+            # confused with np.median(diameters), which differs slightly for even n.
+            "diameter_from_median_area_px": round(median_d, 1),
+            "mean_diameter_px": round(mean_d, 1),
+            "p10_px": round(p10, 1),
+            "p90_px": round(p90, 1),
+            "p90_over_p10": round(spread_ratio, 2),
+            "coefficient_of_variation": round(cv, 3),
+        },
+        "units_note": (
+            "All diameters are in PIXELS, sourced from Roi.getStatistics().pixelCount — "
+            "cellpose's `diameter` is px, never microns."
+        ),
+    }
+    if skipped:
+        result["skipped_rois"] = skipped
+    if n < 5:
+        result["warning"] = (
+            f"Only {n} ROI(s) measured — too few to judge the size distribution reliably. "
+            "Ask the user for ~8-15 outlines before trusting the single/two-run call."
+        )
+
+    # ── One run or two? ──────────────────────────────────────────────────────
+    # Decided on how badly a SINGLE diameter would scale the population, not on an
+    # abstract bimodality score: what matters to cellpose is the d/diameter ratio per
+    # object. This treats "one broad continuous spread" and "two tight clusters" on the
+    # same footing — in both cases many objects are mis-scaled by one diameter.
+    if single_bad <= max_out_of_tolerance or n < 4:
+        result["recommendation"] = {
+            "n_runs": 1,
+            "diameters_px": [round(median_d, 1)],
+            "fraction_poorly_scaled": round(single_bad, 3),
+            "reason": (
+                f"{single_bad:.0%} of objects fall outside {scale_tolerance}x of the median "
+                f"diameter ({median_d:.1f} px), at or below the {max_out_of_tolerance:.0%} "
+                "threshold — one run covers the population."
+            ),
+        }
+        return json.dumps(result, indent=2)
+
+    sse, idx, log_c1, log_c2 = _best_two_cluster_split(np.log(diameters))
+    c1, c2 = float(np.exp(log_c1)), float(np.exp(log_c2))
+    sorted_d = np.sort(diameters)
+    small, large = sorted_d[:idx], sorted_d[idx:]
+    # Each object is now served by whichever of the two diameters suits it better.
+    two_bad = float(np.mean([
+        min(_out_of_tolerance_fraction([d], c1, scale_tolerance),
+            _out_of_tolerance_fraction([d], c2, scale_tolerance))
+        for d in diameters
+    ]))
+
+    smallest_group = min(len(small), len(large))
+    centre_ratio = float(max(c1, c2) / min(c1, c2))
+    # Only worth two runs if BOTH groups are substantial (else it is a couple of outliers,
+    # better fixed by redrawing), the centres differ enough for the rescale to matter, and
+    # splitting genuinely reduces the mis-scaled fraction.
+    worth_splitting = (
+        smallest_group >= max(2, int(round(0.15 * n)))
+        and centre_ratio >= scale_tolerance
+        and two_bad < single_bad
+    )
+
+    if worth_splitting:
+        result["recommendation"] = {
+            "n_runs": 2,
+            "diameters_px": [round(min(c1, c2), 1), round(max(c1, c2), 1)],
+            "group_sizes": [len(small), len(large)],
+            "centre_ratio": round(centre_ratio, 2),
+            "fraction_poorly_scaled_one_run": round(single_bad, 3),
+            "fraction_poorly_scaled_two_runs": round(two_bad, 3),
+            "reason": (
+                f"A single diameter mis-scales {single_bad:.0%} of objects (> "
+                f"{max_out_of_tolerance:.0%}). Two size groups found ({len(small)} and "
+                f"{len(large)} objects, centres {min(c1, c2):.1f} and {max(c1, c2):.1f} px, "
+                f"{centre_ratio:.1f}x apart); running twice drops that to {two_bad:.0%}. "
+                "Run cellpose once per diameter, then merge the two label images."
+            ),
+        }
+    else:
+        result["recommendation"] = {
+            "n_runs": 1,
+            "diameters_px": [round(median_d, 1)],
+            "fraction_poorly_scaled": round(single_bad, 3),
+            "reason": (
+                f"Sizes are spread out ({single_bad:.0%} of objects outside "
+                f"{scale_tolerance}x of the median) but they do NOT separate into two "
+                f"usable groups (groups of {len(small)}/{len(large)}, centres "
+                f"{centre_ratio:.1f}x apart) — a continuous spread rather than two "
+                "populations. Splitting would not help; use one run and expect some "
+                "misses at the size extremes, or segment the extremes separately by hand."
+            ),
+        }
+    return json.dumps(result, indent=2)
+
+
+@tool
+def merge_cellpose_diameter_runs(
+    small_run_mask_path: str,
+    small_run_diameter_px: float,
+    large_run_mask_path: str,
+    large_run_diameter_px: float,
+    output_path: str,
+    overlap_threshold: float = 0.5,
+) -> str:
+    """Merge the two label images produced by a two-diameter Cellpose run into ONE
+    instance-label image with unique, sequential IDs.
+
+    Use this after `estimate_cellpose_diameter()` recommended `n_runs: 2` and cellpose has
+    been run once per diameter. NEVER merge label images by adding/max-ing them: IDs from
+    the two runs collide, so addition invents objects with fused IDs and `max` silently
+    merges touching neighbours into one.
+
+    How it resolves the two runs (each run detects some of the same physical objects):
+      1. Each object is measured (equivalent circular diameter) and assigned to whichever
+         run it *should* have come from, split at the geometric mean of the two diameters —
+         the small run owns objects below the boundary, the large run above it.
+      2. Remaining candidates are accepted greedily, best-matched first, scored by how close
+         the object is to its own run's target diameter (|log(ecd / target)|).
+      3. A candidate is dropped if more than `overlap_threshold` of its pixels are already
+         covered by an accepted object (it is a duplicate detection of the same cell).
+      4. A final pass re-admits any object that was assigned away in step 1 but overlaps
+         nothing accepted — so an object only ever found by the "wrong" run is not lost.
+
+    Args:
+        small_run_mask_path: Label TIFF from the run with the SMALLER diameter.
+        small_run_diameter_px: The `diameter` used for that run.
+        large_run_mask_path: Label TIFF from the run with the LARGER diameter.
+        large_run_diameter_px: The `diameter` used for that run.
+        output_path: Where to write the merged uint32 label TIFF.
+        overlap_threshold: Fraction of a candidate's own pixels that may already be covered
+            before it is treated as a duplicate and dropped (0.5 = half).
+
+    Returns:
+        JSON with the object counts kept from each run, duplicates dropped, objects
+        recovered by the final pass, and the output path.
+    """
+    import numpy as np
+    import tifffile
+    from scipy import ndimage as ndi
+
+    if not (0.0 < overlap_threshold <= 1.0):
+        return json.dumps({"error": "overlap_threshold must be in (0, 1]."})
+    if small_run_diameter_px <= 0 or large_run_diameter_px <= 0:
+        return json.dumps({"error": "Diameters must be positive."})
+
+    d_small, d_large = float(small_run_diameter_px), float(large_run_diameter_px)
+    if d_small > d_large:  # tolerate the caller swapping them
+        d_small, d_large = d_large, d_small
+        small_run_mask_path, large_run_mask_path = large_run_mask_path, small_run_mask_path
+
+    try:
+        lab_small = tifffile.imread(small_run_mask_path)
+        lab_large = tifffile.imread(large_run_mask_path)
+    except Exception as e:
+        return json.dumps({"error": f"Could not read a label image: {e}"})
+
+    if lab_small.shape != lab_large.shape:
+        return json.dumps({
+            "error": "shape_mismatch",
+            "message": (
+                f"Label images differ in shape: {lab_small.shape} vs {lab_large.shape}. "
+                "Both runs must segment the SAME image."
+            ),
+        })
+    if lab_small.ndim != 2:
+        return json.dumps({
+            "error": "not_2d",
+            "message": f"Expected 2-D label images, got shape {lab_small.shape}.",
+        })
+
+    def _objects(lab, target, source):
+        """One record per label id: pixel coords, ECD, and distance from its run's target."""
+        out = []
+        # find_objects gives a bounding-box slice per id — far cheaper than scanning the
+        # whole image once per label.
+        for idx, sl in enumerate(ndi.find_objects(lab.astype(np.int32)), start=1):
+            if sl is None:
+                continue
+            sub = lab[sl] == idx
+            n_px = int(sub.sum())
+            if n_px == 0:
+                continue
+            ys, xs = np.nonzero(sub)
+            coords = (ys + sl[0].start, xs + sl[1].start)
+            ecd = _equivalent_circular_diameter(n_px)
+            out.append({
+                "coords": coords,
+                "area_px": n_px,
+                "ecd": ecd,
+                "source": source,
+                "score": abs(float(np.log(ecd / target))),
+            })
+        return out
+
+    objs_small = _objects(lab_small, d_small, "small")
+    objs_large = _objects(lab_large, d_large, "large")
+
+    # Size band: the small run owns everything below the geometric mean of the two
+    # diameters, the large run everything above. Geometric (not arithmetic) mean because
+    # cellpose scaling error is multiplicative.
+    boundary = float(np.sqrt(d_small * d_large))
+    primary = ([o for o in objs_small if o["ecd"] <= boundary]
+               + [o for o in objs_large if o["ecd"] > boundary])
+    deferred = ([o for o in objs_small if o["ecd"] > boundary]
+                + [o for o in objs_large if o["ecd"] <= boundary])
+
+    merged = np.zeros(lab_small.shape, dtype=np.uint32)
+    next_id = 0
+    kept = {"small": 0, "large": 0}
+    dropped_duplicate = 0
+    accepted_area: dict[int, int] = {}
+
+    def _try_accept(obj):
+        """Accept unless this object duplicates something already accepted.
+
+        The overlap test is deliberately BIDIRECTIONAL. Checking only "how much of me is
+        already taken" misses containment: a bogus blob from the large-diameter run that
+        fuses several small cells covers only a small fraction of ITS OWN area, so it
+        would sail through and sit on top of the correct small objects.
+        """
+        nonlocal next_id, dropped_duplicate
+        coords = obj["coords"]
+        under = merged[coords]
+        covered = int((under > 0).sum())
+
+        # (a) this candidate is mostly claimed already — a finer duplicate.
+        if covered / obj["area_px"] > overlap_threshold:
+            dropped_duplicate += 1
+            return False
+
+        # (b) this candidate would swallow an already-accepted object — a coarser
+        #     duplicate (the large run fusing cells the small run resolved correctly).
+        if covered:
+            ids, counts = np.unique(under[under > 0], return_counts=True)
+            for lid, c in zip(ids.tolist(), counts.tolist()):
+                if c / accepted_area[int(lid)] > overlap_threshold:
+                    dropped_duplicate += 1
+                    return False
+
+        next_id += 1
+        merged[coords] = next_id
+        accepted_area[next_id] = obj["area_px"]
+        kept[obj["source"]] += 1
+        return True
+
+    for obj in sorted(primary, key=lambda o: o["score"]):
+        _try_accept(obj)
+
+    # Recover objects the size band assigned away that nothing else actually found —
+    # without this, an object detected by only one run, on the "wrong" side of the
+    # boundary, would vanish from the merge entirely.
+    recovered = 0
+    for obj in sorted(deferred, key=lambda o: o["score"]):
+        before = next_id
+        _try_accept(obj)
+        if next_id > before:
+            recovered += 1
+
+    try:
+        out_dir = os.path.dirname(os.path.abspath(output_path))
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        tifffile.imwrite(output_path, merged)
+    except Exception as e:
+        return json.dumps({"error": f"Could not write merged mask: {e}"})
+
+    return json.dumps({
+        "output_path": os.path.abspath(output_path),
+        "total_objects": int(next_id),
+        "kept_from_small_run": kept["small"],
+        "kept_from_large_run": kept["large"],
+        "recovered_outside_size_band": recovered,
+        "dropped_as_duplicate": dropped_duplicate,
+        "size_band_boundary_px": round(boundary, 1),
+        "input_object_counts": {"small_run": len(objs_small), "large_run": len(objs_large)},
+        "dtype": "uint32",
+        "note": (
+            "Labels are sequential 1..N with 0 = background, ready for regionprops_table / "
+            "cp_measure exactly like any other instance mask."
+        ),
+    }, indent=2)
+
+
 @tool
 def extract_image_metadata(path: str) -> str:
     """Extract calibration, pixel intensity statistics, and suggested

@@ -128,6 +128,90 @@ the cells themselves and destroys them.
 
 **Speed & model choice:** GPU ≈ seconds → **prefer cpsam** there. On CPU, cyto3 is ~minutes per ~1 MP image (flow-dynamics dominates) and **cpsam is far too slow** (many minutes even for a small crop) → **prefer `cyto3`/`nucleitorch_0`** on CPU.
 
+## Setting `diameter` from user-drawn ROIs (stock v3 models)
+
+On a **non-fine-tuned** v3 model (`cyto3`, `nucleitorch_0`, …) `diameter` is the single
+biggest accuracy lever: cellpose rescales the image by `diameter / training_diameter`
+(30 px for cyto\*, 17 px for nuclei), so a wrong value shrinks or inflates every object
+before the network ever sees it. When the user is unsure of the value, measure it instead
+of guessing:
+
+1. Ask the user to open the image in Fiji, pick the **polygon** or **freehand** selection
+   tool, outline **~8–15 representative objects** — whatever they actually want segmented
+   (whole cell outline, or just the nucleus) — pressing **`T`** after each to add it to the
+   ROI Manager.
+2. Call **`estimate_cellpose_diameter()`**. It reads every ROI, converts each to an
+   equivalent circular diameter `2*sqrt(area/pi)` **in pixels**, and returns the
+   distribution plus a recommendation.
+3. Pass the returned value(s) as `cp.diameter`.
+
+The headline number is `diameter_from_median_area_px` — the **median** area converted, not
+the mean. Averaging areas first is fragile: `sqrt` is concave, so the mean-area variant is
+dominated by the largest outlines (one oversized polygon among 11 tight ~30 px nuclei pulled
+it to 42.7 px, vs a correct 30.0 px from the median).
+
+Since `d = 2*sqrt(A/pi)` is monotonic, for an **odd** number of ROIs this is exactly the
+median of the per-ROI diameters. For an **even** count the two middle values get averaged,
+and averaging areas ≠ averaging their diameters — normally a rounding-level difference, but
+it widens when the two middle ROIs straddle a size gap (measured: 43.0 vs 48.3 px on a
+bimodal 12-ROI set). That only happens when the population is genuinely bimodal, where a
+single diameter is the wrong answer regardless and the two-run split below takes over.
+
+`diameter = 0f` (auto-estimate) is the alternative, but it needs a `size_*.npy` size model
+and is often less reliable than a handful of honest outlines — prefer measured ROIs when
+the user can draw them.
+
+> **Why pixels matter here.** ImageJ reports `ImageStatistics.area` in *calibrated* units on
+> a calibrated image, but cellpose's `diameter` is *always* px. On a 0.645 µm/px image a
+> 40×40 px ROI reports `area = 665.64` (µm²) while `pixelCount = 1600` — using the former
+> gives 29.1 px instead of 45.1 px, a silent **1.55× error** squarely in the range that
+> degrades segmentation. `estimate_cellpose_diameter` sources `pixelCount` for this reason;
+> if you ever compute a diameter in a Groovy script yourself, do the same.
+
+### One run or two?
+
+If objects vary a lot in size, one `diameter` cannot serve them all and the extremes get
+missed. The tool decides on the metric that actually governs cellpose quality — **the ratio
+`d / diameter` per object**, not an abstract spread score:
+
+- It computes what fraction of objects a single (median) diameter would scale outside
+  `[1/1.5, 1.5]` — the `scale_tolerance`.
+- **≤ 25 % outside → one run** at the median diameter.
+- **> 25 % outside → try splitting** into two size groups (exact 1-D 2-means on *log*
+  diameters, so a 2× gap counts the same at 20 px as at 200 px). It recommends two runs
+  only if both groups are substantial (≥ 15 % of ROIs, ≥ 2 objects), the two centres are
+  ≥ `scale_tolerance` apart, and splitting genuinely lowers the mis-scaled fraction —
+  otherwise a couple of outliers or one broad continuous spread would trigger a pointless
+  second run.
+
+Both cutoffs (`scale_tolerance=1.5`, `max_out_of_tolerance=0.25`) are **tunable heuristics**,
+grounded in how the rescaling works rather than measured from a benchmark — cellpose
+tolerates roughly a 1.5× size error before quality visibly drops. Treat them as a starting
+point and loosen/tighten per dataset.
+
+**For two runs:** run the template below twice with the two diameters, saving each label
+image, then call **`merge_cellpose_diameter_runs()`** to combine them. Do **NOT** add, `max`,
+or otherwise combine the two label images by hand — IDs from the two runs collide, so
+addition invents objects with fused IDs and `max` silently merges touching neighbours.
+
+The merge resolves the fact that both runs detect some of the same physical cells:
+
+1. Every object is measured and assigned to the run it *should* have come from, split at the
+   **geometric** mean of the two diameters (geometric, because cellpose scaling error is
+   multiplicative).
+2. Candidates are accepted best-first, scored by `|log(ecd / own run's target)|`.
+3. A candidate is dropped as a duplicate if the overlap test fails in **either** direction —
+   more than `overlap_threshold` of its own pixels are already claimed (a finer duplicate),
+   **or** it would swallow that much of an already-accepted object (a coarser duplicate,
+   e.g. the large-diameter run fusing several small cells the small run resolved correctly).
+   The bidirectional check matters: a big fused blob covers only a small fraction of *its
+   own* area, so a one-directional test lets it through on top of the correct objects.
+4. A final pass re-admits any object assigned away in step 1 that overlaps nothing accepted,
+   so a cell found by only one run — on the "wrong" side of the size boundary — is not lost.
+
+Output is a sequential `uint32` label image (0 = background), ready for
+`regionprops_table` / `cp_measure` like any other mask.
+
 ## Custom / pre-downloaded models
 
 Set `model_path`, leave `model` empty:

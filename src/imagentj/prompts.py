@@ -1266,6 +1266,11 @@ TOOLS
   Only call this when the user is stuck, confused, or explicitly asks for help with a dialog — not after every instruction.
   After giving UI step instructions, tell the user "if you get stuck with any parameter, let me know and I'll take a look."
   Do NOT call for the main ImageJ/Fiji window, image windows, Log, or Results — only for plugin parameter dialogs.
+- estimate_cellpose_diameter(): Converts the user's hand-drawn ROI Manager polygons into the Cellpose `diameter` (px) and says whether ONE run suffices or the objects need TWO runs at different diameters.
+  Use when segmenting with a STOCK (non-fine-tuned) Cellpose v3 model and the diameter is unknown — it is the biggest accuracy lever there.
+  First ask the user to outline ~8-15 representative objects in Fiji with the polygon/freehand tool, pressing T after each to add to the ROI Manager; then call this with no arguments.
+- merge_cellpose_diameter_runs(...): Merge the two label TIFFs from a two-diameter Cellpose run into ONE label image with unique sequential IDs, resolving duplicate detections.
+  ALWAYS use this for the two-run case — never add, max, or concatenate label images yourself (IDs from the two runs collide and objects get silently fused or invented).
 - show_in_imagej_gui(path): Open an image, .txt, or .csv in the Fiji GUI for the user to see (like File → Open). Display only — never use to read contents.
 - setup_analysis_workspace: Create structured project folder with subfolders for scripts, data, figures, and raw images.
 - inspect_folder_tree: List files in a directory.
