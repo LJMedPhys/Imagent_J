@@ -4,6 +4,7 @@ import json
 import os
 import re
 from pathlib import Path
+from typing import Optional
 from langchain.tools import tool
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
@@ -636,6 +637,38 @@ def capture_plugin_dialog() -> str:
 # `diameter` is the single biggest quality lever on a NON-fine-tuned stock model. These
 # helpers turn hand-drawn polygons into that number.
 
+def _no_interactive_user() -> bool:
+    """True when nobody can draw ROIs in Fiji, so the manual route is impossible.
+
+    Mirrors docker-entrypoint.sh's own resolution order: benchmark auto-pilot first (there is
+    definitively no human), then the IMAGENTJ_UNATTENDED env var, then `runtime.unattended`
+    in imagentj_config.yaml.
+
+    NOTE: "unattended" is NOT "headless". The entrypoint keeps Xvfb + fluxbox running and
+    only skips the VNC layer (x11vnc/noVNC), so Fiji windows, AWT-Robot dialog screenshots
+    and napari all still render — what is missing is a human who can *see and click* them.
+    So the test cannot be "is there a DISPLAY"; it has to be this.
+    """
+    truthy = {"1", "true", "yes", "on"}
+
+    if (os.environ.get("BENCHMARK_MODE", "").strip().lower() == "true"
+            and os.environ.get("BENCHMARK_INTERACTIVE", "").strip().lower() != "true"):
+        return True
+
+    env = os.environ.get("IMAGENTJ_UNATTENDED", "").strip().lower()
+    if env:
+        return env in truthy
+
+    try:
+        import yaml
+        cfg_path = os.environ.get("IMAGENTJ_CONFIG", "/app/imagentj_config.yaml")
+        with open(cfg_path) as fh:
+            cfg = yaml.safe_load(fh) or {}
+        return str((cfg.get("runtime") or {}).get("unattended", "")).strip().lower() in truthy
+    except Exception:
+        return False
+
+
 def _equivalent_circular_diameter(area_px: float) -> float:
     """Diameter of the circle with the same area — 2*sqrt(A/pi).
 
@@ -685,7 +718,7 @@ def _out_of_tolerance_fraction(diameters, reference, tolerance):
 
 
 @tool
-def estimate_cellpose_diameter(
+def estimate_cellpose_diameter_manual(
     scale_tolerance: float = 1.5,
     max_out_of_tolerance: float = 0.25,
 ) -> str:
@@ -700,6 +733,10 @@ def estimate_cellpose_diameter(
 
     Reads every ROI in the ROI Manager, converts each to an equivalent circular diameter
     (2*sqrt(area/pi)) in PIXELS, and reports the distribution plus a recommendation.
+
+    REQUIRES AN INTERACTIVE USER. In an unattended run (benchmark auto-pilot,
+    IMAGENTJ_UNATTENDED, runtime.unattended) nobody can draw ROIs, so use
+    estimate_cellpose_diameter_auto() instead — never wait on a user who is not there.
 
     Args:
         scale_tolerance: How far off a single diameter may be before an object counts as
@@ -727,8 +764,15 @@ def estimate_cellpose_diameter(
 
     if rm is None or rm.getCount() == 0:
         return json.dumps({
-            "error": "no_rois",
+            "error": "no_rois_unattended" if _no_interactive_user() else "no_rois",
             "message": (
+                # There is no human to draw anything, so telling the agent to "ask the user"
+                # would strand it in a loop waiting on input that can never arrive.
+                "The ROI Manager is empty and this run is UNATTENDED (benchmark auto-pilot / "
+                "IMAGENTJ_UNATTENDED / runtime.unattended) — nobody can draw ROIs. Do NOT ask "
+                "the user to outline anything. Use estimate_cellpose_diameter_auto() instead, "
+                "which needs no interaction."
+                if _no_interactive_user() else
                 "The ROI Manager is empty. Ask the user to open the image in Fiji, pick the "
                 "polygon or freehand selection tool, outline ~8-15 representative objects, "
                 "and press T after each one to add it to the ROI Manager."
@@ -877,6 +921,249 @@ def estimate_cellpose_diameter(
     return json.dumps(result, indent=2)
 
 
+# Cellpose ships a per-model "size model" (a linear regression from the network's style
+# vector to object size). Only these four names have one, and the KEY is the name the
+# PYTHON API expects — which is not always the name used elsewhere in this deployment.
+#
+#   Groovy / BIOP wrapper (cp.model)     -> "nucleitorch_0"
+#   Python models.Cellpose(model_type=)  -> "nuclei"
+#
+# They are the same weights: cellpose's own `model_path("nuclei")` resolves to the file
+# `nucleitorch_0`, and `size_model_path("nuclei")` to `size_nucleitorch_0.npy`. But
+# `size_model_path("nucleitorch_0")` raises FileNotFoundError — the whitelist below is
+# literal. So callers keep using this deployment's `nucleitorch_0` vocabulary and this map
+# translates at the API boundary; nobody has to remember the inversion.
+_CELLPOSE_SIZE_MODEL_ALIASES = {
+    "nucleitorch_0": "nuclei",
+    "nuclei": "nuclei",
+    "cyto3": "cyto3",
+    "cyto2": "cyto2",
+    "cyto": "cyto",
+}
+
+# Verbatim runner executed inside the `cellpose` conda env (python 3.10). It cannot live in
+# the main env: cellpose is not installed there (python 3.13). Emits one JSON line.
+_CELLPOSE_DIAMETER_RUNNER = r'''
+import sys, json, warnings
+warnings.filterwarnings("ignore")
+import numpy as np
+
+def _load(path):
+    low = path.lower()
+    if low.endswith((".tif", ".tiff")):
+        import tifffile
+        return tifffile.imread(path)
+    import skimage.io
+    return np.asarray(skimage.io.imread(path))
+
+def main():
+    cfg = json.loads(sys.argv[1])
+    from cellpose import models
+    model = models.Cellpose(gpu=bool(cfg["gpu"]), model_type=cfg["model_type"])
+    diam_mean = float(model.diam_mean)
+    out = {"diam_mean": diam_mean, "per_image": []}
+    for path in cfg["image_paths"]:
+        rec = {"path": path}
+        try:
+            img = _load(path)
+            if img.ndim > 3:
+                raise ValueError(
+                    "image has %dD shape %s; the size model only works on 2D "
+                    "(optionally multi-channel) images" % (img.ndim, img.shape))
+            # sz.eval() is the same call Cellpose.eval(diameter=None) makes internally,
+            # minus the third full segmentation pass whose masks we would discard.
+            diam, diam_style = model.sz.eval(img, channels=cfg["channels"])
+            diam, diam_style = float(diam), float(diam_style)
+            # Step 2 refines the style estimate by segmenting and taking the median object
+            # size; if it finds NOTHING it silently returns diam_mean, which looks like a
+            # real answer. Detect that exactly rather than passing a default off as a
+            # measurement.
+            rec["diam_px"] = diam
+            rec["diam_style_px"] = diam_style
+            rec["refine_fell_back"] = bool(abs(diam - diam_mean) < 1e-9)
+            rec["style_fell_back"] = bool(abs(diam_style - diam_mean) < 1e-9)
+        except Exception as exc:
+            rec["error"] = "%s: %s" % (type(exc).__name__, exc)
+        out["per_image"].append(rec)
+    sys.stdout.write("__RESULT__" + json.dumps(out))
+
+main()
+'''
+
+
+@tool
+def estimate_cellpose_diameter_auto(
+    image_paths: list[str],
+    model: str = "cyto3",
+    channels: Optional[list[int]] = None,
+    timeout_seconds: int = 900,
+) -> str:
+    """Estimate the Cellpose `diameter` (px) AUTOMATICALLY, using Cellpose's own built-in
+    size model — no user interaction required.
+
+    This is the automatic counterpart to `estimate_cellpose_diameter_manual()` (which measures
+    hand-drawn ROIs). Cellpose ships a per-model size model that regresses object size from
+    the network's style vector, then refines it by segmenting once and taking the median
+    object size. Run it on ONE representative image (the first of a group) and reuse the
+    result for the whole group.
+
+    Choosing between the two:
+      - AUTOMATIC (this tool): objects look like what the model was trained on (typical
+        fluorescent nuclei / cells), and you just need a sane starting diameter. Zero user
+        effort, but it can fail silently on unusual data — this tool reports when it does.
+      - MANUAL (`estimate_cellpose_diameter_manual`): unusual morphology, low contrast, a mixed
+        size population, or when this tool reports `reliable: false`. Costs the user a
+        minute of drawing but is grounded in what they actually want segmented, and is the
+        only one of the two that can recommend a two-diameter split.
+      Cross-checking one against the other (or against `vlm_judge` on an overlay) is cheap
+      insurance before committing to a long batch run.
+
+    Only `cyto3`, `cyto2`, `cyto` and `nucleitorch_0` have a size model. `cpsam` and the
+    specialised `*_cp3` models do not — use the manual tool for those.
+
+    Args:
+        image_paths: Image(s) to estimate from. ONE representative image is usually enough;
+            more are averaged (median) but each costs a full inference pass.
+        model: The model you will segment with — this deployment's names, e.g. `"cyto3"` or
+            `"nucleitorch_0"`.
+        channels: Cellpose channel pair `[segment, nuclear]`; 0=grayscale, 1=red, 2=green,
+            3=blue. Defaults to `[0, 0]` (grayscale). For nuclei in the blue channel of an
+            RGB image use `[3, 0]`; for cells in green with nuclei in blue use `[2, 3]`.
+        timeout_seconds: Give up after this long. Inference is slow on CPU (~60 s per
+            1 MP image), so budget accordingly.
+
+    Returns:
+        JSON with the per-image estimates, the recommended `diameter_px`, and a `reliable`
+        flag that is false when Cellpose fell back to its built-in default instead of
+        actually measuring.
+    """
+    import subprocess
+    import numpy as np
+
+    if not image_paths:
+        return json.dumps({"error": "image_paths is empty — pass at least one image."})
+    if channels is None:
+        channels = [0, 0]
+    if not (isinstance(channels, list) and len(channels) == 2):
+        return json.dumps({"error": "channels must be a 2-element list, e.g. [0, 0]."})
+
+    key = str(model).strip()
+    api_model = _CELLPOSE_SIZE_MODEL_ALIASES.get(key)
+    if api_model is None:
+        return json.dumps({
+            "error": "no_size_model",
+            "message": (
+                f"'{model}' has no Cellpose size model, so the diameter cannot be estimated "
+                "automatically. Only cyto3, cyto2, cyto and nucleitorch_0 ship one. Use the "
+                "manual route instead: ask the user to outline ~8-15 objects in Fiji and "
+                "call estimate_cellpose_diameter_manual()."
+            ),
+        })
+
+    missing = [p for p in image_paths if not os.path.isfile(p)]
+    if missing:
+        return json.dumps({"error": "missing_images", "paths": missing})
+
+    python_bin = "/opt/conda/envs/cellpose/bin/python"
+    if not os.path.exists(python_bin):
+        return json.dumps({"error": f"cellpose env python not found at {python_bin}"})
+
+    cfg = json.dumps({
+        "image_paths": list(image_paths),
+        "model_type": api_model,
+        "channels": [int(c) for c in channels],
+        "gpu": os.environ.get("IMAGENTJ_GPU", "").lower() == "true",
+    })
+
+    try:
+        proc = subprocess.run(
+            [python_bin, "-c", _CELLPOSE_DIAMETER_RUNNER, cfg],
+            capture_output=True, text=True, timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired:
+        return json.dumps({
+            "error": "timeout",
+            "message": (
+                f"Size estimation exceeded {timeout_seconds}s. Cellpose inference is slow on "
+                "CPU (~60 s per 1 MP image) — estimate from ONE image, or raise "
+                "timeout_seconds."
+            ),
+        })
+    except Exception as e:
+        return json.dumps({"error": f"Could not run the cellpose env: {e}"})
+
+    marker = "__RESULT__"
+    if marker not in (proc.stdout or ""):
+        return json.dumps({
+            "error": "cellpose_failed",
+            "returncode": proc.returncode,
+            "stderr": (proc.stderr or "")[-1500:],
+        })
+    payload = json.loads(proc.stdout.split(marker, 1)[1])
+
+    per_image = payload["per_image"]
+    diam_mean = payload["diam_mean"]
+    good = [r for r in per_image if "diam_px" in r and not r["refine_fell_back"]]
+    style_only = [r for r in per_image if "diam_px" in r and r["refine_fell_back"]
+                  and not r["style_fell_back"]]
+    failed = [r for r in per_image if "error" in r]
+
+    result = {
+        "model": key,
+        "model_type_passed_to_cellpose": api_model,
+        "channels": channels,
+        "cellpose_default_diameter_px": diam_mean,
+        "per_image": per_image,
+        "failed_images": failed,
+    }
+    if key != api_model:
+        result["naming_note"] = (
+            f"Called cellpose's Python API with model_type='{api_model}' — the same weights "
+            f"as '{key}' (model_path('{api_model}') resolves to the {key} file). The Python "
+            f"size-model API only accepts '{api_model}'; passing '{key}' raises "
+            "FileNotFoundError. Keep using this deployment's name everywhere else."
+        )
+
+    if good:
+        diam = float(np.median([r["diam_px"] for r in good]))
+        result["recommendation"] = {
+            "diameter_px": round(diam, 1),
+            "reliable": True,
+            "based_on_n_images": len(good),
+            "reason": (
+                f"Cellpose's size model measured {diam:.1f} px "
+                f"(median over {len(good)} image(s)). Pass this as `cp.diameter`."
+            ),
+        }
+    elif style_only:
+        diam = float(np.median([r["diam_style_px"] for r in style_only]))
+        result["recommendation"] = {
+            "diameter_px": round(diam, 1),
+            "reliable": False,
+            "based_on_n_images": len(style_only),
+            "reason": (
+                f"UNRELIABLE. Cellpose's refinement step found NO objects, so its own answer "
+                f"silently collapsed to the built-in default ({diam_mean} px) rather than a "
+                f"measurement. The value above is the step-1 style regression only "
+                f"({diam:.1f} px), which is a real estimate but unverified by segmentation — "
+                "typically means the data does not look like this model's training set. "
+                "Verify with the manual ROI route (estimate_cellpose_diameter_manual) or vlm_judge "
+                "before running a batch."
+            ),
+        }
+    else:
+        result["recommendation"] = {
+            "diameter_px": None,
+            "reliable": False,
+            "reason": (
+                "Automatic estimation failed on every image (see failed_images / "
+                "per_image). Fall back to the manual route: ask the user to outline "
+                "~8-15 objects in Fiji and call estimate_cellpose_diameter_manual()."
+            ),
+        }
+    return json.dumps(result, indent=2)
+
+
 @tool
 def merge_cellpose_diameter_runs(
     small_run_mask_path: str,
@@ -889,7 +1176,7 @@ def merge_cellpose_diameter_runs(
     """Merge the two label images produced by a two-diameter Cellpose run into ONE
     instance-label image with unique, sequential IDs.
 
-    Use this after `estimate_cellpose_diameter()` recommended `n_runs: 2` and cellpose has
+    Use this after `estimate_cellpose_diameter_manual()` recommended `n_runs: 2` and cellpose has
     been run once per diameter. NEVER merge label images by adding/max-ing them: IDs from
     the two runs collide, so addition invents objects with fused IDs and `max` silently
     merges touching neighbours into one.

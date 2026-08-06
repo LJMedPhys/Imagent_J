@@ -128,19 +128,82 @@ the cells themselves and destroys them.
 
 **Speed & model choice:** GPU ≈ seconds → **prefer cpsam** there. On CPU, cyto3 is ~minutes per ~1 MP image (flow-dynamics dominates) and **cpsam is far too slow** (many minutes even for a small crop) → **prefer `cyto3`/`nucleitorch_0`** on CPU.
 
-## Setting `diameter` from user-drawn ROIs (stock v3 models)
+## Setting `diameter` (stock v3 models) — automatic vs. manual
 
 On a **non-fine-tuned** v3 model (`cyto3`, `nucleitorch_0`, …) `diameter` is the single
 biggest accuracy lever: cellpose rescales the image by `diameter / training_diameter`
 (30 px for cyto\*, 17 px for nuclei), so a wrong value shrinks or inflates every object
-before the network ever sees it. When the user is unsure of the value, measure it instead
-of guessing:
+before the network ever sees it. Two ways to get it — the supervisor picks:
+
+| | `estimate_cellpose_diameter_auto()` | `estimate_cellpose_diameter_manual()` |
+|---|---|---|
+| Input | one representative image | ~8–15 hand-drawn ROIs |
+| User effort | none | ~a minute of drawing |
+| Cost | a full inference pass (~60 s / 1 MP on CPU) | instant |
+| Detects a mixed size population | ✗ | ✓ (can recommend two runs) |
+| Knows which compartment you want | ✗ (infers from the model) | ✓ (they outline it) |
+| Behaviour on unusual data | can fail — but the tool flags it | n/a |
+
+> **Unattended runs are automatic-only — no exceptions.** In a benchmark auto-pilot or
+> unattended run (`IMAGENTJ_UNATTENDED`, `runtime.unattended` in `imagentj_config.yaml`)
+> there is no human to draw ROIs, so the manual route cannot complete. Never ask the user to
+> outline anything and never block waiting for input that cannot arrive. Note "unattended"
+> is **not** "headless": the entrypoint keeps Xvfb + fluxbox up and only drops the VNC layer,
+> so Fiji still renders and screenshots still work — what is missing is a human who can see
+> and click. `estimate_cellpose_diameter_manual()` detects this itself and returns
+> `no_rois_unattended` pointing at the automatic tool rather than impossible advice.
+
+Otherwise: **try automatic first** for ordinary fluorescent nuclei/cells. **Switch to manual**
+when it reports `reliable: false`, when objects are unusual or low-contrast, when sizes look
+mixed, or when the user wants a specific compartment (just the nucleus vs. the whole cell)
+that the model would not infer. If the two disagree by more than ~1.5×, or a long batch run
+is at stake, segment one image and check it with `vlm_judge` before committing — and prefer
+the manual number, since it reflects what the user actually wants segmented.
+
+### Automatic — Cellpose's own size model
+
+Cellpose ships a per-model *size model*: a linear regression from the network's style vector
+to object size (step 1), refined by segmenting once and taking the median object size
+(step 2). Call it on **one** image of the group and reuse the answer for the rest:
+
+```python
+estimate_cellpose_diameter_auto(image_paths=["/app/data/proj/raw_images/first.tif"],
+                                model="cyto3",        # or "nucleitorch_0"
+                                channels=[0, 0])      # [segment, nuclear]; [3,0] = nuclei in blue
+```
+
+Then pass `recommendation.diameter_px` as `cp.diameter`.
+
+> **Only `cyto3`, `cyto2`, `cyto` and `nucleitorch_0` have a size model.** `cpsam` and the
+> specialised `*_cp3` models do not — `size_model_path()` raises `FileNotFoundError`. Use the
+> manual route for those (the tool returns a clear `no_size_model` error rather than guessing).
+
+> **⚠ It can fail silently — always check `reliable`.** If step 2 finds **no objects**,
+> cellpose returns its built-in default (`17.0` px for nuclei, `30.0` for cyto) instead of a
+> measurement: a plausible-looking number that measured nothing. Verified on a real
+> low-contrast image — 0 objects found, raw diameter `0.0`, returned `17.0`. The tool detects
+> this exactly, sets `reliable: false`, and falls back to reporting the step-1 style
+> regression with a warning. A `reliable: false` result means *go manual*, not *use this
+> number anyway*.
+
+> **Naming inversion — the one place `nucleitorch_0` is wrong.** Cellpose's *Python* size API
+> whitelists only the literal names `cyto`, `cyto2`, `cyto3`, `nuclei`:
+> `size_model_path("nuclei")` → `size_nucleitorch_0.npy` ✓, but
+> `size_model_path("nucleitorch_0")` → **`FileNotFoundError`**. They are the same weights —
+> cellpose's own `model_path("nuclei")` resolves to the `nucleitorch_0` file. This is the
+> exact inverse of the Groovy rule (`cp.model` must be `"nucleitorch_0"`). **You do not need
+> to remember this:** keep passing `nucleitorch_0` everywhere, including here — the tool
+> translates at the API boundary and reports what it used in `model_type_passed_to_cellpose`.
+
+### Manual — from user-drawn ROIs
+
+Measure it from what the user actually wants segmented:
 
 1. Ask the user to open the image in Fiji, pick the **polygon** or **freehand** selection
    tool, outline **~8–15 representative objects** — whatever they actually want segmented
    (whole cell outline, or just the nucleus) — pressing **`T`** after each to add it to the
    ROI Manager.
-2. Call **`estimate_cellpose_diameter()`**. It reads every ROI, converts each to an
+2. Call **`estimate_cellpose_diameter_manual()`**. It reads every ROI, converts each to an
    equivalent circular diameter `2*sqrt(area/pi)` **in pixels**, and returns the
    distribution plus a recommendation.
 3. Pass the returned value(s) as `cp.diameter`.
@@ -157,15 +220,19 @@ it widens when the two middle ROIs straddle a size gap (measured: 43.0 vs 48.3 p
 bimodal 12-ROI set). That only happens when the population is genuinely bimodal, where a
 single diameter is the wrong answer regardless and the two-run split below takes over.
 
-`diameter = 0f` (auto-estimate) is the alternative, but it needs a `size_*.npy` size model
-and is often less reliable than a handful of honest outlines — prefer measured ROIs when
-the user can draw them.
+**How this relates to `cp.diameter = 0f`.** Setting `0f` in Groovy passes `--diameter 0` to
+the CLI, which triggers *the same size model* the automatic tool uses — but from inside the
+BIOP wrapper, where you cannot see the result. That is strictly worse for a batch: you never
+learn the value, you cannot tell whether it silently fell back to the built-in default, and
+it re-estimates on **every image** (a full extra inference pass each). Prefer estimating once
+with `estimate_cellpose_diameter_auto()` (or the manual route), then passing that fixed
+number as `cp.diameter` for the whole group.
 
 > **Why pixels matter here.** ImageJ reports `ImageStatistics.area` in *calibrated* units on
 > a calibrated image, but cellpose's `diameter` is *always* px. On a 0.645 µm/px image a
 > 40×40 px ROI reports `area = 665.64` (µm²) while `pixelCount = 1600` — using the former
 > gives 29.1 px instead of 45.1 px, a silent **1.55× error** squarely in the range that
-> degrades segmentation. `estimate_cellpose_diameter` sources `pixelCount` for this reason;
+> degrades segmentation. `estimate_cellpose_diameter_manual` sources `pixelCount` for this reason;
 > if you ever compute a diameter in a Groovy script yourself, do the same.
 
 ### One run or two?
