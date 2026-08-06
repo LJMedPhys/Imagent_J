@@ -320,7 +320,7 @@ def _stage_images(images: list[Path]) -> list[Path]:
 # Collect outputs and write sentinel
 # ---------------------------------------------------------------------------
 
-def _collect_and_finish(gui, message: str = "") -> None:
+def _collect_and_finish(gui, message: str = "", success: bool = True, error: str = "") -> None:
     out = _output_dir()
     out.mkdir(parents=True, exist_ok=True)
 
@@ -365,17 +365,18 @@ def _collect_and_finish(gui, message: str = "") -> None:
 
     # Write sentinel — the adapter polls for this file
     (out / "result.json").write_text(json.dumps({
-        "success": True,
+        "success": success,
         "message": message or "Benchmark session completed.",
-        "error": "",
+        "error": error,
         "metadata": metadata,
     }, indent=2, default=str), encoding="utf-8")
 
 
-def _do_finish_in_background(gui, message: str = "", shutdown: bool = False) -> None:
+def _do_finish_in_background(gui, message: str = "", shutdown: bool = False,
+                              success: bool = True, error: str = "") -> None:
     """Run the collect in a background thread so the GUI stays responsive."""
     def _work():
-        _collect_and_finish(gui, message)
+        _collect_and_finish(gui, message, success=success, error=error)
 
         # Try to show completion message (may fail if widgets are gone)
         try:
@@ -439,6 +440,14 @@ def _hook_auto_finish(gui) -> None:
     original_on_finished = gui.on_agent_finished
 
     def _patched_on_finished():
+        # Qt fires the worker's `finished` signal identically on a clean
+        # completion and after an uncaught agent exception, so this is the
+        # only place that can still tell the two apart — original_on_finished()
+        # below resets gui._agent_had_error as a side effect, so it must be
+        # read first or a crashed run gets reported as a success.
+        had_error = getattr(gui, "_agent_had_error", False)
+        error_msg = getattr(gui, "_last_agent_error", "") if had_error else ""
+
         # Call the original handler first (resets UI state, etc.)
         original_on_finished()
 
@@ -448,14 +457,23 @@ def _hook_auto_finish(gui) -> None:
 
         gui._bench_auto_finished = True
 
-        gui.chat_scroll.add_message(
-            "system",
-            "Auto-pilot: agent finished — collecting outputs in 10 s …",
-        )
+        if had_error:
+            gui.chat_scroll.add_message(
+                "system",
+                "Auto-pilot: agent errored — collecting outputs in 10 s …",
+            )
+            finish_message = "Auto-pilot session ended with an unhandled agent error."
+        else:
+            gui.chat_scroll.add_message(
+                "system",
+                "Auto-pilot: agent finished — collecting outputs in 10 s …",
+            )
+            finish_message = "Auto-pilot session completed."
 
         # Give the agent's last file writes a moment to flush
         QTimer.singleShot(10000, lambda: _do_finish_in_background(
-            gui, "Auto-pilot session completed.", shutdown=True,
+            gui, finish_message, shutdown=True,
+            success=not had_error, error=error_msg,
         ))
 
     gui.on_agent_finished = _patched_on_finished
