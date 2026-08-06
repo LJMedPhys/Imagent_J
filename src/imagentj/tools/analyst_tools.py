@@ -32,6 +32,18 @@ _CONDA_ENVS: dict[str, str] = {
     "main": "/opt/conda/envs/local_imagent_J/bin/python",
     "brainglobe": "/opt/conda/envs/brainglobe/bin/python",
     "napari-mcp": "/opt/conda/envs/napari-mcp/bin/python",
+    # cellpose v3 (3.1.1.2) + torch/cu126. The Python API is the FAST route for
+    # segmenting a folder: the model is loaded once and stays resident, where the
+    # Fiji/BIOP wrapper re-spawns bash+conda+python and reloads the model for every
+    # cp.run(). Even a loop that rebuilds the model per image still beats the best
+    # Fiji variant, which is why folder-scale cellpose is routed here —
+    # see skills/python/cellpose/SKILL.md.
+    # Self-sufficient for a whole pipeline: numpy, tifffile, scikit-image, scipy,
+    # pandas, matplotlib, opencv (no seaborn — the non-main preamble doesn't import it).
+    "cellpose": "/opt/conda/envs/cellpose/bin/python",
+    # cellpose 4.1.1 — the cpsam (Cellpose-SAM) model only. Separate env because v4
+    # drops model_type= and changes the eval signature; mixing them breaks both.
+    "cellpose4": "/opt/conda/envs/cellpose4/bin/python",
 }
 _DEFAULT_ENV = "main"
 

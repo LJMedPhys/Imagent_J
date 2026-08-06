@@ -5,9 +5,11 @@ description: >-
   and nuclei in 2D — cytoplasm, whole cells, bright-field, and non-star-convex objects where StarDist
   is weak. It runs Cellpose DIRECTLY (ch.epfl.biop.wrappers.cellpose) and returns the label image
   in-process as `cp.cellpose_imp` — no TrackMate, no scraping masks from /tmp. Route a SEGMENTATION
-  step here for a single still image or for per-frame masks; for LINKING objects across TIME
+  step here ONLY for a single still image, or when the mask must appear in the live Fiji GUI. For a
+  FOLDER/BATCH of images use the Python skill `python/cellpose` (env "cellpose") instead — far
+  faster, because this wrapper reloads the model on every call. For LINKING objects across TIME
   (tracking), use TrackMate-Cellpose instead. Uses the pre-downloaded models in ~/.cellpose/models
-  (cyto3, nucleitorch_0, cyto2, tissuenet, livecell, bact_*, cpsam, ...) or a custom model file.
+  (cyto3, nucleitorch_0, cyto2, tissuenet_cp3, livecell_cp3, bact_*, cpsam, ...) or a custom model file.
   Read the files listed at the end for the verified API, the model list, `additional_flags` syntax,
   bright-field handling, and pitfalls.
 ---
@@ -16,8 +18,21 @@ description: >-
 
 The **direct** Cellpose path: the BIOP wrapper (`ch.epfl.biop.wrappers.cellpose`) runs Cellpose and hands you the label image **in-process** as `cp.cellpose_imp` — no TrackMate, no scraping masks from `/tmp`.
 
+> ## ⛔ Segmenting a FOLDER? Use `python/cellpose` instead, not this skill.
+>
+> This wrapper spawns `bash -c "conda activate && python -m cellpose"` and **reloads the model
+> from disk on every `cp.run()`**, so per-image cost here is dominated by startup, not inference.
+> `python/cellpose` loads the model once and keeps it resident — even a carelessly written Python
+> loop beats the best route available here.
+>
+> Recommend the step as `backend: python_data_analyst`, `env: "cellpose"`.
+> Stay in this skill only for **one still image**, or when the mask must land in the live Fiji GUI.
+> If you do end up here with several images anyway, batch them into one T-stack — see
+> *"Batch (many images)"* below. Never loop `cp.run()` per image.
+
 **When to use this vs. alternatives**
-- **Cellpose (this skill)** — cytoplasm / whole cells / bright-field / irregular (non-star-convex) 2D objects, single image.
+- **Cellpose (this skill)** — cytoplasm / whole cells / bright-field / irregular (non-star-convex) 2D objects, **single image**.
+- **`python/cellpose`** — the same models over a **folder**; model loaded once, far faster (see above).
 - **StarDist** — star-convex **nuclei** (fluorescence / H&E); faster, no conda subprocess.
 - **TrackMate-Cellpose** — only to **link objects across time** (tracking), not for a still image.
 
@@ -78,10 +93,9 @@ println("FINAL STATUS: SUCCESS")
 
 Every `cp.run()` call restarts a fresh Python process **and reloads the model from disk**.
 For one image that's a fixed cost; looping `new Cellpose(); cp.imp = <single image>; cp.run()`
-once per file in a folder pays that cost every single time. Measured on a real 265-image,
-two-channel batch: one `Cellpose()` call per image (530 subprocess launches total) took
-**~79 minutes**; batching the same work into one call per channel (below) dropped it to
-**~20 minutes**.
+once per file in a folder pays that cost every single time, and it dominates the whole run —
+the fixed startup is far larger than the per-plane inference. Batching the same work into one
+call per channel collapses N startups into one.
 
 The wrapper (`CellposeAbstractCommand`, verified from the BIOP source) already batches
 internally — but only across the **time (T) axis of a hyperstack**, not across separate
@@ -96,7 +110,15 @@ import ij.ImagePlus
 // images: List<ImagePlus>, all the SAME width/height, one channel to segment each,
 // same model/diameter/flags for the whole batch.
 ImageStack stack = new ImageStack(images[0].getWidth(), images[0].getHeight())
-images.each { stack.addSlice(it.getProcessor()) }
+images.each {
+    def ip = it.getProcessor()
+    // ImageJ does NOT validate this for you — see the size rule below. Check it yourself.
+    if (ip.getWidth() != stack.getWidth() || ip.getHeight() != stack.getHeight()) {
+        throw new IllegalArgumentException(
+            "size mismatch: ${ip.getWidth()}x${ip.getHeight()} vs stack ${stack.getWidth()}x${stack.getHeight()}")
+    }
+    stack.addSlice(ip)
+}
 def batchImp = new ImagePlus("batch", stack)
 batchImp.setDimensions(1, 1, images.size())   // 1 channel, 1 z-slice, N frames — T is the axis CellposeAbstractCommand batches over
 
@@ -121,10 +143,16 @@ Rules for this to actually help:
 - **One model/diameter/flags per batch.** A single `cp.run()` applies ONE set of parameters
   to every frame — if nuclei and cytoplasm need different models, build and run two separate
   batches (one stack per model), not one mixed stack.
-- **Same width/height across the batch** — `ImageStack` requires it; group by size first (or
-  pad/crop) if the input set isn't uniform.
+- **Same width/height across the batch — and ImageJ will NOT enforce it.** `ImageStack.addSlice`
+  accepts a differently-sized processor **silently**: the slice is then reported at the stack's
+  dimensions and cellpose runs on it and returns masks, so you get corrupt planes rather than an
+  error. Hence the explicit size check in the snippet above — keep it. Group by size first (or
+  pad/crop) if the input set isn't uniform; genuinely ragged data is a reason to use
+  `python/cellpose`, whose `eval(list)` accepts it.
 - Frame order in `cellpose_imp` matches the order frames were added — keep a parallel list of
   source filenames/stems to re-associate each output mask with its input image.
+- **The output stack is 32-bit.** Apply the same no-scaling 16-bit conversion as the single-image
+  template, or label IDs get remapped to 0..65535 and destroyed.
 - **Prefer StarDist over Cellpose for nuclei** when applicable (see "When to use this vs.
   alternatives" above) before reaching for this — StarDist runs in-process with no subprocess
   cost at all, so it doesn't need batching in the first place.
@@ -196,6 +224,13 @@ cp.model_path = new File("/home/imagentj/.cellpose/models/my_model")
 ```
 Built-ins live in `/home/imagentj/.cellpose/models`: `cyto3`, `cyto2`, `nucleitorch_0`, `tissuenet_cp3`, `livecell_cp3`, `bact_*`, `cpsam`, … (full list + which env each needs → `SCRIPT_API.md`). Note: cyto3/nuclei expect microscopy images — on a non-cell image (e.g. a photo) they legitimately find ~0 objects; that is not a failure.
 
+> **A wrong model name does not fail — it silently uses a different model.** cellpose prints
+> `model_type does not exist, using default model` and segments with the default, handing you
+> plausible masks from the wrong network. The `_cp3` suffix is part of the name: `tissuenet` and
+> `livecell` are NOT valid, `tissuenet_cp3` and `livecell_cp3` are. Also broken on this install
+> (they fail to load outright): `neurips_cellpose_default`, `neurips_cellpose_transformer`,
+> `transformer_cp3`.
+
 ## Cellpose-SAM (cpsam) — newest, most general model (prefer this when the GPU is active)
 
 The default choice on a GPU deployment. Use the **`CellposeSAM` command + `cellpose4` env** (cellpose 4.1.1), NOT the v3 `Cellpose`:
@@ -222,7 +257,7 @@ Differences from v3:
 
 - **Segmenting a folder of images? Don't call `cp.run()` once per image.** Each call restarts
   the Python subprocess and reloads the model from disk; for dozens+ of images this dominates
-  the whole run (measured: 530 calls ≈ 79 min vs. ~20 min batched). Use the batch pattern
+  the whole run — the startup cost dwarfs the inference. Use the batch pattern
   above — one stack, one `cp.run()` — for any same-model batch of meaningful size.
 - **No helper methods.** In Fiji's SciJava Groovy runner (`#@`-param scripts) a script-level `def`/`final` — even `@Field` — is NOT reliably visible inside a method body: referencing it throws `MissingPropertyException: No such property: X for class: script`, so `cp.run()` never happens and you get a downstream `cellpose_imp is null` NPE. Keep the call in the main body, or pass everything (`env_path`/`model`/`diameter`/`ch1`/`ch2`/flags) as method arguments.
 - **`additional_flags` is COMMA-separated, never space-separated** — `"--use_gpu, --cellprob_threshold, -1.0"`, not `"--use_gpu --cellprob_threshold -1.0"`. The space form makes cellpose exit with `unrecognized arguments`, which surfaces only as null labels + `NullPointerException ... "cellpose_t_imp" is null`. Never diagnose that NPE as "bad threshold value" — check the flag string first.
