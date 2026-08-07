@@ -26,6 +26,8 @@ from .prompts import (
     imagej_coder_prompt,
     imagej_debugger_prompt,
     build_supervisor_prompt,
+    build_quick_prompt,
+    build_tutor_prompt,
     python_analyst_prompt,
     qa_reporter_prompt,
     plugin_manager_prompt,
@@ -50,6 +52,10 @@ from .tools import (
     capture_ij_window, prepare_image_source_for_vlm,
     build_mask_overlay, build_compilation, analyze_image,
     set_vision_llm,
+    # multi-mode: tutor tools + mode routing
+    list_curriculum, load_chapter, load_track, show_figure, list_sample_images,
+    list_practicals, reveal_solution, update_course_progress, set_course_plan, set_mode,
+    ModeMiddleware, ModeSpec,
 )
 from .tools.learned_memory import (
     register_pending_lesson, core_pitfalls, core_recipes, recall,
@@ -1050,6 +1056,91 @@ def init_agent():
     vision_prompt = build_supervisor_prompt(enable_qa=True, enable_vision=True)
     no_vision_prompt = build_supervisor_prompt(enable_qa=True, enable_vision=False)
 
+    # ── Advanced mode = the full pipeline toolset (current behaviour) ────────
+    advanced_tools = [
+        # subagents as tools (return typed JSON)
+        *subagent_tools,
+        plugin_manager,
+        # supervisor's own tools
+        internet_search,
+        inspect_all_ui_windows,
+        capture_plugin_dialog,
+        show_in_imagej_gui,
+        close_imagej_windows,
+        rag_retrieve_docs,
+        # Rebase note (2026-08-03): the educator branch listed save_coding_experience,
+        # rag_retrieve_mistakes, rag_retrieve_recipes and save_recipe here. All four
+        # were removed from main when the learned-memory tier landed and no longer
+        # exist anywhere in src/imagentj/tools — keeping them would NameError at
+        # graph construction. Replaced with main's current equivalents.
+        recall_concepts,
+        recall,
+        inspect_folder_tree,
+        smart_file_reader,
+        extract_image_metadata,
+        mkdir_copy,
+        inspect_csv_header,
+        execute_script,
+        get_script_info,
+        setup_analysis_workspace,
+        save_markdown,
+        check_environment,
+        # dynamically-discovered MCP server tools (e.g. in-container napari-mcp).
+        # Discovered at startup; the viewer opens lazily on first napari tool call.
+        # Discovery failures are non-fatal (adapter returns only diagnostics tools).
+        *get_mcp_tools(),
+        # state ledger (persistent project memory)
+        update_state_ledger,
+        read_state_ledger,
+        set_ledger_metadata,
+    ]
+
+    # ── Tool sets per mode ───────────────────────────────────────────────────
+    tutor_tools = [
+        list_curriculum, load_chapter, load_track, show_figure, list_sample_images,
+        list_practicals, reveal_solution, update_course_progress, set_course_plan,
+    ]
+    # Demos reuse the EXISTING execution path: execute_script runs a saved .py
+    # (→ python) or .groovy (→ ImageJ in the GUI), and save_script writes it
+    # first. No pipeline tools (workspace/coder/plugin/ledger), so education can
+    # demonstrate a concept but not run the student's analysis project.
+    demo_tools = [save_script, execute_script, show_in_imagej_gui, inspect_all_ui_windows,
+                  capture_plugin_dialog, close_imagej_windows]
+
+    quick_tools = [
+        imagej_coder, imagej_debugger, plugin_manager, execute_script, save_script, load_script,
+        get_script_history, smart_file_reader, inspect_folder_tree,
+        extract_image_metadata, setup_analysis_workspace, inspect_all_ui_windows,
+        show_in_imagej_gui, close_imagej_windows, rag_retrieve_docs, mkdir_copy,
+        check_environment, set_mode,
+    ]
+    education_tools = tutor_tools + [set_mode] + demo_tools
+
+    # Register the UNION of every mode's tools (deduped by identity). The
+    # ModeMiddleware only NARROWS what each mode is offered — it cannot inject a
+    # tool that isn't registered on the graph.
+    def _dedup(tools):
+        seen, out = set(), []
+        for t in tools:
+            if id(t) not in seen:
+                seen.add(id(t))
+                out.append(t)
+        return out
+    registered_tools = _dedup(advanced_tools + quick_tools + education_tools)
+
+    # ── Mode registry ────────────────────────────────────────────────────────
+    #   advanced  → pass-through: deep-agent-composed supervisor prompt + full tools.
+    #   quick     → lean single-operation prompt + a minimal tool subset.
+    #   education → tutor prompt (with live per-chat progress) + tutor/demo tools.
+    # advanced offers the deep-agent's full toolset EXCEPT the education/tutor
+    # tools (hidden by name so the injected builtins + advanced tools + set_mode
+    # all survive). quick/education replace the toolset outright.
+    modes = {
+        "advanced":  ModeSpec(exclude_tools=[t.name for t in tutor_tools]),
+        "quick":     ModeSpec(prompt=build_quick_prompt(), tools=quick_tools),
+        "education": ModeSpec(prompt=build_tutor_prompt, tools=education_tools, model=llm_analyst),
+    }
+
     supervisor_middleware = [
         ContextEditingMiddleware(
             edits=[
@@ -1072,7 +1163,20 @@ def init_agent():
         ),
         NarrationReminderMiddleware(),
         PhaseGuardMiddleware(),
-        # Innermost user middleware: per-chat final say on Vision prompt + tool exposure.
+        # Rebase note (2026-08-03): main's VisionOptionMiddleware and the educator
+        # branch's ModeMiddleware both claimed the "innermost, final say on the
+        # system prompt" slot. Both are kept, in this order, because they compose:
+        #   - ModeMiddleware runs first. For "advanced" its ModeSpec sets no prompt,
+        #     so the deep-agent-composed supervisor prompt passes through untouched.
+        #     For quick/education it substitutes that mode's own prompt.
+        #   - VisionOptionMiddleware runs last and swaps the vision-on supervisor
+        #     base for its vision-off variant by substring. In advanced mode the
+        #     base is present, so the swap works exactly as it does on main today.
+        #     In quick/education the substring is absent, so it is a no-op — those
+        #     modes simply don't carry the vision instructions.
+        # UNVERIFIED AT RUNTIME — this ordering is the reviewed intent, not a
+        # tested behaviour. Exercise all three modes with vision on AND off.
+        ModeMiddleware(modes),
         VisionOptionMiddleware(
             enabled_prompt=vision_prompt,
             disabled_prompt=no_vision_prompt,
@@ -1081,39 +1185,14 @@ def init_agent():
 
     supervisor = create_deep_agent(
         name="ImageJ_Supervisor",
-        tools=[
-            # ── subagents as tools (return typed JSON) ──────────────────────
-            *subagent_tools,
-            plugin_manager,
-            # ── supervisor's own tools ───────────────────────────────────────
-            internet_search,
-            inspect_all_ui_windows,
-            capture_plugin_dialog,
-            show_in_imagej_gui,
-            close_imagej_windows,
-            rag_retrieve_docs,
-            recall_concepts,
-            recall,
-            inspect_folder_tree,
-            smart_file_reader,
-            extract_image_metadata,
-            mkdir_copy,
-            inspect_csv_header,
-            execute_script,
-            get_script_info,
-            setup_analysis_workspace,
-            save_markdown,
-            check_environment,
-            # ── dynamically-discovered MCP server tools (e.g. in-container ───
-            #    napari-mcp). Discovered at startup; the napari viewer itself
-            #    opens lazily on the first napari tool call. Discovery failures
-            #    are non-fatal (the adapter returns only diagnostics tools).
-            *get_mcp_tools(),
-            # ── state ledger (persistent project memory) ─────────────────────
-            update_state_ledger,
-            read_state_ledger,
-            set_ledger_metadata,
-        ],
+        # registered_tools is the deduped UNION of advanced + quick + education
+        # tools (the educator branch's structure). ModeMiddleware only narrows
+        # what each mode is offered, so the union must be registered here.
+        tools=registered_tools,
+        # Kept as main's vision-on prompt rather than the educator branch's plain
+        # build_supervisor_prompt(enable_qa=True): VisionOptionMiddleware swaps this
+        # exact string for its vision-off variant, so it must be the string that
+        # middleware was constructed with.
         system_prompt=vision_prompt,
         subagents=[],
         middleware=supervisor_middleware,

@@ -19,7 +19,11 @@ from .middleware import (
     NarrationReminderMiddleware,
     PhaseGuardMiddleware,
     VisionOptionMiddleware,
+    ModeMiddleware, ModeSpec, AgentModeState,
 )
+# Rebase note (2026-08-03): the educator branch had commented this block out with
+# "# VLM disabled". Keeping it ACTIVE — the VLM-as-judge work landed on main after
+# the branch was cut, and disabling it here would silently revert that.
 from .vision_tools import (
     capture_ij_window,
     capture_image_file_via_fiji,
@@ -28,6 +32,10 @@ from .vision_tools import (
     build_compilation,
     analyze_image,
     set_vision_llm,
+)
+from .tutor_tools import (
+    list_curriculum, load_chapter, load_track, show_figure, list_sample_images,
+    list_practicals, reveal_solution, update_course_progress, set_course_plan, set_mode,
 )
 from .state_ledger import update_state_ledger, read_state_ledger, set_ledger_metadata, get_ledger_context
 from .environment_tools import check_environment
@@ -49,6 +57,12 @@ __all__ = [
     'internet_search', 'inspect_java_class',
     'search_fiji_plugins', 'install_fiji_plugin', 'check_plugin_installed',
     'SafeToolLoggerMiddleware', 'TodoDisplayMiddleware', 'NarrationReminderMiddleware', 'PhaseGuardMiddleware', 'VisionOptionMiddleware',
+    'ModeMiddleware', 'ModeSpec', 'AgentModeState',
+    'list_curriculum', 'load_chapter', 'load_track', 'show_figure', 'list_sample_images',
+    'list_practicals', 'reveal_solution', 'update_course_progress', 'set_course_plan', 'set_mode',
+    # get_vec_store_mistakes / get_vec_store_recipes were exported by the educator
+    # branch but no longer exist on main (only get_vec_store_docs remains), so they
+    # are dropped here rather than carried forward as broken exports.
     'get_vec_store_docs', 'is_rag_available', 'is_plugin_db_available',
     'set_dialog_vision_llm',
     'run_python_code', 'inspect_csv_header', 'mkdir_copy','save_script', 'edit_script', 'copy_file', 'execute_script', 'get_script_info', 'load_script', 'get_script_history',

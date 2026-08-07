@@ -175,6 +175,16 @@ def show_in_imagej_gui(path: str) -> str:
     Returns:
         A short status string: success message or human-readable error.
     """
+    return open_in_imagej_gui(path)
+
+
+def open_in_imagej_gui(path: str, title: str | None = None) -> str:
+    """Open a file in the Fiji/ImageJ GUI. Plain helper (not a tool) so other
+    tools can reuse the exact same behaviour. Never raises — returns a status
+    string that starts with "Opened" on success, or a human-readable error.
+
+    If `title` is given, the newly opened image window is renamed to it (so the
+    caller can refer to the window by a stable, human-readable label)."""
     if not isinstance(path, str) or not path.strip():
         return "Could not open file: empty or invalid path."
 
@@ -192,6 +202,14 @@ def show_in_imagej_gui(path: str) -> str:
         from scyjava import jimport
         IJ = jimport('ij.IJ')
         IJ.open(abs_path)
+        if title:
+            try:
+                WindowManager = jimport('ij.WindowManager')
+                imp = WindowManager.getCurrentImage()  # the just-opened image
+                if imp is not None:
+                    imp.setTitle(str(title))
+            except Exception:
+                pass  # renaming is best-effort; opening already succeeded
     except Exception as e:
         return f"Could not open file in ImageJ GUI ({abs_path}): {e!s}"
 
@@ -483,6 +501,18 @@ def inspect_all_ui_windows():
                     "type": "Exception Window",
                     "title": title,
                     "content": text_content[-4000:] if len(text_content) > 4000 else text_content
+                })
+            elif not _is_main_imagej_window(title):
+                # Anything else visible and titled (a plugin's own parameter dialog,
+                # a "command not found" popup, ...) used to be silently dropped here,
+                # so it never showed up in this report even though it was genuinely
+                # open — the window enumeration above found it, this branch just had
+                # nowhere to put it. Surface at least its existence + title; call
+                # capture_plugin_dialog() for the actual fields/values/buttons.
+                all_inspections["tables_and_text"].append({
+                    "type": "Other Window (likely a plugin dialog)",
+                    "title": title,
+                    "note": "Call capture_plugin_dialog() to see its fields, values, and buttons.",
                 })
         except Exception as e:
             print(f"[inspect_ui] Skipped window: {e}")
