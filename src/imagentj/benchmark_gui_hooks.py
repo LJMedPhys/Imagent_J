@@ -31,6 +31,7 @@ Integration with gui_runner.py (3 changes)
 import json
 import logging
 import os
+import re
 import shutil
 import threading
 import time
@@ -362,6 +363,38 @@ def _collect_and_finish(gui, message: str = "", success: bool = True, error: str
             metadata["usage_report"] = gui._tracker_cb.get_report()
         except Exception:
             pass
+
+    # Scientific plausibility — `success` must not mean merely "nothing threw".
+    # The QA reporter measures the delivered files against the quantity the user
+    # asked for; a FAIL there means the RESULT is wrong even though the pipeline
+    # ran cleanly. Surfacing it here is the difference between an honest failure
+    # and a run that confidently reports success on an order-of-magnitude miss.
+    try:
+        from imagentj.agents import LAST_QA_VERDICT
+        verdict = dict(LAST_QA_VERDICT or {})
+    except Exception:
+        verdict = {}
+
+    if verdict:
+        metadata["plausibility_verdict"] = verdict.get("plausibility_verdict", "NOT MEASURED")
+        metadata["measured_median"] = verdict.get("measured_median", 0.0)
+        metadata["qa_critical_failures"] = verdict.get("critical_failures", [])
+
+    # The prompt tells the reporter to copy the verdict line "verbatim", and it does
+    # — label and all ("PLAUSIBILITY VERDICT: FAIL — every file is empty…"). A naive
+    # startswith("FAIL") therefore never matched in a real run even though the
+    # verdict was correct and present, so a totally-empty deliverable still reported
+    # success=true. Strip the label before testing.
+    _raw = str(verdict.get("plausibility_verdict", "")).strip().upper()
+    _raw = re.sub(r"^\**\s*PLAUSIBILITY\s+VERDICT\s*:?\s*\**\s*", "", _raw)
+    implausible = _raw.startswith("FAIL")
+    if implausible and success:
+        success = False
+        error = error or (
+            "Deliverables were produced but failed the QA plausibility check: "
+            f"{verdict.get('plausibility_verdict', '')}"
+        )
+        message = (message or "") + " (QA plausibility FAILED — see error)"
 
     # Write sentinel — the adapter polls for this file
     (out / "result.json").write_text(json.dumps({
