@@ -67,7 +67,11 @@ PRICE_TABLE: dict[str, tuple[float, float, float]] = {
     # longest-first matching. Bare keys match both spellings and sort correctly.
     "gpt-5-nano":                (0.05,   0.40,  0.50),
     "gpt-5.2":                   (1.75,  14.00,  0.50),
-    "gpt-5.6-luna":              (1.00,   6.00,  0.10),
+    # Verified live against openrouter.ai/api/v1/models on 2026-08-10: prompt
+    # $0.10/Mtok, completion $0.60/Mtok, cache read $0.01/Mtok. The previous
+    # (1.00, 6.00) was 10x high on both, so every estimated cost for this model
+    # was inflated by an order of magnitude.
+    "gpt-5.6-luna":              (0.10,   0.60,  0.10),
     "gpt-5":                     (1.25,  10.00,  0.10),  # 5.x fallback (unknown 5.x)
     "default":                   (1.00,   3.00,  None),  # fallback, no cache discount
     "gemini-3-flash-preview":    (0.50,   3.00,  None),
