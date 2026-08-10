@@ -293,7 +293,21 @@ def _agent_reasoning_kwargs(reasoning_effort: Optional[str] = None) -> dict:
 # The curator and the VLM judge already carried timeouts for exactly this reason;
 # the four clients that do the real work did not. These are deliberately generous
 # — a long reasoning turn on a big context is legitimately slow — but finite.
-_LLM_TIMEOUT_S = float(os.environ.get("IMAGENTJ_LLM_TIMEOUT", "300"))
+#
+# 240 rather than 300, and the 60 s of daylight is the entire point: it must be
+# LESS than agent_watchdog.STALL_SECONDS. At 300 the two raced and the watchdog
+# usually won, which is the bad outcome — a watchdog kill destroys the whole
+# subagent turn and everything it had accumulated, whereas an httpx timeout is
+# retried in place by _LLM_MAX_RETRIES and the turn continues.
+#
+# Nothing legitimate is at risk here. Measured across 419 unambiguously-paired
+# requests in two benchmark runs, the slowest healthy response was 78 s and NOT
+# ONE exceeded 90 s; these responses are non-streaming, so a hung stream delivers
+# no bytes at all and trips the read timeout cleanly. The distribution is bimodal
+# — a request either answers inside ~80 s or never answers at all — so a 240 s
+# deadline can only ever fire on a dead stream. Re-issuing works: all 13 stalls
+# observed so far returned 200 OK on the very next attempt, in 1.4-2.5 s.
+_LLM_TIMEOUT_S = float(os.environ.get("IMAGENTJ_LLM_TIMEOUT", "240"))
 _LLM_MAX_RETRIES = int(os.environ.get("IMAGENTJ_LLM_MAX_RETRIES", "2"))
 
 
