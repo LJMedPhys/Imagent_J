@@ -18,7 +18,7 @@ from langchain.agents.middleware import (
     ClearToolUsesEdit,
     FilesystemFileSearchMiddleware,
 )
-from langchain.agents.structured_output import ToolStrategy
+from langchain.agents.structured_output import ProviderStrategy, ToolStrategy
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
@@ -520,7 +520,28 @@ _plugin_agent = create_agent(
         inspect_folder_tree,
     ],
     system_prompt=plugin_manager_prompt,
-    response_format=PluginRecommendation,
+    # ProviderStrategy explicitly, NOT a bare `response_format=PluginRecommendation`.
+    #
+    # A bare schema goes through AutoStrategy, whose _supports_provider_strategy()
+    # returns False for "openai/gpt-5.6-luna" (no model profile, and the fallback
+    # list stops at gpt-5.5). It then silently degrades to ToolStrategy, which sets
+    # tool_choice="required" on EVERY turn.
+    #
+    # That forcing is what wedged this agent. Once it has gathered its evidence the
+    # model wants to answer in prose; compelled to emit a tool call anyway, the
+    # upstream spins and returns HTTP 200 with finish_reason="error", cost 0 and no
+    # tool_calls — so there is no structured_response and the loop pays again.
+    # Measured on the real payload: tool_choice="required" gave 452 s / >14 min
+    # non-answers, while tool_choice="auto" on the identical request returned in
+    # 12-22 s every time. Stall rates track the forcing exactly — plugin_manager
+    # 13/56, python_data_analyst 8.6%, and the supervisor (no structured output,
+    # hence no forced call) 0/402.
+    #
+    # ProviderStrategy binds no tool_choice and sends the schema as response_format
+    # instead. Verified on the wire: tool_choice absent, 5 real tools instead of 6,
+    # and json_schema with strict=false — so the nested pipeline_steps model needs
+    # no `extra="forbid"` rewrite to be accepted.
+    response_format=ProviderStrategy(schema=PluginRecommendation),
     name="plugin_manager",
     middleware=[
         SkillsMiddleware(
