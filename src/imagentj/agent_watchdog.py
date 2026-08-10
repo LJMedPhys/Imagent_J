@@ -68,9 +68,17 @@ ENABLED = os.environ.get("IMAGENTJ_AGENT_WATCHDOG", "1") not in ("0", "false", "
 REPEAT_LIMIT = int(os.environ.get("IMAGENTJ_AGENT_WATCHDOG_REPEATS", "6"))
 
 # No tool call started or finished for this long → the current tool is hung.
-# Generous: a CPU Cellpose call or a big Bio-Formats open legitimately takes
-# minutes. The Vision hang sat here for 29 minutes.
-STALL_SECONDS = float(os.environ.get("IMAGENTJ_AGENT_WATCHDOG_STALL", "600"))
+# Still generous enough for a CPU Cellpose call or a big Bio-Formats open, which
+# legitimately take minutes. The Vision hang sat here for 29 minutes.
+#
+# Lowered 600 -> 300 after measuring where benchmark wall-time actually goes:
+# stalls accounted for 40-57% of every run (b03 19.3 min of 48.2, b05 18.9 of
+# 33.4), and every one of those waits was the full threshold. Waiting longer buys
+# nothing — a probe let the worst offender (plugin_manager) run unbounded and it
+# still returned no structured response after 63 minutes, while recovery after a
+# kill takes ~2 s. With a 60-minute per-task budget, a 10-minute wait is a sixth
+# of the whole allowance.
+STALL_SECONDS = float(os.environ.get("IMAGENTJ_AGENT_WATCHDOG_STALL", "300"))
 
 # Total agent-turn runtime that trips the LLM verdict.
 MAX_RUNTIME_SECONDS = float(os.environ.get("IMAGENTJ_AGENT_WATCHDOG_MAX_RUNTIME", "900"))
