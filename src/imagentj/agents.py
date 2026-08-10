@@ -310,13 +310,46 @@ def _agent_reasoning_kwargs(reasoning_effort: Optional[str] = None) -> dict:
 _LLM_TIMEOUT_S = float(os.environ.get("IMAGENTJ_LLM_TIMEOUT", "240"))
 _LLM_MAX_RETRIES = int(os.environ.get("IMAGENTJ_LLM_MAX_RETRIES", "2"))
 
+# ---------------------------------------------------------------------------
+# Thinking budget, and an available-but-unused determinism knob.
+#
+# NOTE on `temperature=0.` below: it is NOT a determinism guarantee on every
+# backend. It is absent from gpt-5.6-luna's supported_parameters on OpenRouter,
+# so that model silently discards it. Do not read it as one.
+#
+# `seed` IS supported on that model and would make sampling reproducible, but it
+# is OFF by default by choice: pinning a seed makes a wrong run reproducibly
+# wrong and hides genuine run-to-run variability that a scientific tool should
+# expose rather than mask. Available via IMAGENTJ_LLM_SEED=<int> for anyone
+# deliberately chasing reproducibility; unset means no seed is sent at all.
+#
+# Both knobs are env-overridable so a run can be A/B'd without touching this file:
+#   IMAGENTJ_LLM_SEED=1234         → opt in to a fixed seed (default: none)
+#   IMAGENTJ_REASONING_EFFORT=high → raise the thinking budget for the roles
+#                                    that make judgement calls
+#
+# gpt-5.6-luna-pro is the SAME model as gpt-5.6-luna served with
+# reasoning.mode=pro, so pinning it to reasoning_effort="low" — as this file did
+# for every role — works against the only thing that distinguishes it.
+_LLM_SEED_RAW = os.environ.get("IMAGENTJ_LLM_SEED", "").strip()
+_LLM_SEED: Optional[int] = int(_LLM_SEED_RAW) if _LLM_SEED_RAW not in ("", "0") else None
+
+# Effort for the roles that plan, judge and write code. The nano fast-path stays
+# unset (it backs the watchdog verdict, where latency delays hang detection).
+_REASONING_EFFORT = os.environ.get("IMAGENTJ_REASONING_EFFORT", "medium").strip() or None
+
+
+def _seed_kwargs() -> dict:
+    """`seed` only when explicitly opted into; otherwise send nothing."""
+    return {"seed": _LLM_SEED} if _LLM_SEED is not None else {}
 
 llm_supervisor = ChatOpenAI(
     model=m(config.model_for("supervisor", "openai/gpt-5.4")),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
-    **_agent_reasoning_kwargs("low"),
+    **_agent_reasoning_kwargs(_REASONING_EFFORT),
+    **_seed_kwargs(),
     timeout=_LLM_TIMEOUT_S,
     max_retries=_LLM_MAX_RETRIES,
     verbose=True,
@@ -328,7 +361,8 @@ llm_worker = ChatOpenAI(
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
-    **_agent_reasoning_kwargs("low"),
+    **_agent_reasoning_kwargs(_REASONING_EFFORT),
+    **_seed_kwargs(),
     timeout=_LLM_TIMEOUT_S,
     max_retries=_LLM_MAX_RETRIES,
     verbose=True,
@@ -340,7 +374,8 @@ llm_analyst = ChatOpenAI(
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
-    **_agent_reasoning_kwargs("low"),
+    **_agent_reasoning_kwargs(_REASONING_EFFORT),
+    **_seed_kwargs(),
     timeout=_LLM_TIMEOUT_S,
     max_retries=_LLM_MAX_RETRIES,
     verbose=True,
@@ -352,7 +387,12 @@ llm_nano = ChatOpenAI(
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
+    # Effort deliberately left unset: this backs the watchdog verdict, where extra
+    # deliberation directly delays hang detection. Seeded like the rest, though —
+    # a watchdog that reaches a different verdict on identical evidence is worse
+    # than one that is merely strict.
     **_agent_reasoning_kwargs(),
+    **_seed_kwargs(),
     # Shorter: this backs the watchdogs and the fast path, where a slow call is
     # worse than no call — a watchdog that hangs supervises nothing.
     timeout=90,
@@ -368,7 +408,10 @@ llm_curator = ChatOpenAI(
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
+    # Kept at "low": the curator is on a 30 s budget and does retrieval, not
+    # judgement — extra thinking here buys nothing and risks the timeout.
     **_agent_reasoning_kwargs("low"),
+    **_seed_kwargs(),
     timeout=30,          # never let a stalled call hang the curator thread or
     max_retries=1,       # the (gated) hot-path deep-recall fallback forever
     verbose=True,
