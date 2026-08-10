@@ -1524,8 +1524,10 @@ _QA_TOOL_ENTRY = (
     "per image\") — the reporter measures the delivered files against that number, and without it "
     "the plausibility check is skipped. Pass deliverable_dir when the final files were written "
     "somewhere other than project_root. If it returns success=false or a FAIL plausibility_verdict, "
-    "the RESULT is wrong, not merely undocumented: report that to the user plainly instead of "
-    "announcing the work is complete."
+    "the RESULT is wrong, not merely undocumented: do NOT announce the work as complete. Send the "
+    "fix back to the agent that produced the deliverable, quoting the measured numbers, re-run it, "
+    "then call qa_reporter again to confirm — at most TWO correction rounds, then stop and tell the "
+    "user plainly what is still wrong. See phase_7_qa.md."
 )
 
 # Phase files now live as skill files read on demand by the supervisor — see
