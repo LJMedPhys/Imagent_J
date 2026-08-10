@@ -9,7 +9,8 @@ import json
 from .analyst_tools import run_python_code
 import datetime
 import shutil
-from typing import Optional, Any
+from typing import Optional, Any, List
+from pydantic import BaseModel, ConfigDict
 from filelock import FileLock
 import logging
 import threading
@@ -1314,10 +1315,53 @@ def save_script(directory: str, filename: str, content: str, description: str, e
     return _commit_script(directory, filename, content, description, error_context)
 
 
+# `edits` used to be an untyped `list`. That produced `{"items": {}}` in the tool
+# schema, and OpenAI rejects it outright once the tool is bound in strict mode —
+# which is exactly what ProviderStrategy does. The resulting 400 is what blocked
+# the coder, debugger and analyst from taking the fix that removed
+# plugin_manager's forced-tool-call stall.
+#
+# Getting past that needs a NESTED schema that is strict-clean on its own.
+# LangChain's strict conversion rewrites only the top level of a tool's
+# parameters (it sets additionalProperties=false and lists every property in
+# `required` there); it does not descend into `edits.anyOf[0].items`. So the item
+# model has to arrive already compliant.
+#
+# That means the schema must be STRICT while validation stays FORGIVING, and in
+# pydantic those pull in opposite directions: what puts a field in `required` is
+# having no default, and what emits `additionalProperties: false` is
+# `extra="forbid"` — but both of those turn a slightly-off batch into a hard
+# ValidationError raised BEFORE edit_script runs. That is not a recoverable
+# error here:
+# `handle_validation_error` defaults to False on a @tool, and ToolNode's default
+# handler re-raises anything that isn't a ToolInvocationError, so one malformed
+# `edits` list would take down the agent turn — and, since these agents are
+# themselves tools of the supervisor, potentially the session with it.
+#
+# So every field keeps a default and extras are ignored (nothing raises), and
+# `_strict_schema` stamps the strict-mode requirements onto the emitted schema
+# instead. The real validation stays where it always was, inside edit_script,
+# where a bad batch returns a readable error the model can act on.
+#
+# The one-line docstring is deliberate too — a class docstring is copied into the
+# tool schema as `description` and re-sent on every call.
+def _strict_schema(schema: dict) -> None:
+    schema["additionalProperties"] = False
+    schema["required"] = list((schema.get("properties") or {}).keys())
+
+
+class ScriptEdit(BaseModel):
+    """One surgical patch: replace old_string with new_string."""
+    model_config = ConfigDict(extra="ignore", json_schema_extra=_strict_schema)
+    old_string: Optional[str] = None
+    new_string: Optional[str] = None
+    replace_all: Optional[bool] = None
+
+
 @tool("edit_script")
 def edit_script(directory: str, filename: str,
                 old_string: Optional[str] = None, new_string: Optional[str] = None,
-                edits: Optional[list] = None,
+                edits: Optional[List[ScriptEdit]] = None,
                 error_context: Optional[str] = None, description: Optional[str] = None,
                 replace_all: bool = False) -> str:
     """
@@ -1378,10 +1422,19 @@ def edit_script(directory: str, filename: str,
         if not isinstance(edits, (list, tuple)):
             return "Error: 'edits' must be a list of {old_string, new_string} objects."
         for e in edits:
+            # `edits` is typed as List[ScriptEdit], so LangChain validates and hands
+            # back ScriptEdit instances. Direct callers (tests, internal code, and any
+            # path that bypasses the tool wrapper) still pass plain dicts, so accept
+            # both rather than depending on which side of the wrapper we are on.
+            if isinstance(e, ScriptEdit):
+                e = e.model_dump()
             if not isinstance(e, dict) or "old_string" not in e or "new_string" not in e:
                 return "Error: each item in 'edits' must be an object with 'old_string' and 'new_string'."
+            if e["old_string"] is None or e["new_string"] is None:
+                return "Error: each item in 'edits' must have a non-null 'old_string' and 'new_string'."
+            # replace_all is required by the schema but nullable; None means "no".
             edit_list.append((strip_line_numbers(e["old_string"]), strip_line_numbers(e["new_string"]),
-                              bool(e.get("replace_all", False))))
+                              bool(e.get("replace_all") or False)))
     elif old_string is not None and new_string is not None:
         edit_list.append((strip_line_numbers(old_string), strip_line_numbers(new_string), replace_all))
     else:
