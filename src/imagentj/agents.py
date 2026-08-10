@@ -23,7 +23,7 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.errors import GraphRecursionError
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from deepagents.middleware.skills import SkillsMiddleware
 
 log = logging.getLogger("imagentj")
@@ -99,8 +99,32 @@ except ImportError:
 # Handoff schemas
 # ---------------------------------------------------------------------------
 
+def _strict_json_schema(schema: dict) -> None:
+    """Make a handoff model's emitted JSON Schema valid for OpenAI strict mode.
+
+    Strict mode demands `additionalProperties: false` and that `required` name
+    every property. Pydantic will not produce that on its own: a field only lands
+    in `required` when it has no default, and giving up defaults means an
+    incomplete reply raises a ValidationError instead of degrading.
+
+    This is not cosmetic. Without `strict: true` the provider treats the schema as
+    a hint, and the model answers with the SCHEMA rather than an instance —
+    observed on the first live ProviderStrategy call for ScriptHandoff:
+
+        {"properties": {"script_path": {...}, ...}}   ->  3 validation errors,
+        script_path / description / success all "Field required".
+
+    So the defaults stay (parsing stays forgiving) and the strict requirements are
+    stamped onto the schema here. Optional fields are already `x | None`, so the
+    model can satisfy `required` by sending null.
+    """
+    schema["additionalProperties"] = False
+    schema["required"] = list((schema.get("properties") or {}).keys())
+
+
 class ScriptHandoff(BaseModel):
     """Returned by imagej_coder and imagej_debugger."""
+    model_config = ConfigDict(json_schema_extra=_strict_json_schema)
     script_path: str
     description: str
     inputs: list[str] = []
@@ -121,6 +145,7 @@ class ScriptHandoff(BaseModel):
 
 class AnalystHandoff(BaseModel):
     """Returned by python_data_analyst."""
+    model_config = ConfigDict(json_schema_extra=_strict_json_schema)
     script_path: str
     description: str
     stage: str = "unknown"              # "measurement" | "statistics" | "plotting"
@@ -397,7 +422,17 @@ def _make_coder_agent(model, name, system_prompt):
             inspect_folder_tree,   # lets agent survey /app/skills/ before reading
         ],
         system_prompt=system_prompt,
-        response_format=ToolStrategy(schema=ScriptHandoff, handle_errors=True),
+        # ProviderStrategy, not ToolStrategy — see the note on _analyst_agent.
+        # ToolStrategy forces tool_choice="required" on every turn, and every
+        # watchdog kill in the v3 benchmark run traced back to an agent built here
+        # or by the analyst. ProviderStrategy binds no tool_choice and sends the
+        # schema as a native response_format instead.
+        #
+        # strict=True is load-bearing, not belt-and-braces: without it the provider
+        # treats the schema as advisory and the model replies with the schema
+        # itself ({"properties": {...}}), which fails to parse. See
+        # _strict_json_schema.
+        response_format=ProviderStrategy(schema=ScriptHandoff, strict=True),
         name=name,
         middleware=[
             agent_watchdog.middleware(),
@@ -460,7 +495,17 @@ _analyst_agent = create_agent(
         inspect_folder_tree,
     ],
     system_prompt=python_analyst_prompt,
-    response_format=ToolStrategy(schema=AnalystHandoff, handle_errors=True),
+    # ProviderStrategy for the same reason as plugin_manager: ToolStrategy binds
+    # tool_choice="required" on every turn (langchain factory.py, "Force tool use
+    # if we have structured output tools"), and that forcing is what stalls the
+    # agent — the request gets HTTP 200 headers and then no body at all, for
+    # minutes, until the watchdog kills it.
+    #
+    # This agent could not take the fix until `edits` was typed. ProviderStrategy
+    # also binds the real tools in strict mode, and `edits: Optional[list]` emitted
+    # `{"items": {}}`, which OpenAI rejects. A schema audit of all nine tools bound
+    # here found that this was the only hard blocker.
+    response_format=ProviderStrategy(schema=AnalystHandoff, strict=True),
     name="python_data_analyst",
     middleware=[
         SkillsMiddleware(
