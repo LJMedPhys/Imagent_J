@@ -781,6 +781,7 @@ def imagej_coder(task: str, project_root: str) -> ScriptHandoff:
         agent,
         {"messages": [{"role": "user", "content": "\n\n".join(s for s in sections if s)}]},
         _on_cap,
+        name="imagej_coder",
     )
 
 
@@ -817,6 +818,7 @@ def imagej_debugger(script_path: str, error_message: str, project_root: str = ""
         agent,
         {"messages": [{"role": "user", "content": "\n\n".join(s for s in sections if s)}]},
         _on_cap,
+        name="imagej_debugger",
     )
 
     # Buffer the lesson for deterministic capture. The debugger CANNOT verify its
@@ -905,6 +907,7 @@ def python_data_analyst(task: str, input_path: str, output_dir: str, project_roo
         _analyst_agent,
         {"messages": [{"role": "user", "content": "\n\n".join(s for s in sections if s)}]},
         _on_cap,
+        name="python_data_analyst",
     )
 
     # Deterministic lesson capture for the Python flow, mirroring imagej_debugger.
