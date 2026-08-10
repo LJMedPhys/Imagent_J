@@ -17,7 +17,9 @@ Comparison workflow:
 from __future__ import annotations
 
 import base64
+import concurrent.futures
 import io
+import logging
 import os
 import time
 from pathlib import Path
@@ -30,7 +32,44 @@ from langchain_core.messages import HumanMessage
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
+_log = logging.getLogger(__name__)
+
 _MAX_PX          = 1024   # longest side cap applied to the final compilation
+
+# Hard ceiling on a single Fiji open. `IJ.open` is a synchronous JVM round-trip
+# with no timeout of its own: if the opener stalls — an unexpected reader, a
+# dialog waiting on input, a format Bio-Formats chokes on — it simply never
+# returns, and because the VLM judge calls it inline that wedges the ENTIRE
+# agent, not just the visual check. Observed in benchmarking: 29 minutes of a
+# completely idle process, killed from outside, with all deliverables already
+# written. Generous enough for a large 3D stack over a slow mount; finite so a
+# stuck open degrades into a skipped visual check instead of a dead run.
+_FIJI_OPEN_TIMEOUT_S = float(os.environ.get("IMAGENTJ_FIJI_OPEN_TIMEOUT", "180"))
+
+# One reusable worker so a timed-out open (whose thread we can never reclaim —
+# it is blocked in the JVM) does not leak an unbounded number of threads.
+_fiji_open_pool = concurrent.futures.ThreadPoolExecutor(
+    max_workers=2, thread_name_prefix="fiji-open"
+)
+
+
+def _ij_open_blocking(IJ, path: str) -> None:
+    """Call ``IJ.open`` from a pool thread.
+
+    Any thread that touches the JVM must be attached to it first — a pool worker
+    is created outside PyImageJ's knowledge, so without this the call raises
+    instead of opening. Mirrors the attach done in gui_runner and the benchmark
+    dialog dismisser.
+    """
+    try:
+        import jpype
+        if jpype.isJVMStarted() and not jpype.isThreadAttachedToJVM():
+            jpype.attachThreadToJVM()
+    except Exception:
+        # No jpype, or already attached under a different binding — the open
+        # below will surface any real problem.
+        _log.debug("Could not attach pool thread to the JVM", exc_info=True)
+    IJ.open(path)
 
 _CAPTURE_DIR = Path(os.environ.get("CHAT_DATA_PATH", "/app/data/chats")) / "vlm_captures"
 _CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
@@ -259,7 +298,25 @@ def capture_image_file_via_fiji(image_path: str) -> str:
     try:
         # IJ.open follows Fiji's normal opener/plugin dispatch. In a Fiji
         # installation this includes Bio-Formats for its registered formats.
-        IJ.open(str(source.resolve()))
+        #
+        # Run it on a worker with a deadline. The call itself is NOT cancellable
+        # — once the JVM blocks, that thread is gone for the life of the process
+        # — so on timeout we abandon it (bounded pool, so leakage is capped) and
+        # return an error. Skipping one visual check is a far better outcome than
+        # freezing the agent that requested it.
+        try:
+            _fiji_open_pool.submit(
+                _ij_open_blocking, IJ, str(source.resolve())
+            ).result(timeout=_FIJI_OPEN_TIMEOUT_S)
+        except concurrent.futures.TimeoutError:
+            _log.warning("Fiji open timed out after %.0fs: %s",
+                         _FIJI_OPEN_TIMEOUT_S, source)
+            return (
+                f"ERROR: Fiji did not finish opening '{source}' within "
+                f"{_FIJI_OPEN_TIMEOUT_S:.0f}s and was abandoned. The reader may be "
+                "waiting on an import dialog or the format may be unsupported. "
+                "Skip the visual check for this source, or pass a PNG/JPG preview."
+            )
         new_ids = _image_window_ids(WindowManager) - before_ids
         if not new_ids:
             return (
