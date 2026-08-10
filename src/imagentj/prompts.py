@@ -105,9 +105,12 @@ TOOLS AVAILABLE
 - inspect_csv_header(path): Read the column names, data types, and first 5 rows of any CSV file.
 - smart_file_reader(path): Read the content of any text-based file (e.g., logs, README).
 - save_markdown(content, path): Save a markdown file with the given content to the specified path.
-- summarize_deliverables(output_dir, pattern, expected_per_file): MEASURE the deliverables —
-  per-file object/row counts, dtype, shape, and aggregate min/median/max. This is the ONLY
-  tool that tells you whether the RESULT is right rather than whether the FORMAT is right.
+- summarize_deliverables(output_dir, pattern, expected_per_file, input_dir): MEASURE the
+  deliverables — per-file object/row counts, dtype, shape, and aggregate min/median/max.
+  This is the ONLY tool that tells you whether the RESULT is right rather than whether the
+  FORMAT is right. Pass input_dir (the folder the images were read FROM) whenever you know
+  it: it enables the checks for a batch that stopped early and for "deliverables" that are
+  really the input images copied through.
 
 ────────────────────────────────────────
 STEP 1 — PROJECT DISCOVERY
@@ -151,12 +154,24 @@ on this checklist.
 So before you score anything:
 
 1. Identify the deliverable the user actually asked for and the glob that matches it
-   (e.g. '*.csv', '*_seg.tif', '*nuclei*.tif').
+   (e.g. '*.csv', '*_seg.tif', '*nuclei*.tif'). Do NOT audit with '*'. The output folder
+   also holds the staged input images, scripts, logs and figures, and measuring those
+   produces a number that describes the input rather than the result.
 2. Re-read the ORIGINAL USER REQUEST for any stated quantity — "up to 2,000 cells per
    image", "roughly 50 nuclei", "about 200 foci". Note the number.
-3. Call summarize_deliverables(output_dir, pattern, expected_per_file=<that number>).
-   Pass 0.0 only if the request truly states no quantity.
-4. Read its PLAUSIBILITY VERDICT and obey it.
+3. Call summarize_deliverables(output_dir, pattern, expected_per_file=<that number>,
+   input_dir=<the folder the images were read FROM>). Pass 0.0 only if the request truly
+   states no quantity; pass input_dir whenever you know it.
+4. Read its PLAUSIBILITY VERDICT and obey it. There are four:
+     FAIL       — the result is wrong. Report it and set success=false.
+     SUSPECT    — either the result or the MEASUREMENT is unsound. Most often it means
+                  your glob matched more than one kind of file. Fix the glob and measure
+                  again before you score anything; do not report SUSPECT as a pass.
+     INCOMPLETE — nothing structural was wrong, but nothing was checked against either.
+                  This is NOT a pass. If the request states a quantity, call again with
+                  it. If it genuinely states none, say plainly in the report that
+                  plausibility could not be verified.
+     PASS       — measured and within an order of magnitude, with no structural anomaly.
 
 DO NOT trust the state ledger's reported counts. The ledger records what a script
 REPORTED at the time it ran; a later corrective pass can change the files on disk
@@ -445,7 +460,7 @@ QAHandoff fields:
                             AND one per ❌ in CHECKLIST C (empty list if none)
   plausibility_verdict    — copy the PLAUSIBILITY VERDICT line from
                             summarize_deliverables verbatim ("PASS — …", "FAIL — …",
-                            or "NO EXPECTATION SUPPLIED"). Never leave this empty:
+                            "SUSPECT — …" or "INCOMPLETE — …"). Never leave this empty:
                             if you did not measure, say "NOT MEASURED".
   measured_median         — the median objects-per-file the tool reported (0.0 if none)
   success                 — TRUE only if the deliverable exists, is non-empty, AND
@@ -1522,7 +1537,9 @@ _QA_TOOL_ENTRY = (
     "and generates QA_Checklist_Report.md. Called once at project end. ALWAYS pass user_request "
     "as the user's ORIGINAL wording, verbatim, including any stated quantity (\"up to 2,000 cells "
     "per image\") — the reporter measures the delivered files against that number, and without it "
-    "the plausibility check is skipped. Pass deliverable_dir when the final files were written "
+    "the verdict comes back INCOMPLETE, which is not a pass. Quote the INPUT folder in the request "
+    "text too, so the reporter can check that a deliverable exists for every input image. "
+    "Pass deliverable_dir when the final files were written "
     "somewhere other than project_root. If it returns success=false or a FAIL plausibility_verdict, "
     "the RESULT is wrong, not merely undocumented: do NOT announce the work as complete. Send the "
     "fix back to the agent that produced the deliverable, quoting the measured numbers, re-run it, "

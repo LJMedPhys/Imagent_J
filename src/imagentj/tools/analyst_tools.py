@@ -192,6 +192,24 @@ def _measure_one(path: str) -> dict:
     return {}
 
 
+def _same_bytes(a: str, b: str, chunk: int = 1 << 20) -> bool:
+    """True if two files have identical content. Only ever called on candidates
+    that already matched on name AND size, so this is a confirmation step, not a
+    scan — it keeps the report's claim of identity honest rather than inferred."""
+    try:
+        if os.path.getsize(a) != os.path.getsize(b):
+            return False
+        with open(a, "rb") as fa, open(b, "rb") as fb:
+            while True:
+                ba, bb = fa.read(chunk), fb.read(chunk)
+                if ba != bb:
+                    return False
+                if not ba:
+                    return True
+    except OSError:
+        return False
+
+
 def _fmt_stats(values: list) -> str:
     vals = sorted(v for v in values if v is not None)
     if not vals:
@@ -207,6 +225,7 @@ def summarize_deliverables(
     output_dir: str,
     pattern: str = "*",
     expected_per_file: float = 0.0,
+    input_dir: str = "",
 ) -> str:
     """
     MEASURE the actual content of deliverable files and return hard numbers:
@@ -220,11 +239,20 @@ def summarize_deliverables(
     Args:
         output_dir: Absolute path to the deliverable directory (e.g. '/benchmark/output').
         pattern: Glob for the deliverables, e.g. '*.csv', '*_seg.tif', '*nuclei*.tif'.
-                 Searched recursively. Default '*' measures every measurable file.
-        expected_per_file: OPTIONAL. If the user's request states an expected number of
-                 objects per image/file (e.g. "up to 2,000 cells per image"), pass that
-                 number and this tool returns a deterministic PLAUSIBILITY VERDICT
-                 comparing what was actually produced against it. Pass 0.0 to skip.
+                 Searched recursively. Default '*' measures every measurable file, which
+                 is almost always TOO BROAD — see STRUCTURE below.
+        expected_per_file: OPTIONAL but strongly preferred. If the user's request states
+                 an expected number of objects per image/file (e.g. "up to 2,000 cells
+                 per image"), pass that number. Pass 0.0 only if no quantity is stated.
+        input_dir: OPTIONAL but strongly preferred. The folder the images were read FROM.
+                 Enables two checks that need no stated quantity: whether a deliverable
+                 was produced for every input, and whether the "deliverables" being
+                 measured are really just the input images copied into the output folder.
+
+    STRUCTURE: the checks below run whether or not a quantity was supplied, because most
+    real requests never state one. They catch the failures that per-file statistics hide:
+    a label mask that was never labelled, a set that is really inputs copied through, a
+    glob that mixed two kinds of file, or a batch that silently stopped early.
 
     Returns a text report ending in a PLAUSIBILITY line you must copy into your findings.
     """
@@ -251,6 +279,7 @@ def summarize_deliverables(
                 f"statistics below are from the sample)\n")
 
     rows, counts, kinds, dtypes, errors = [], [], set(), set(), []
+    measured = []          # keep the raw measurements for the structural checks below
     for p in sampled:
         m = _measure_one(p)
         if not m:
@@ -258,6 +287,8 @@ def summarize_deliverables(
         if m.get("error"):
             errors.append(f"{m['name']}: {m['error']}")
             continue
+        m["path"] = p
+        measured.append(m)
         kinds.add(m.get("kind", "?"))
         if m.get("dtype"):
             dtypes.add(m["dtype"])
@@ -295,45 +326,146 @@ def summarize_deliverables(
     median = numeric[n // 2] if n % 2 else (numeric[n // 2 - 1] + numeric[n // 2]) / 2
     empties = sum(1 for c in numeric if c == 0)
 
-    report += "\nPLAUSIBILITY VERDICT: "
+    # ---------------------------------------------------------------- verdict
+    # Findings are gathered as (severity, message) and the worst one becomes the
+    # verdict. Two things follow from that shape, and both were bugs before:
+    #
+    #  - The structural checks run even when expected_per_file IS supplied. They
+    #    used to sit in an `else`, so a median that happened to land in range
+    #    returned a clean PASS while half the files were empty or every mask held
+    #    a single object. A quantity check and a structural check answer different
+    #    questions and neither substitutes for the other.
+    #  - They run when no quantity is supplied, which is the common case: across
+    #    the five benchmark tasks only ONE stated a number, so an expectation-only
+    #    gate is inert on 4 of 5 real jobs. Measured on eight finished task
+    #    folders, the previous version returned "NO EXPECTATION SUPPLIED" on seven.
+    FAIL, SUSPECT = 3, 2
+    findings: list = []
+
+    skew = (numeric[-1] / median) if median else float("inf")
+    label_masks = [m for m in measured
+                   if m.get("kind") == "image" and m.get("max_label") is not None]
+
+    if empties * 2 >= n:
+        findings.append((FAIL, f"{empties} of {n} files contain ZERO objects. A deliverable "
+                               f"that is mostly empty is wrong regardless of what was "
+                               f"expected."))
+    elif empties:
+        # One empty mask in a batch is not noise — it is one image where the
+        # pipeline silently produced nothing.
+        findings.append((SUSPECT, f"{empties} of {n} files contain ZERO objects. Name them "
+                                  f"and confirm each is genuinely empty rather than a "
+                                  f"silent per-image failure."))
+
+    if len(label_masks) >= 3 and all(m.get("max_label") == 1 for m in label_masks):
+        findings.append((FAIL, f"every one of the {len(label_masks)} label masks has a "
+                               f"maximum label of 1, i.e. ONE object covering the whole "
+                               f"image. This is a binary mask that was never labelled — "
+                               f"the objects were never separated. Connected-component "
+                               f"labelling or watershed is missing from the pipeline."))
+
+    if len(kinds) > 1:
+        findings.append((SUSPECT, f"the glob '{pattern}' matched more than one kind of file "
+                                  f"({sorted(kinds)}), so the aggregate above mixes table "
+                                  f"rows with mask object counts and means nothing. "
+                                  f"Re-measure each deliverable kind with its own narrower "
+                                  f"pattern before scoring."))
+
+    if n > 3 and len(set(numeric)) == 1:
+        findings.append((SUSPECT, f"all {n} files report exactly {numeric[0]} objects. "
+                                  f"Identical counts across different images are not "
+                                  f"biologically plausible — check whether one result was "
+                                  f"written repeatedly, or the same image processed twice."))
+
+    if n > 3 and skew > 20:
+        findings.append((SUSPECT, f"the spread is implausible for one kind of deliverable: "
+                                  f"median {median} but max {numeric[-1]} ({skew:.0f}x). The "
+                                  f"glob has most likely matched two different kinds of file "
+                                  f"(e.g. per-image results plus a combined summary), so this "
+                                  f"measurement is not what the user asked for."))
+
+    if input_dir and os.path.isdir(input_dir):
+        _IMG = (".tif", ".tiff", ".png", ".jpg", ".jpeg", ".nd2", ".czi", ".lif")
+        in_paths = [p for p in _glob.glob(os.path.join(input_dir, "**", "*"), recursive=True)
+                    if os.path.isfile(p)]
+        in_names = {os.path.basename(p) for p in in_paths}
+        in_images = [p for p in in_paths if os.path.splitext(p)[1].lower() in _IMG]
+
+        # Copies of the input are NOT by themselves a failure — the pipeline
+        # legitimately stages raw images into the project workspace, and flagging
+        # that as a defect would fire on every well-behaved run. What IS wrong is
+        # measuring them: a statistic computed over the inputs describes the input,
+        # not the result. So this is a measurement-validity finding, like the
+        # mixed-kind one, and it asks for a re-measure rather than a re-run.
+        by_size = {}
+        for p in in_paths:
+            by_size.setdefault((os.path.basename(p), os.path.getsize(p)), p)
+        echoed = []
+        for m in measured:
+            src = by_size.get((m["name"], os.path.getsize(m["path"])))
+            if src and _same_bytes(src, m["path"]):
+                echoed.append(m)
+        if echoed:
+            findings.append((SUSPECT, f"{len(echoed)} of the {len(measured)} measured files are "
+                                      f"identical copies of the INPUT images (e.g. "
+                                      f"{', '.join(m['name'] for m in echoed[:3])}), verified by "
+                                      f"content. Staging inputs into the workspace is normal, "
+                                      f"but measuring them is not: the statistics above partly "
+                                      f"describe the input rather than the result. Re-measure "
+                                      f"with a pattern that selects only produced files."))
+
+        # A batch that silently stopped early is a genuine failure, and comparing
+        # produced files against input IMAGES (not every stray .txt) is the check.
+        n_in = len(in_images)
+        produced = [m for m in measured if m["name"] not in in_names]
+        if n_in and len(produced) < n_in:
+            findings.append((FAIL, f"only {len(produced)} produced file(s) for {n_in} input "
+                                   f"image(s). The batch stopped early or skipped images — a "
+                                   f"partial deliverable is a failure, not a caveat."))
+
+    quantity = None
     if expected_per_file and expected_per_file > 0:
         ratio = (median / expected_per_file) if expected_per_file else 0.0
         if ratio == 0:
-            report += (f"FAIL — every file is empty, but ~{expected_per_file:g} objects "
-                       f"per file were expected.")
+            quantity = (FAIL, f"every file is empty, but ~{expected_per_file:g} objects per "
+                              f"file were expected.")
         elif ratio < 0.1:
-            report += (f"FAIL — median {median} per file vs ~{expected_per_file:g} expected: "
-                       f"{1 / ratio:.0f}x TOO FEW. This is an order-of-magnitude miss, not "
-                       f"noise. Report it as a critical failure and set success=false.")
+            quantity = (FAIL, f"median {median} per file vs ~{expected_per_file:g} expected: "
+                              f"{1 / ratio:.0f}x TOO FEW. This is an order-of-magnitude miss, "
+                              f"not noise.")
         elif ratio > 10:
-            report += (f"FAIL — median {median} per file vs ~{expected_per_file:g} expected: "
-                       f"{ratio:.0f}x TOO MANY. Likely over-segmentation or noise counted as "
-                       f"objects. Report it as a critical failure and set success=false.")
-        else:
-            report += (f"PASS — median {median} per file is within an order of magnitude of "
-                       f"the ~{expected_per_file:g} expected.")
+            quantity = (FAIL, f"median {median} per file vs ~{expected_per_file:g} expected: "
+                              f"{ratio:.0f}x TOO MANY. Likely over-segmentation or noise "
+                              f"counted as objects.")
+        if quantity:
+            findings.append(quantity)
+
+    report += "\nPLAUSIBILITY VERDICT: "
+    if findings:
+        worst = max(f[0] for f in findings)
+        label = "FAIL" if worst == FAIL else "SUSPECT"
+        ordered = [m for s, m in sorted(findings, key=lambda f: -f[0])]
+        report += f"{label} — " + ordered[0]
+        for extra in ordered[1:]:
+            report += f"\n  ALSO: {extra}"
+        if worst == FAIL:
+            report += ("\n  Report this as a critical failure and set success=false. Do not "
+                       "describe the analysis as complete.")
+    elif expected_per_file and expected_per_file > 0:
+        report += (f"PASS — median {median} per file is within an order of magnitude of the "
+                   f"~{expected_per_file:g} expected, and no structural anomaly was found "
+                   f"({n} files, no empties, one kind of file, plausible spread).")
     else:
-        # Most real requests never state a number — across the five benchmark tasks only
-        # one did. A gate that only works with an explicit expectation would therefore be
-        # inert on 4 of 5 real jobs, so these two checks run regardless.
-        skew = (numeric[-1] / median) if median else float("inf")
-        if empties * 2 >= n:
-            report += (f"FAIL — {empties} of {n} files contain ZERO objects. A deliverable "
-                       f"that is mostly empty is wrong regardless of what was expected. "
-                       f"Report it as a critical failure and set success=false.")
-        elif n > 3 and skew > 100:
-            report += (f"SUSPECT — the spread is implausible for one kind of deliverable: "
-                       f"median {median} but max {numeric[-1]} ({skew:.0f}x). The glob "
-                       f"'{pattern}' has most likely matched two different kinds of file "
-                       f"(e.g. per-image results plus a combined summary), so this "
-                       f"measurement — and possibly the deliverable layout — is not what "
-                       f"the user asked for. Re-measure with a narrower pattern before "
-                       f"scoring, and say so in the report.")
-        else:
-            report += ("NO EXPECTATION SUPPLIED — no stated quantity to check against, and "
-                       "no empty-file or skew anomaly detected. If the user's request does "
-                       "state how many objects to expect, call this tool again passing "
-                       "expected_per_file: a result 10x off must not be reported as success.")
+        # Deliberately NOT phrased as a pass. Nothing was checked against, and saying
+        # so plainly is what stops a silent "no news is good news" reading.
+        missing = ["expected_per_file (a stated quantity from the user's request)"]
+        if not input_dir:
+            missing.append("input_dir (the folder the images were read from)")
+        report += ("INCOMPLETE — the structural checks found nothing wrong, but no quantity "
+                   "was supplied so the RESULT ITSELF was never checked against anything. "
+                   "This is NOT a pass. Supply " + " and ".join(missing) + ", then call this "
+                   "tool again. If the request genuinely states no quantity, say explicitly "
+                   "in the report that plausibility could not be verified.")
 
     if empties:
         report += (f"\nEMPTY FILES: {empties} of {n} measured file(s) contain ZERO objects. "

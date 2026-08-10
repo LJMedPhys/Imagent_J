@@ -17,10 +17,25 @@ It writes `QA_Checklist_Report.md` and returns a `QAHandoff`.
 This is the important part. `qa_reporter` does not only check documentation — it **measures
 the delivered files** and compares them against what the user asked for.
 
+There are four verdicts, and only one of them is a pass:
+
+| verdict | meaning | what you do |
+|---|---|---|
+| `FAIL` | the result is wrong | correct it (below) |
+| `SUSPECT` | the result **or the measurement** is unsound | fix the glob / re-measure, then re-audit |
+| `INCOMPLETE` | nothing was checked against | supply the missing argument and re-audit |
+| `PASS` | measured, in range, no structural anomaly | proceed |
+
 **If `plausibility_verdict` starts with FAIL, the RESULT IS WRONG.** It is not a paperwork
 problem and it is not something to report as a caveat while announcing success. A FAIL means
 the numbers on disk do not match what the user asked for — for example 21 correctly-named
 CSVs that are all empty, or 95x fewer objects than the request implies.
+
+**`INCOMPLETE` is not a pass.** It means the audit measured the files, found nothing
+structurally broken, and had nothing to compare the result against. Treat it as an unfinished
+audit: re-run `qa_reporter` with the stated quantity and the input folder if either was
+missing, and if the request genuinely states no quantity, write in the report — plainly —
+that scientific plausibility could not be verified.
 
 You MUST then:
 
@@ -31,8 +46,14 @@ You MUST then:
      (Cellpose expects objects **brighter** than background).
    - *"TOO MANY"* → noise counted as objects; the threshold is too permissive or the
      minimum-size filter is missing.
-   - *"SUSPECT — the spread is implausible"* → the deliverable glob matched two different
-     kinds of file (e.g. per-image results plus a combined summary). Fix the layout.
+   - *"SUSPECT — the spread is implausible"* or *"matched more than one kind of file"* →
+     the deliverable glob matched two different kinds of file (e.g. per-image results plus
+     a combined summary, or the staged input images). Narrow the glob and measure again —
+     this one is usually a bad measurement, not a bad result.
+   - *"every one of the N label masks has a maximum label of 1"* → the mask is binary and
+     was never labelled. Connected-component labelling or watershed is missing.
+   - *"only N produced file(s) for M input image(s)"* → the batch stopped early. Find
+     which images were skipped and why before re-running.
 3. **Send the fix back to the agent that produced it** (`python_data_analyst` or
    `imagej_coder`) with the measured numbers in the task text — the concrete figures, not
    "it looked wrong". Re-run the corrected script.
