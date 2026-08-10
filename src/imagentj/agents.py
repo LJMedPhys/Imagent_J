@@ -1,8 +1,13 @@
+import logging
 import os
 import sqlite3
 from typing import Literal, Optional
 
+import httpx
+from openai import OpenAIError
+
 from . import stop_signal
+from . import agent_watchdog
 from . import config
 
 from deepagents import create_deep_agent
@@ -20,6 +25,8 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.errors import GraphRecursionError
 from pydantic import BaseModel
 from deepagents.middleware.skills import SkillsMiddleware
+
+log = logging.getLogger("imagentj")
 
 
 from .prompts import (
@@ -246,12 +253,29 @@ def _agent_reasoning_kwargs(reasoning_effort: Optional[str] = None) -> dict:
     return options
 
 
+# Every LLM client gets a read timeout and a retry.
+#
+# Without one, a provider that returns 200 OK headers and then stalls mid-body
+# leaves httpx blocked in `ssl.read()` FOREVER — the socket never errors, so the
+# agent thread simply stops and the whole run wedges with no traceback and no
+# tokens billed. Observed 2026-08-07: all three benchmark containers froze at the
+# same second on a single OpenRouter body-stall and never recovered.
+#
+# The curator and the VLM judge already carried timeouts for exactly this reason;
+# the four clients that do the real work did not. These are deliberately generous
+# — a long reasoning turn on a big context is legitimately slow — but finite.
+_LLM_TIMEOUT_S = float(os.environ.get("IMAGENTJ_LLM_TIMEOUT", "300"))
+_LLM_MAX_RETRIES = int(os.environ.get("IMAGENTJ_LLM_MAX_RETRIES", "2"))
+
+
 llm_supervisor = ChatOpenAI(
     model=m(config.model_for("supervisor", "openai/gpt-5.4")),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
     **_agent_reasoning_kwargs("low"),
+    timeout=_LLM_TIMEOUT_S,
+    max_retries=_LLM_MAX_RETRIES,
     verbose=True,
     callbacks=[shared_tracker],
 )
@@ -262,6 +286,8 @@ llm_worker = ChatOpenAI(
     base_url=base_url,
     temperature=0.,
     **_agent_reasoning_kwargs("low"),
+    timeout=_LLM_TIMEOUT_S,
+    max_retries=_LLM_MAX_RETRIES,
     verbose=True,
     callbacks=[shared_tracker],
 )
@@ -272,6 +298,8 @@ llm_analyst = ChatOpenAI(
     base_url=base_url,
     temperature=0.,
     **_agent_reasoning_kwargs("low"),
+    timeout=_LLM_TIMEOUT_S,
+    max_retries=_LLM_MAX_RETRIES,
     verbose=True,
     callbacks=[shared_tracker],
 )
@@ -282,6 +310,10 @@ llm_nano = ChatOpenAI(
     base_url=base_url,
     temperature=0.,
     **_agent_reasoning_kwargs(),
+    # Shorter: this backs the watchdogs and the fast path, where a slow call is
+    # worse than no call — a watchdog that hangs supervises nothing.
+    timeout=90,
+    max_retries=_LLM_MAX_RETRIES,
     verbose=True,
     callbacks=[shared_tracker],
 )
@@ -364,6 +396,7 @@ def _make_coder_agent(model, name, system_prompt):
         response_format=ToolStrategy(schema=ScriptHandoff, handle_errors=True),
         name=name,
         middleware=[
+            agent_watchdog.middleware(),
             FilesystemFileSearchMiddleware(
                 # Scoped to /app/skills/ — the workflow templates / SKILL.md the coder
                 # copies from. Do NOT widen to /app/: /app/data is ~66 GB of images and
@@ -460,6 +493,9 @@ _qa_agent = create_agent(
     system_prompt=qa_reporter_prompt,
     response_format=ToolStrategy(schema=QAHandoff, handle_errors=True),
     name="qa_reporter",
+    # Feeds the agent watchdog its tool-call history — this is the agent whose
+    # write→re-read loop went unbounded for 34 minutes.
+    middleware=[agent_watchdog.middleware()],
 )
 
 # Plugin manager — gets SkillsMiddleware so it sees all plugin skill descriptions
@@ -532,6 +568,7 @@ _vlm_agent = (
         system_prompt=vlm_judge_prompt,
         response_format=ToolStrategy(schema=VLMHandoff, handle_errors=True),
         name="vlm_judge",
+        middleware=[agent_watchdog.middleware()],
     )
     if llm_vlm is not None
     else None
@@ -623,19 +660,57 @@ def _newest_script_since(directory: str, pre: dict) -> str:
     return newest
 
 
-def _run_capped(agent, payload, on_cap):
-    """Run a stateless subagent with a hard recursion cap. On hitting the cap (a runaway
-    tool loop) return on_cap() — a best-effort handoff — instead of raising/looping forever,
-    so the Supervisor still receives a structured result it can act on."""
+def _run_capped(agent, payload, on_cap, name: str = "subagent"):
+    """Run a stateless subagent under BOTH bounds, returning on_cap() if either trips.
+
+    1. `recursion_limit` — a hard ceiling on super-steps.
+    2. the agent watchdog — kills a spinning loop (identical tool calls), a hung
+       tool call (no activity for STALL_SECONDS), or an LLM-judged runaway.
+
+    The recursion cap alone is not enough: it only fires once the agent has burned
+    ~22 turns, and it cannot fire at all while a single tool call is blocked. The
+    watchdog covers both gaps. Either way the Supervisor still receives a
+    structured result it can act on.
+
+    The same guarantee has to hold when the agent comes back WITHOUT a structured
+    response. That happens for reasons entirely outside this process — the model
+    emits prose instead of the schema tool call, or the connection drops mid-stream
+    (`httpx.RemoteProtocolError: peer closed connection without sending complete
+    message body`). A bare `result["structured_response"]` turned that into a
+    KeyError which escaped this function, propagated through the supervisor's tool
+    node, and ended the whole session with "unhandled agent error" — losing a run
+    whose deliverables were already complete on disk. Degrade to on_cap() instead:
+    one subagent call fails, the pipeline continues.
+    """
+    handle = agent_watchdog.register(name)
     try:
         result = stop_signal.SubagentRunner(
             agent.invoke,
             payload,
             config={"recursion_limit": _RECURSION_LIMIT},
+            watchdog=handle,
         ).run()
-        return result["structured_response"]
+        structured = (result or {}).get("structured_response")
+        if structured is None:
+            log.warning(
+                "%s returned no structured_response (model emitted prose, or the "
+                "stream was cut) — degrading to a failure handoff so the pipeline "
+                "continues.", name
+            )
+            return on_cap()
+        return structured
     except GraphRecursionError:
         return on_cap()
+    except agent_watchdog.AgentAborted:
+        return on_cap()
+    except (httpx.HTTPError, OpenAIError) as exc:
+        # Transport / provider failure. The science already on disk must not be lost
+        # because one call died in the socket.
+        log.warning("%s failed at the transport layer (%s: %s) — degrading to a "
+                    "failure handoff.", name, type(exc).__name__, exc)
+        return on_cap()
+    finally:
+        agent_watchdog.release(handle)
 
 
 @tool
@@ -834,6 +909,7 @@ def python_data_analyst(task: str, input_path: str, output_dir: str, project_roo
 _qa_enabled: bool = False
 
 
+
 def set_qa_enabled(enabled: bool) -> None:
     global _qa_enabled
     _qa_enabled = enabled
@@ -870,11 +946,32 @@ def qa_reporter(project_root: str) -> QAHandoff:
     if ledger_ctx:
         sections.append(f"WORKFLOW SUMMARY (from state ledger — use as primary reference):\n{ledger_ctx}")
 
-    result = stop_signal.SubagentRunner(
-        _qa_agent.invoke,
+    # Bounded like every other subagent. This call previously ran uncapped and
+    # unsupervised: a benchmark run had the reporter write QA_Checklist_Report.md
+    # and read it back 57 times over 34 minutes without ever emitting its handoff,
+    # and nothing stopped it. On either bound tripping we hand back a partial
+    # report rather than failing the whole pipeline — by this point the science
+    # is already finished and saved.
+    def _on_cap() -> QAHandoff:
+        checklist = os.path.join(project_root, "QA_Checklist_Report.md")
+        return QAHandoff(
+            checklist_path=checklist if os.path.exists(checklist) else "",
+            minimal_workflow_passed=0,
+            minimal_workflow_total=0,
+            critical_failures=[
+                "QA audit was stopped after exceeding its tool-call budget; the "
+                "analysis outputs are unaffected. Any checklist written before the "
+                "stop is partial — re-run the audit if you need a complete one."
+            ],
+            success=False,
+        )
+
+    return _run_capped(
+        _qa_agent,
         {"messages": [{"role": "user", "content": "\n\n".join(sections)}]},
-    ).run()
-    return result["structured_response"]
+        _on_cap,
+        name="qa_reporter",
+    )
 
 
 def _vlm_failure(pipeline_step: str, message: str) -> VLMHandoff:
@@ -983,6 +1080,7 @@ def vlm_judge(
             _vlm_agent,
             {"messages": [{"role": "user", "content": content}]},
             lambda: _vlm_failure(pipeline_step, "VLM judge reached its tool-call limit."),
+            name="vlm_judge",
         )
     except Exception as exc:
         return _vlm_failure(pipeline_step, f"{type(exc).__name__}: {exc}")
@@ -1018,11 +1116,28 @@ def plugin_manager(task: str, project_root: str = "") -> PluginRecommendation:
             sections.append(f"PROJECT STATE (for context):\n{ledger_ctx}")
     sections.append(f"TASK: {task}")
 
-    result = stop_signal.SubagentRunner(
-        _plugin_agent.invoke,
+    # Capped and supervised like every other subagent. This ran bare until
+    # 2026-08-07, when a hung OpenRouter socket inside the plugin manager wedged
+    # three benchmark containers indefinitely: no recursion cap, no watchdog, and
+    # so nothing could see it. Failing to find a plugin must never be fatal — the
+    # supervisor can pick a backend without a recommendation.
+    def _on_cap() -> PluginRecommendation:
+        return PluginRecommendation(
+            recommended_plugin=None,
+            installation_status="unknown",
+            reasoning=(
+                "Plugin search was stopped after exceeding its time/tool budget. "
+                "Proceed by choosing a backend from the available skills instead of "
+                "waiting on a recommendation."
+            ),
+        )
+
+    return _run_capped(
+        _plugin_agent,
         {"messages": [{"role": "user", "content": "\n\n".join(sections)}]},
-    ).run()
-    return result["structured_response"]
+        _on_cap,
+        name="plugin_manager",
+    )
 
 
 # ---------------------------------------------------------------------------
