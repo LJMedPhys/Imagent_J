@@ -4,12 +4,13 @@ description: >-
   Cellpose deep-learning instance segmentation of cells and nuclei via the PYTHON API, in the
   `cellpose` conda env (v3.1.1.2 + CUDA). THIS IS THE ROUTE FOR A FOLDER OF IMAGES — the model
   loads ONCE and stays resident, while the Fiji/BIOP wrapper respawns bash+conda+python and
-  reloads it every call. Even a badly written loop here beats the best Fiji route, so send
-  batch segmentation to Python and leave only single still images or in-GUI work to the Fiji
-  cellpose skill. Copy WORKFLOW_BATCH_SEGMENTATION.py and edit its CONFIG block. Scripts MUST
-  start with `# imagentj-env: cellpose` or they run in the main env, where cellpose is absent.
-  Build models.Cellpose() ONCE outside the loop. Models are pre-downloaded (cyto3, nuclei,
-  cyto2, tissuenet_cp3, livecell_cp3, bact_*); cpsam needs the `cellpose4` env. See
+  reloads it every call. Send batch segmentation to Python and leave only single still images
+  or in-GUI work to the Fiji cellpose skill. COPY WORKFLOW_BATCH_SEGMENTATION.py and edit its
+  CONFIG block — do NOT hand-write your own loop. Scripts MUST start with
+  `# imagentj-env: cellpose` or they run in the main env, where cellpose is absent.
+  Build models.Cellpose() ONCE outside the loop, and PASS eval() A LIST of images so it
+  batches on the GPU — never call eval() once per image. Models are pre-downloaded (cyto3,
+  nuclei, cyto2, tissuenet_cp3, livecell_cp3, bact_*); cpsam needs the `cellpose4` env. See
   SCRIPT_API.md for eval(), channels, thresholds and pitfalls.
 ---
 
@@ -17,6 +18,32 @@ description: >-
 
 Deep-learning instance segmentation for cells and nuclei. This skill is the **Python** route.
 There is also a Fiji/BIOP route (`cellpose_documentation`) — see *Which route* below.
+
+## Non-negotiable rules for a batch
+
+These three are the difference between a 5-minute run and a 35-minute one. All three are
+**instructions, not suggestions** — a benchmark run that read this file and then hand-wrote
+its own loop took 7× longer than it needed to, at 44% GPU utilisation.
+
+1. **Copy `WORKFLOW_BATCH_SEGMENTATION.py` and edit its CONFIG block.** Do not hand-write a
+   batch script. The workflow already has the model construction, batching, ragged-size
+   handling and validation guards right. (cpsam → `WORKFLOW_CPSAM_BATCH_SEGMENTATION.py`.)
+2. **Build the model ONCE, outside the loop.**
+3. **Pass `eval()` a LIST of images — never one image at a time.** `eval()` batches
+   internally and accepts a ragged list, so one call handles the whole folder:
+
+```python
+imgs = [tifffile.imread(p) for p in paths]     # ragged list is fine
+masks, flows, styles = model.eval(imgs, diameter=30, channels=[0, 0])
+```
+
+   Calling `model.eval(img)` inside a `for` loop pays the tiling and flow-dynamics setup on
+   every image and leaves the GPU half idle. If memory forces you to split, chunk the list
+   (e.g. 32 images per call) — do not fall back to one-at-a-time.
+
+Same rule downstream: when you relabel or match masks, build one lookup table and index it
+(`lut[labels]`). Never loop over label ids doing `labels == i` — that rescans the whole array
+once per object.
 
 ## Env — not optional
 
