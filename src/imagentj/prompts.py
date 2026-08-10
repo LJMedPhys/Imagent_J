@@ -105,6 +105,9 @@ TOOLS AVAILABLE
 - inspect_csv_header(path): Read the column names, data types, and first 5 rows of any CSV file.
 - smart_file_reader(path): Read the content of any text-based file (e.g., logs, README).
 - save_markdown(content, path): Save a markdown file with the given content to the specified path.
+- summarize_deliverables(output_dir, pattern, expected_per_file): MEASURE the deliverables —
+  per-file object/row counts, dtype, shape, and aggregate min/median/max. This is the ONLY
+  tool that tells you whether the RESULT is right rather than whether the FORMAT is right.
 
 ────────────────────────────────────────
 STEP 1 — PROJECT DISCOVERY
@@ -136,6 +139,30 @@ STEP 1 — PROJECT DISCOVERY
    - Annotation documentation (what annotations were added)
    - Image metadata preservation (calibration maintained?)
 
+
+────────────────────────────────────────
+STEP 1.5 — MEASURE THE DELIVERABLES (MANDATORY, DO THIS BEFORE SCORING)
+────────────────────────────────────────
+Everything else you check is about FORM: correct filenames, correct columns, correct
+file count. None of it can tell you the answer is WRONG. A folder of perfectly-named,
+perfectly-schema'd CSVs can hold a hundred times too few rows and pass every other item
+on this checklist.
+
+So before you score anything:
+
+1. Identify the deliverable the user actually asked for and the glob that matches it
+   (e.g. '*.csv', '*_seg.tif', '*nuclei*.tif').
+2. Re-read the ORIGINAL USER REQUEST for any stated quantity — "up to 2,000 cells per
+   image", "roughly 50 nuclei", "about 200 foci". Note the number.
+3. Call summarize_deliverables(output_dir, pattern, expected_per_file=<that number>).
+   Pass 0.0 only if the request truly states no quantity.
+4. Read its PLAUSIBILITY VERDICT and obey it.
+
+DO NOT trust the state ledger's reported counts. The ledger records what a script
+REPORTED at the time it ran; a later corrective pass can change the files on disk
+without updating it. In one real run the ledger said 71,768 objects while the delivered
+files held 681 — a 105x discrepancy that no reader of the ledger could have seen.
+Only summarize_deliverables reads the actual bytes on disk. It is the ground truth.
 
 ────────────────────────────────────────
 STEP 2 — QA CHECKLIST AUDIT
@@ -192,6 +219,25 @@ MINIMAL:
 RECOMMENDED:
 [ ] All settings
 [ ] Public example
+
+═══════════════════════════════════════════════════════════
+CHECKLIST C: SCIENTIFIC PLAUSIBILITY  (score this FIRST — it outranks everything below)
+═══════════════════════════════════════════════════════════
+
+Based on the summarize_deliverables output from STEP 1.5:
+
+[ ] Deliverable exists and is non-empty
+    → FAIL if no file matched the glob, or if most files contain zero objects.
+[ ] Object counts are within an order of magnitude of what the user asked for
+    → FAIL if the tool's verdict says TOO FEW or TOO MANY. A 10x miss is not noise.
+[ ] No unexplained collapse or explosion between passes
+    → If a script was revised and the object count changed by more than 10x, the report
+      must say so explicitly and justify it. An unexplained 100x swing is a FAIL.
+[ ] Counts are consistent with the images themselves
+    → A dense field returning single-digit counts, or a sparse field returning thousands,
+      is a FAIL even when the file format is perfect.
+
+Any ❌ here is a CRITICAL FAILURE. It goes in critical_failures, and success MUST be false.
 
 ═══════════════════════════════════════════════════════════
 CHECKLIST B: IMAGE PUBLISHING STANDARDS
@@ -380,9 +426,47 @@ STEP 4 - SAVE Checklist
 
 Save QA_Checklist_Report.md to: [project_root]/QA_Checklist_Report.md
 
+Call save_markdown EXACTLY ONCE. It returns success + path + size — that return
+value IS your confirmation. Do NOT read the file back to check it; do NOT save it
+a second time. You wrote the content, so you already know what is in it.
+
+────────────────────────────────────────
+STEP 5 - FINISH (this is your last action)
+────────────────────────────────────────
+
+Immediately after save_markdown returns, emit your QAHandoff and STOP. Nothing
+follows this step — there is no verification pass and no second look.
+
+QAHandoff fields:
+  checklist_path          — the absolute path you just saved to
+  minimal_workflow_passed — how many MINIMAL workflow items you scored ✅ PASS
+  minimal_workflow_total  — how many MINIMAL workflow items you evaluated
+  critical_failures       — one short string per ❌ FAIL in either MINIMAL list,
+                            AND one per ❌ in CHECKLIST C (empty list if none)
+  plausibility_verdict    — copy the PLAUSIBILITY VERDICT line from
+                            summarize_deliverables verbatim ("PASS — …", "FAIL — …",
+                            or "NO EXPECTATION SUPPLIED"). Never leave this empty:
+                            if you did not measure, say "NOT MEASURED".
+  measured_median         — the median objects-per-file the tool reported (0.0 if none)
+  success                 — TRUE only if the deliverable exists, is non-empty, AND
+                            CHECKLIST C has no ❌.
+
+  `success` does NOT mean "I wrote the checklist". Writing the document is not the
+  achievement being reported — the correctness of the delivered result is. If the
+  measurement says the output is 85x too small, the honest handoff is success=false
+  with that stated in critical_failures, even though the report saved perfectly.
+  Reporting success on a result you measured as implausible is the single worst
+  failure available to you: it tells the user their analysis is done and correct
+  when it is neither.
+
 ────────────────────────────────────────
 STRICT RULES
 ────────────────────────────────────────
+- READ EACH FILE AT MOST ONCE. Project files do not change while you audit them.
+  Re-reading a file you have already read returns identical content and buys you
+  nothing. NEVER re-read a file you wrote yourself.
+- The audit is a single forward pass: discover → read → score → write → hand off.
+  You never revisit an earlier step.
 - DO NOT invent or hallucinate parameter values. If you cannot find a value, write [TO BE FILLED].
 - DO NOT interact with the user. This is an automated post-project step.
 - DO NOT generate or execute any code.
@@ -1433,7 +1517,16 @@ USER INTERACTION
 - The only mandatory user confirmation point is sample verification (Phase 4b).
 """
 
-_QA_TOOL_ENTRY = "- qa_reporter: Audits the completed project folder and generates QA_Checklist_Report.md. Called once at project end."
+_QA_TOOL_ENTRY = (
+    "- qa_reporter(project_root, user_request, deliverable_dir): Audits the completed project "
+    "and generates QA_Checklist_Report.md. Called once at project end. ALWAYS pass user_request "
+    "as the user's ORIGINAL wording, verbatim, including any stated quantity (\"up to 2,000 cells "
+    "per image\") — the reporter measures the delivered files against that number, and without it "
+    "the plausibility check is skipped. Pass deliverable_dir when the final files were written "
+    "somewhere other than project_root. If it returns success=false or a FAIL plausibility_verdict, "
+    "the RESULT is wrong, not merely undocumented: report that to the user plainly instead of "
+    "announcing the work is complete."
+)
 
 # Phase files now live as skill files read on demand by the supervisor — see
 # /app/skills/workflow/supervisor_pipeline_phases/. The PhaseGuardMiddleware

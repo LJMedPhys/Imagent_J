@@ -117,6 +117,12 @@ def smart_file_reader(file_path: str):
     Use this tool when a user provides a new file (PDF, TXT, PY, IPYNB, groovy) and asks
     questions that require information contained within that specific file.
 
+    Read a given file at most ONCE. Its content does not change while you work, so a
+    second read returns byte-identical output and only wastes a turn. In particular,
+    NEVER read back a file you just wrote in order to 'verify' it — the writing tool's
+    return value is the confirmation, and re-reading your own output is the classic way
+    an agent falls into a save→read→save loop that never terminates.
+
     Logic:
     - Small files (<15KB or <3 pages): Returns 'context' type. You must prepend
       this content to your prompt immediately for 100% accuracy.
@@ -385,6 +391,11 @@ def save_markdown(file_path: str, content: str) -> dict:
     """
     Writes a markdown string to a .md file at the specified absolute path.
     Creates any missing parent directories automatically.
+
+    A returned success=True IS the confirmation that the file is on disk with the
+    content you supplied. Do NOT read the file back to verify it, and do NOT write
+    it a second time — that save→read→save cycle is self-perpetuating and never
+    converges. Write once, trust the return value, move on.
 
     Args:
         file_path (str): Absolute path for the output file, e.g.

@@ -44,7 +44,7 @@ from .tools import (
     show_in_imagej_gui, close_imagej_windows,
     rag_retrieve_docs, recall_concepts, inspect_java_class,
     inspect_folder_tree,
-    smart_file_reader, inspect_csv_header,
+    smart_file_reader, inspect_csv_header, summarize_deliverables,
     extract_image_metadata, search_fiji_plugins, install_fiji_plugin,
     check_plugin_installed, mkdir_copy, save_script, edit_script, copy_file, execute_script,
     get_script_info, load_script, get_script_history,
@@ -147,6 +147,10 @@ class QAHandoff(BaseModel):
     minimal_workflow_passed: int
     minimal_workflow_total: int
     critical_failures: list[str]
+    # Scientific plausibility of the DELIVERABLE, measured on disk rather than read
+    # from the ledger. Defaulted so an older/partial handoff still validates.
+    plausibility_verdict: str = "NOT MEASURED"
+    measured_median: float = 0.0
     success: bool
 
 
@@ -488,6 +492,7 @@ _qa_agent = create_agent(
         get_script_info,
         save_markdown,
         inspect_csv_header,
+        summarize_deliverables,
         load_script,
     ],
     system_prompt=qa_reporter_prompt,
@@ -908,6 +913,25 @@ def python_data_analyst(task: str, input_path: str, output_dir: str, project_roo
 
 _qa_enabled: bool = False
 
+# Last plausibility verdict from qa_reporter, so the run-level outcome can reflect
+# whether the SCIENCE passed rather than only whether the process avoided crashing.
+# Without this the benchmark's result.json reported success=true on a deliverable the
+# QA agent had just measured as 65x too small: the verdict existed, but stayed trapped
+# inside the handoff and never reached the file an evaluator reads.
+LAST_QA_VERDICT: dict = {}
+
+
+def _record_qa_verdict(handoff) -> None:
+    global LAST_QA_VERDICT
+    try:
+        LAST_QA_VERDICT = {
+            "plausibility_verdict": getattr(handoff, "plausibility_verdict", "NOT MEASURED"),
+            "measured_median": float(getattr(handoff, "measured_median", 0.0) or 0.0),
+            "qa_success": bool(getattr(handoff, "success", False)),
+            "critical_failures": list(getattr(handoff, "critical_failures", []) or []),
+        }
+    except Exception:                                     # never break QA over telemetry
+        LAST_QA_VERDICT = {}
 
 
 def set_qa_enabled(enabled: bool) -> None:
@@ -916,7 +940,7 @@ def set_qa_enabled(enabled: bool) -> None:
 
 
 @tool
-def qa_reporter(project_root: str) -> QAHandoff:
+def qa_reporter(project_root: str, user_request: str = "", deliverable_dir: str = "") -> QAHandoff:
     """
     Audit the completed project folder and generate QA_Checklist_Report.md.
 
@@ -926,9 +950,16 @@ def qa_reporter(project_root: str) -> QAHandoff:
         project_root: Absolute path to the project root folder. The reporter reads all
                       scripts, CSVs, and images to evaluate against workflow and image
                       publishing standards.
+        user_request: The user's ORIGINAL request, quoted verbatim — especially any
+                      stated quantity ("up to 2,000 cells per image", "~50 nuclei").
+                      The reporter measures the delivered files against this number.
+                      Omitting it disables the plausibility check, so always pass it.
+        deliverable_dir: Absolute path where the final deliverables were written, if it
+                      differs from project_root (e.g. '/benchmark/output').
 
-    Returns a QAHandoff with checklist_path, pass/fail counts, and critical_failures.
-    Relay critical_failures to the user verbatim.
+    Returns a QAHandoff with checklist_path, pass/fail counts, critical_failures, and a
+    plausibility_verdict measured from the files on disk. Relay critical_failures and any
+    FAIL verdict to the user verbatim — a FAIL means the result is wrong, not just undocumented.
     """
     if not _qa_enabled:
         return QAHandoff(
@@ -940,6 +971,16 @@ def qa_reporter(project_root: str) -> QAHandoff:
         )
 
     sections = [f"PROJECT ROOT: {project_root}"]
+    if deliverable_dir:
+        sections.append(f"DELIVERABLE DIRECTORY (measure this one): {deliverable_dir}")
+    if user_request:
+        # The stated quantities live here and nowhere else — the ledger's
+        # scientific_goal is a paraphrase that drops the numbers.
+        sections.append(
+            "ORIGINAL USER REQUEST (verbatim — extract any stated quantity from it "
+            "and pass it to summarize_deliverables as expected_per_file):\n"
+            f"{user_request}"
+        )
     # Inject the full ledger — it contains the workflow summary, all parameters,
     # all scripts, all outputs. This is exactly what the QA agent needs to audit.
     ledger_ctx = get_ledger_context(project_root)
@@ -966,12 +1007,14 @@ def qa_reporter(project_root: str) -> QAHandoff:
             success=False,
         )
 
-    return _run_capped(
+    handoff = _run_capped(
         _qa_agent,
         {"messages": [{"role": "user", "content": "\n\n".join(sections)}]},
         _on_cap,
         name="qa_reporter",
     )
+    _record_qa_verdict(handoff)
+    return handoff
 
 
 def _vlm_failure(pipeline_step: str, message: str) -> VLMHandoff:

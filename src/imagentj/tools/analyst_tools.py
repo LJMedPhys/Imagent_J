@@ -123,6 +123,224 @@ def inspect_csv_header(file_path: str):
         return f"Error reading file at {file_path}: {str(e)}"
 
 
+# ---------------------------------------------------------------------------
+# Deliverable measurement — the plausibility check the QA reporter lacked.
+#
+# Every gate in this pipeline used to check FORM (filename, schema, file count)
+# and none checked MAGNITUDE. A benchmark run delivered 681 cell centroids across
+# 21 images for a task whose prompt said "up to 2,000+ cells per image", and the
+# QA reporter, the handoff and the harness validator all passed it — because 21
+# correctly-named CSVs with an X,Y header is exactly what they were looking for.
+#
+# This tool measures CONTENT deterministically so the reporter compares numbers
+# instead of eyeballing a 5-row preview.
+# ---------------------------------------------------------------------------
+
+# Above this many bytes we take max(label) as the object count instead of a full
+# np.unique — exact for sequentially-labelled masks, and O(n) rather than O(n log n)
+# on a 400 MB volume.
+_BIG_ARRAY_BYTES = 64 * 1024 * 1024
+_MAX_FILES_MEASURED = 60
+
+
+def _measure_one(path: str) -> dict:
+    """Measure a single deliverable. Returns {} if the type isn't measurable."""
+    import numpy as np
+
+    ext = os.path.splitext(path)[1].lower()
+    out: dict = {"name": os.path.basename(path)}
+
+    if ext in (".csv", ".tsv"):
+        sep = "\t" if ext == ".tsv" else ","
+        with open(path, "rb") as f:
+            n_lines = sum(1 for _ in f)
+        out["kind"] = "table"
+        out["count"] = max(n_lines - 1, 0)          # minus header
+        try:
+            head = pd.read_csv(path, sep=sep, nrows=0)
+            out["columns"] = list(head.columns)
+        except Exception:
+            out["columns"] = []
+        return out
+
+    if ext in (".tif", ".tiff", ".png"):
+        try:
+            if ext == ".png":
+                from PIL import Image
+                arr = np.array(Image.open(path))
+            else:
+                import tifffile
+                arr = tifffile.imread(path)
+        except Exception as e:
+            return {"name": out["name"], "kind": "image", "error": str(e)[:80]}
+        out["kind"] = "image"
+        out["shape"] = tuple(int(x) for x in arr.shape)
+        out["dtype"] = str(arr.dtype)
+        if arr.dtype.kind in "iub":
+            mx = int(arr.max()) if arr.size else 0
+            if arr.nbytes > _BIG_ARRAY_BYTES:
+                out["count"] = mx                    # max label id
+                out["count_method"] = "max_label"
+            else:
+                out["count"] = int(len(np.unique(arr))) - 1   # minus background
+                out["count_method"] = "unique"
+            out["max_label"] = mx
+        else:
+            out["count"] = None                      # float image: not a label mask
+        return out
+
+    return {}
+
+
+def _fmt_stats(values: list) -> str:
+    vals = sorted(v for v in values if v is not None)
+    if not vals:
+        return "no measurable values"
+    n = len(vals)
+    median = vals[n // 2] if n % 2 else (vals[n // 2 - 1] + vals[n // 2]) / 2
+    return (f"min={vals[0]}  median={median}  max={vals[-1]}  "
+            f"total={sum(vals)}  zero/empty_files={sum(1 for v in vals if v == 0)}")
+
+
+@tool
+def summarize_deliverables(
+    output_dir: str,
+    pattern: str = "*",
+    expected_per_file: float = 0.0,
+) -> str:
+    """
+    MEASURE the actual content of deliverable files and return hard numbers:
+    per-file object/row counts, dtype, shape, and aggregate min/median/max/total.
+
+    Use this in every QA audit BEFORE judging whether a result is correct. Reading a
+    file's header or a 5-row preview tells you the FORMAT is right; it cannot tell you
+    the RESULT is right. A folder of perfectly-named, perfectly-schema'd CSVs can still
+    hold a hundred times too few rows, and that is invisible to every other check.
+
+    Args:
+        output_dir: Absolute path to the deliverable directory (e.g. '/benchmark/output').
+        pattern: Glob for the deliverables, e.g. '*.csv', '*_seg.tif', '*nuclei*.tif'.
+                 Searched recursively. Default '*' measures every measurable file.
+        expected_per_file: OPTIONAL. If the user's request states an expected number of
+                 objects per image/file (e.g. "up to 2,000 cells per image"), pass that
+                 number and this tool returns a deterministic PLAUSIBILITY VERDICT
+                 comparing what was actually produced against it. Pass 0.0 to skip.
+
+    Returns a text report ending in a PLAUSIBILITY line you must copy into your findings.
+    """
+    import glob as _glob
+
+    if not os.path.isdir(output_dir):
+        return f"Error: '{output_dir}' is not a directory."
+
+    paths = sorted(
+        p for p in _glob.glob(os.path.join(output_dir, "**", pattern), recursive=True)
+        if os.path.isfile(p)
+    )
+    if not paths:
+        return (f"NO FILES matched pattern '{pattern}' under {output_dir}.\n"
+                f"PLAUSIBILITY VERDICT: FAIL — the deliverable is missing entirely.")
+
+    total_matched = len(paths)
+    sampled = paths
+    note = ""
+    if total_matched > _MAX_FILES_MEASURED:
+        step = total_matched / _MAX_FILES_MEASURED
+        sampled = [paths[int(i * step)] for i in range(_MAX_FILES_MEASURED)]
+        note = (f"  (measured an even sample of {len(sampled)} of {total_matched} files; "
+                f"statistics below are from the sample)\n")
+
+    rows, counts, kinds, dtypes, errors = [], [], set(), set(), []
+    for p in sampled:
+        m = _measure_one(p)
+        if not m:
+            continue
+        if m.get("error"):
+            errors.append(f"{m['name']}: {m['error']}")
+            continue
+        kinds.add(m.get("kind", "?"))
+        if m.get("dtype"):
+            dtypes.add(m["dtype"])
+        c = m.get("count")
+        counts.append(c)
+        if m["kind"] == "table":
+            rows.append(f"  {m['name']}: {c} rows, columns={m.get('columns')}")
+        else:
+            rows.append(f"  {m['name']}: {c} objects, shape={m.get('shape')}, "
+                        f"dtype={m.get('dtype')}")
+
+    if not counts:
+        return (f"{total_matched} file(s) matched '{pattern}' but none were measurable "
+                f"(not CSV/TIF/PNG, or unreadable). Errors: {errors[:3]}")
+
+    head = "\n".join(rows[:25])
+    more = f"\n  … {len(rows) - 25} more file(s) not listed" if len(rows) > 25 else ""
+
+    report = (
+        f"DELIVERABLE MEASUREMENT — {output_dir}  (pattern: '{pattern}')\n"
+        f"files matched: {total_matched}   kinds: {sorted(kinds)}"
+        f"{('   dtypes: ' + str(sorted(dtypes))) if dtypes else ''}\n"
+        f"{note}\n"
+        f"PER FILE:\n{head}{more}\n\n"
+        f"AGGREGATE (objects per file): {_fmt_stats(counts)}\n"
+    )
+    if errors:
+        report += f"UNREADABLE: {len(errors)} file(s) — {errors[:3]}\n"
+
+    numeric = sorted(c for c in counts if c is not None)
+    if not numeric:
+        return report + "\nPLAUSIBILITY VERDICT: NOT APPLICABLE (no countable content)."
+
+    n = len(numeric)
+    median = numeric[n // 2] if n % 2 else (numeric[n // 2 - 1] + numeric[n // 2]) / 2
+    empties = sum(1 for c in numeric if c == 0)
+
+    report += "\nPLAUSIBILITY VERDICT: "
+    if expected_per_file and expected_per_file > 0:
+        ratio = (median / expected_per_file) if expected_per_file else 0.0
+        if ratio == 0:
+            report += (f"FAIL — every file is empty, but ~{expected_per_file:g} objects "
+                       f"per file were expected.")
+        elif ratio < 0.1:
+            report += (f"FAIL — median {median} per file vs ~{expected_per_file:g} expected: "
+                       f"{1 / ratio:.0f}x TOO FEW. This is an order-of-magnitude miss, not "
+                       f"noise. Report it as a critical failure and set success=false.")
+        elif ratio > 10:
+            report += (f"FAIL — median {median} per file vs ~{expected_per_file:g} expected: "
+                       f"{ratio:.0f}x TOO MANY. Likely over-segmentation or noise counted as "
+                       f"objects. Report it as a critical failure and set success=false.")
+        else:
+            report += (f"PASS — median {median} per file is within an order of magnitude of "
+                       f"the ~{expected_per_file:g} expected.")
+    else:
+        # Most real requests never state a number — across the five benchmark tasks only
+        # one did. A gate that only works with an explicit expectation would therefore be
+        # inert on 4 of 5 real jobs, so these two checks run regardless.
+        skew = (numeric[-1] / median) if median else float("inf")
+        if empties * 2 >= n:
+            report += (f"FAIL — {empties} of {n} files contain ZERO objects. A deliverable "
+                       f"that is mostly empty is wrong regardless of what was expected. "
+                       f"Report it as a critical failure and set success=false.")
+        elif n > 3 and skew > 100:
+            report += (f"SUSPECT — the spread is implausible for one kind of deliverable: "
+                       f"median {median} but max {numeric[-1]} ({skew:.0f}x). The glob "
+                       f"'{pattern}' has most likely matched two different kinds of file "
+                       f"(e.g. per-image results plus a combined summary), so this "
+                       f"measurement — and possibly the deliverable layout — is not what "
+                       f"the user asked for. Re-measure with a narrower pattern before "
+                       f"scoring, and say so in the report.")
+        else:
+            report += ("NO EXPECTATION SUPPLIED — no stated quantity to check against, and "
+                       "no empty-file or skew anomaly detected. If the user's request does "
+                       "state how many objects to expect, call this tool again passing "
+                       "expected_per_file: a result 10x off must not be reported as success.")
+
+    if empties:
+        report += (f"\nEMPTY FILES: {empties} of {n} measured file(s) contain ZERO objects. "
+                   f"Confirm this is genuine and not a silent failure.")
+    return report
+
+
 def run_python_code(code: str, output_directory: str, purpose: str = ""):
 
     """
