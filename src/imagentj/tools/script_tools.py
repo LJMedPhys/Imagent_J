@@ -1067,7 +1067,17 @@ def _batch_env() -> dict:
     # fails only that script, and the app carries on; a container OOM kills the whole
     # app — the exact outcome running batch work out-of-process is meant to prevent.
     # Raise IMAGENTJ_BATCH_HEAP (and the container limit) for memory-hungry batches.
-    env["IMAGENTJ_JVM_HEAP"] = os.environ.get("IMAGENTJ_BATCH_HEAP", "2g")
+    #
+    # Derived rather than fixed: a flat 2g is right under docker-compose's 8 GB cap
+    # and badly wrong on an uncapped HPC node, where a reported run had 188-250 GB
+    # yet still fused a 4-channel 8x8 mosaic in 2g and died with OutOfMemoryError.
+    # A quarter of what is available leaves the app's half plus headroom.
+    if os.environ.get("IMAGENTJ_BATCH_HEAP"):
+        env["IMAGENTJ_JVM_HEAP"] = os.environ["IMAGENTJ_BATCH_HEAP"]
+    else:
+        from imagentj.imagej_context import _available_memory_gb
+        limit = _available_memory_gb()
+        env["IMAGENTJ_JVM_HEAP"] = "2g" if not limit else f"{max(2, limit // 4)}g"
     env["IMAGENTJ_WATCHDOG"] = "0"      # the parent supervises this run
     env["PYTHONUNBUFFERED"] = "1"       # so the watchdog sees progress promptly
     src_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -1586,6 +1596,103 @@ def _check_cellpose_model_name(code: str) -> Optional[str]:
     return None
 
 
+_IJ_OPEN_RE = re.compile(r"\bIJ\s*\.\s*open(?:Image)?\s*\(")
+# Formats HandleExtraFileTypes hands to Bio-Formats. `.ome.tif` is listed first
+# because its suffix is plain `.tif`, so an extension check alone misses it.
+_BIOFORMATS_EXT_RE = re.compile(
+    r"\.(?:ome\.tiff?|lif|czi|nd2|lsm|oib|oif|ims|vsi|scn|svs|ndpi|dv|zvi|ipl|seq|stk|flex|mvd2|cif)\b",
+    re.IGNORECASE,
+)
+
+
+def _check_bioformats_dialog_open(code: str) -> Optional[str]:
+    """Static guard: reject a Groovy script that opens a Bio-Formats format via
+    IJ.open/IJ.openImage.
+
+    That dispatch takes Bio-Formats' *prompting* path and builds a modal importer
+    dialog. Under Xvfb it cannot be answered and dialog construction throws
+    `no ComponentUI class for: javax.swing.JSeparator`; the import retries forever.
+
+    Only fires when the script BOTH calls IJ.open* AND mentions a Bio-Formats
+    extension in a string, so plain .tif/.png work stays untouched.
+    """
+    if not _IJ_OPEN_RE.search(code):
+        return None
+    # Ignore lines that are writing a Bio-Formats-named file rather than opening
+    # one — a script may legitimately save "out.ome.tif" while opening a plain .tif,
+    # and blocking that would be a false positive.
+    readable = "\n".join(
+        line for line in code.splitlines()
+        if not re.search(r"\b(?:saveAs|save|write|export|Writer)\b", line, re.IGNORECASE)
+    )
+    m = _BIOFORMATS_EXT_RE.search(readable)
+    if not m:
+        return None
+    ext = m.group(0)
+    return (
+        f"SUMMARY: ERROR — '{ext}' must not be opened with IJ.open/IJ.openImage\n"
+        "STATUS: ERROR\n"
+        "LANGUAGE: Groovy\n"
+        "PRE-FLIGHT CHECK FAILED (script never executed):\n"
+        f"`{ext}` is a Bio-Formats format. IJ.open/IJ.openImage dispatch it through "
+        "HandleExtraFileTypes to Bio-Formats' PROMPTING importer, which builds a modal "
+        "dialog. In an unattended run nobody can answer it, and under Xvfb the "
+        "look-and-feel cannot supply UI delegates, so it throws `java.lang.Error: no "
+        "ComponentUI class for: javax.swing.JSeparator` and retries forever — a real run "
+        "lost its entire 7200 s budget this way.\n"
+        "FIX: open it windowless instead —\n"
+        "    import loci.plugins.BF\n"
+        "    import loci.plugins.in.ImporterOptions\n"
+        "    def opts = new ImporterOptions()\n"
+        "    opts.setWindowless(true)   // REQUIRED — skips ImporterPrompter\n"
+        "    opts.setId(path)\n"
+        "    def imp = BF.openImagePlus(opts)[0]\n"
+        "Setting the `bioformats.windowless` IJ preference does NOT work (verified against "
+        "bio-formats_plugins 8.5.0) — only setWindowless(true) does."
+    )
+
+
+_OOM_RE = re.compile(
+    r"java\.lang\.OutOfMemoryError"
+    r"|OutOfMemoryError"
+    r"|GC overhead limit exceeded"
+    r"|numpy\.core\._exceptions\._ArrayMemoryError"
+    r"|\bMemoryError\b"
+    r"|Unable to allocate .* for an array",
+    re.IGNORECASE,
+)
+
+
+def _check_out_of_memory(output: str) -> Optional[str]:
+    """Return a loud, actionable banner if the run ran out of memory, else None.
+
+    Counts occurrences because a heap-exhausted JVM typically emits many, and a
+    high count is the clearest signal that nothing after the first one is
+    trustworthy.
+    """
+    if not output:
+        return None
+    hits = _OOM_RE.findall(output)
+    if not hits:
+        return None
+    heap = os.environ.get("IMAGENTJ_BATCH_HEAP") or os.environ.get("IMAGENTJ_JVM_HEAP") or "the default"
+    return (
+        "SUMMARY: ERROR — the run exhausted available memory "
+        f"({len(hits)} out-of-memory error(s) in the output)\n"
+        "STATUS: ERROR\n"
+        "OUT OF MEMORY — treat every result below as UNRELIABLE.\n"
+        "The process ran out of heap. Output produced after the first occurrence is "
+        "partial or missing, and an OutOfMemoryError does NOT always stop the script or "
+        "produce a normal traceback, so a run can look like it merely 'finished quietly'.\n"
+        f"Current batch heap: {heap}.\n"
+        "FIX — do NOT simply re-run unchanged. Either:\n"
+        "  1. Process fewer images / a smaller region / fewer slices per run, or tile the work;\n"
+        "  2. Avoid holding whole volumes in memory — stream or process plane-by-plane;\n"
+        "  3. If the machine genuinely has the memory, raise IMAGENTJ_BATCH_HEAP "
+        "(and IMAGENTJ_JVM_HEAP for the main app) and retry."
+    )
+
+
 @tool("execute_script")
 def execute_script(directory: str, filename: str) -> str:
     """
@@ -1621,7 +1728,8 @@ def execute_script(directory: str, filename: str) -> str:
         code_content = f.read()
 
     if filename.endswith('.groovy'):
-        preflight_error = _check_cellpose_model_name(code_content)
+        preflight_error = (_check_cellpose_model_name(code_content)
+                           or _check_bioformats_dialog_open(code_content))
         if preflight_error:
             return preflight_error
 
@@ -1638,6 +1746,16 @@ def execute_script(directory: str, filename: str) -> str:
         output = run_script_safe(language="groovy", code=code_content, purpose=purpose)
     else:
         return f"Error: File extension of {filename} is not supported for execution."
+
+    # An out-of-memory death is not self-announcing. The JVM throws
+    # OutOfMemoryError from its UncaughtExceptionHandler and the script simply
+    # stops producing output — no traceback in the usual place, no non-zero exit
+    # the caller checks. In a reported run the agent read straight past 37 of them,
+    # carried on issuing RAG searches, wrote nothing further, and sat idle for 113
+    # minutes until the wall clock. Name it explicitly so the model can react.
+    oom_note = _check_out_of_memory(output)
+    if oom_note:
+        output = oom_note + "\n\n--- original output ---\n" + output
 
     # On a verified-green run, hand the result to the background Librarian: it files
     # the reusable recipe and/or the debugger's buffered error->fix lesson, dedups,

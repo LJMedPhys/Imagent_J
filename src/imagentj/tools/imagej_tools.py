@@ -7,7 +7,7 @@ from pathlib import Path
 from langchain.tools import tool
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-from imagentj.imagej_context import get_ij
+from imagentj.imagej_context import get_ij, needs_bioformats, open_image_windowless
 from .metadata_tools import extract_file_metadata
 
 _SKILLS_DIR = Path(os.environ.get("SKILLS_DIR", "/app/skills"))
@@ -191,7 +191,15 @@ def show_in_imagej_gui(path: str) -> str:
         get_ij()  # ensure JVM/Fiji is up
         from scyjava import jimport
         IJ = jimport('ij.IJ')
-        IJ.open(abs_path)
+        # Bio-Formats formats must NOT go through IJ.open: that builds a modal
+        # importer dialog which hangs/throws under Xvfb (see imagej_context).
+        if needs_bioformats(abs_path):
+            imps = open_image_windowless(abs_path, show=True)
+            if not imps:
+                return (f"Could not open file in ImageJ GUI ({abs_path}): "
+                        "Bio-Formats returned no image.")
+        else:
+            IJ.open(abs_path)
     except Exception as e:
         return f"Could not open file in ImageJ GUI ({abs_path}): {e!s}"
 

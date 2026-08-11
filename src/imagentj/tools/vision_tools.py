@@ -30,6 +30,8 @@ from PIL import Image, ImageDraw, ImageFont
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 
+from imagentj.imagej_context import needs_bioformats, open_image_windowless
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 _log = logging.getLogger(__name__)
@@ -53,22 +55,33 @@ _fiji_open_pool = concurrent.futures.ThreadPoolExecutor(
 )
 
 
-def _ij_open_blocking(IJ, path: str) -> None:
-    """Call ``IJ.open`` from a pool thread.
+def _attach_to_jvm() -> None:
+    """Attach the calling thread to the JVM.
 
     Any thread that touches the JVM must be attached to it first — a pool worker
     is created outside PyImageJ's knowledge, so without this the call raises
     instead of opening. Mirrors the attach done in gui_runner and the benchmark
     dialog dismisser.
+
+    Kept separate from _ij_open_blocking because the Bio-Formats route
+    (open_image_windowless) runs on the same pool threads and jimports its own
+    Java classes, so it needs the identical attach — folding this into only the
+    IJ.open path would leave that route raising on the very formats it exists to
+    handle.
     """
     try:
         import jpype
         if jpype.isJVMStarted() and not jpype.isThreadAttachedToJVM():
             jpype.attachThreadToJVM()
     except Exception:
-        # No jpype, or already attached under a different binding — the open
+        # No jpype, or already attached under a different binding — the caller
         # below will surface any real problem.
         _log.debug("Could not attach pool thread to the JVM", exc_info=True)
+
+
+def _ij_open_blocking(IJ, path: str) -> None:
+    """Call ``IJ.open`` from a pool thread."""
+    _attach_to_jvm()
     IJ.open(path)
 
 _CAPTURE_DIR = Path(os.environ.get("CHAT_DATA_PATH", "/app/data/chats")) / "vlm_captures"
@@ -297,17 +310,32 @@ def capture_image_file_via_fiji(image_path: str) -> str:
 
     try:
         # IJ.open follows Fiji's normal opener/plugin dispatch. In a Fiji
-        # installation this includes Bio-Formats for its registered formats.
+        # installation this includes Bio-Formats for its registered formats —
+        # but for those it takes the PROMPTING path, building a modal importer
+        # dialog that cannot be answered under Xvfb and throws/retries forever
+        # (see imagej_context.open_image_windowless). Route those around it.
         #
-        # Run it on a worker with a deadline. The call itself is NOT cancellable
-        # — once the JVM blocks, that thread is gone for the life of the process
-        # — so on timeout we abandon it (bounded pool, so leakage is capped) and
-        # return an error. Skipping one visual check is a far better outcome than
-        # freezing the agent that requested it.
+        # Both routes still run on a worker with a deadline. Avoiding the modal
+        # dialog removes the KNOWN cause of a wedged open; the deadline covers
+        # the rest (an unexpected reader, a slow mount, a format Bio-Formats
+        # chokes on). Neither call is cancellable — once the JVM blocks, that
+        # thread is gone for the life of the process — so on timeout we abandon
+        # it (bounded pool, so leakage is capped) and return an error. Skipping
+        # one visual check is far better than freezing the agent that asked.
+        resolved = str(source.resolve())
+
+        def _open() -> None:
+            if needs_bioformats(resolved):
+                _attach_to_jvm()          # BF.openImagePlus jimports on this thread
+                if not open_image_windowless(resolved, show=True):
+                    raise RuntimeError(
+                        f"Bio-Formats returned no image for '{source}'."
+                    )
+            else:
+                _ij_open_blocking(IJ, resolved)
+
         try:
-            _fiji_open_pool.submit(
-                _ij_open_blocking, IJ, str(source.resolve())
-            ).result(timeout=_FIJI_OPEN_TIMEOUT_S)
+            _fiji_open_pool.submit(_open).result(timeout=_FIJI_OPEN_TIMEOUT_S)
         except concurrent.futures.TimeoutError:
             _log.warning("Fiji open timed out after %.0fs: %s",
                          _FIJI_OPEN_TIMEOUT_S, source)
@@ -317,6 +345,8 @@ def capture_image_file_via_fiji(image_path: str) -> str:
                 "waiting on an import dialog or the format may be unsupported. "
                 "Skip the visual check for this source, or pass a PNG/JPG preview."
             )
+        except RuntimeError as exc:
+            return f"ERROR: {exc}"
         new_ids = _image_window_ids(WindowManager) - before_ids
         if not new_ids:
             return (
