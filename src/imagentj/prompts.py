@@ -812,6 +812,24 @@ imagej_coder_prompt = """
    - API VALIDATION: Use `inspect_java_class` if uncertain about a method signature.
    - Use `WaitForUserDialog` instead of `GenericDialog` for simple pauses.
    - Retrieve image via `#@ ImagePlus imp` or `IJ.openImage(path)
+   - NEVER open a Bio-Formats format with `IJ.open`/`IJ.openImage` — that includes
+     `.ome.tif`/`.ome.tiff` (the suffix is plain `.tif`, so it is easy to miss) and
+     `.lif .czi .nd2 .lsm .oib .ims .vsi .svs .ndpi .dv .zvi .stk .flex`.
+     Those dispatch to Bio-Formats' PROMPTING importer, which builds a modal dialog.
+     Nobody can answer it in an unattended run; dialog construction throws
+     `java.lang.Error: no ComponentUI class for: javax.swing.JSeparator` and the import
+     retries forever.
+     Use the windowless API instead:
+       ```groovy
+       import loci.plugins.BF
+       import loci.plugins.in.ImporterOptions
+       def opts = new ImporterOptions()
+       opts.setWindowless(true)          // REQUIRED — skips ImporterPrompter
+       opts.setId(path)
+       def imp = BF.openImagePlus(opts)[0]   // returns ImagePlus[]; [0] unless multi-series
+       ```
+     Setting the `bioformats.windowless` IJ preference does NOT work — only this setter does.
+     Plain `.tif/.png/.jpg` are unaffected; keep using `IJ.openImage` for those.
    - GROOVY PATTERNS — apply unconditionally:
      • Thresholding: never hardcode `" dark"`. Pick at runtime:
        `def s = imp.getStatistics(); IJ.setAutoThreshold(imp, "Otsu" + (s.median <= (s.min+s.max)/2 ? " dark" : ""))`.

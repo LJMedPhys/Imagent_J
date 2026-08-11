@@ -28,6 +28,8 @@ from PIL import Image, ImageDraw, ImageFont
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 
+from imagentj.imagej_context import needs_bioformats, open_image_windowless
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 _MAX_PX          = 1024   # longest side cap applied to the final compilation
@@ -258,8 +260,16 @@ def capture_image_file_via_fiji(image_path: str) -> str:
 
     try:
         # IJ.open follows Fiji's normal opener/plugin dispatch. In a Fiji
-        # installation this includes Bio-Formats for its registered formats.
-        IJ.open(str(source.resolve()))
+        # installation this includes Bio-Formats for its registered formats —
+        # but for those it takes the PROMPTING path, building a modal importer
+        # dialog that cannot be answered under Xvfb and throws/retries forever
+        # (see imagej_context.open_image_windowless). Route those around it.
+        resolved = str(source.resolve())
+        if needs_bioformats(resolved):
+            if not open_image_windowless(resolved, show=True):
+                return (f"ERROR: Bio-Formats returned no image for '{source}'.")
+        else:
+            IJ.open(resolved)
         new_ids = _image_window_ids(WindowManager) - before_ids
         if not new_ids:
             return (
