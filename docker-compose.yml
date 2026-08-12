@@ -14,6 +14,12 @@ services:
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPEN_ROUTER_API_KEY=${OPEN_ROUTER_API_KEY:-}
+      # Local OpenAI-compatible LLM (e.g. Kimi K3 via vLLM/SGLang). When set,
+      # this endpoint takes priority over the two cloud providers above.
+      - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-}
+      - LOCAL_LLM_API_KEY=${LOCAL_LLM_API_KEY:-}
+      - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-}
+      - LOCAL_LLM_API=${LOCAL_LLM_API:-}
       - FIJI_PATH=/opt/Fiji.app
       - QDRANT_DATA_PATH=/app/qdrant_data
       # ── Generic MCP host: in-container napari-mcp stdio server ────────────
@@ -80,6 +86,11 @@ services:
 
     networks:
       - imagent_net
+
+    # Lets a container reach a Kimi server bound on the Docker host on Linux;
+    # Docker Desktop already provides this name and accepts the same mapping.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
     # ── Resource limits ────────────────────────────────────────────────────
     deploy:

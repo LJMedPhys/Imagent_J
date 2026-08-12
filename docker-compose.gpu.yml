@@ -30,9 +30,10 @@ services:
       resources:
         reservations:
           devices:
-            # CDI device request. To scope to specific GPUs on a shared node, replace
-            # 'nvidia.com/gpu=all' with e.g. 'nvidia.com/gpu=0' (see `nvidia-ctk cdi list`).
+            # CDI device request. Scope a shared node with, for example,
+            # IMAGENTJ_GPU_DEVICE=nvidia.com/gpu=2; the default preserves the
+            # previous all-GPU behaviour for standalone workstations.
             - driver: cdi
               device_ids:
-                - nvidia.com/gpu=all
+                - ${IMAGENTJ_GPU_DEVICE:-nvidia.com/gpu=all}
               capabilities: [gpu]

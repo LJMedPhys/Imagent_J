@@ -434,6 +434,13 @@ esac
 if [ "$UNATTENDED" = "1" ]; then
     echo "[entrypoint] Unattended mode — skipping x11vnc + noVNC (Xvfb + fluxbox only; ports 5900/6080 not bound)"
 else
+    NOVNC_PORT="${NOVNC_PORT:-6080}"
+    if ! [[ "$NOVNC_PORT" =~ ^[0-9]+$ ]] \
+       || (( 10#$NOVNC_PORT < 1 || 10#$NOVNC_PORT > 65535 )); then
+        echo "[entrypoint] ERROR: NOVNC_PORT must be an integer from 1 to 65535 (got '$NOVNC_PORT')" >&2
+        exit 1
+    fi
+
     echo "[entrypoint] Starting x11vnc on display :1..."
     if [ -n "$VNC_PASSWORD" ]; then
         mkdir -p /home/imagentj/.vnc
@@ -447,11 +454,11 @@ else
     sleep 1
 
     # ── Start noVNC websocket proxy ──────────────────────────────────────────
-    echo "[entrypoint] Starting noVNC on port 6080..."
-    websockify --web /usr/share/novnc 6080 localhost:5900 &
+    echo "[entrypoint] Starting noVNC on port ${NOVNC_PORT}..."
+    websockify --web /usr/share/novnc "$NOVNC_PORT" localhost:5900 &
     sleep 1
 
-    echo "[entrypoint] noVNC is listening on http://localhost:6080"
+    echo "[entrypoint] noVNC is listening on http://localhost:${NOVNC_PORT}"
 fi
 
 # ── Ensure langgraph-checkpoint-sqlite is installed (needed for chat persistence) ──
@@ -482,7 +489,7 @@ if [ -f "$API_KEYS_FILE" ]; then
 fi
 
 # ── Run setup wizard if no key is configured ────────────────────────────────
-if [ -z "$OPENAI_API_KEY" ] && [ -z "$OPEN_ROUTER_API_KEY" ]; then
+if [ -z "$LOCAL_LLM_BASE_URL" ] && [ -z "$OPENAI_API_KEY" ] && [ -z "$OPEN_ROUTER_API_KEY" ]; then
     echo "[entrypoint] No API key found — launching setup wizard on display :1"
     python /app/setup_wizard.py || true
 
@@ -493,9 +500,9 @@ if [ -z "$OPENAI_API_KEY" ] && [ -z "$OPEN_ROUTER_API_KEY" ]; then
 fi
 
 # ── Final key check (warn, never block) ─────────────────────────────────────
-if [ -z "$OPENAI_API_KEY" ] && [ -z "$OPEN_ROUTER_API_KEY" ]; then
-    echo "[entrypoint] WARNING: No API key is set. The agent will not work."
-    echo "[entrypoint]          Set OPENAI_API_KEY or OPEN_ROUTER_API_KEY in .env, or"
+if [ -z "$LOCAL_LLM_BASE_URL" ] && [ -z "$OPENAI_API_KEY" ] && [ -z "$OPEN_ROUTER_API_KEY" ]; then
+    echo "[entrypoint] WARNING: No LLM provider is configured. The agent will not work."
+    echo "[entrypoint]          Set LOCAL_LLM_BASE_URL, OPENAI_API_KEY, or OPEN_ROUTER_API_KEY in .env, or"
     echo "[entrypoint]          place 'export OPENAI_API_KEY=...' in /home/imagentj/api_keys.env"
 fi
 
