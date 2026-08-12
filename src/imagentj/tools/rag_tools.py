@@ -17,7 +17,10 @@ __all__ = ["rag_retrieve_docs"]
 
 openrouter_key = os.getenv("OPEN_ROUTER_API_KEY")
 openai_key = os.getenv("OPENAI_API_KEY")
-if openrouter_key:
+local_llm_base_url = os.getenv("LOCAL_LLM_BASE_URL", "").strip()
+if local_llm_base_url:
+    _api_key, _base_url, _model = "local", local_llm_base_url, "moonshotai/Kimi-K3"
+elif openrouter_key:
     _api_key, _base_url, _model = openrouter_key, "https://openrouter.ai/api/v1", "openai/gpt-4o-mini"
 elif openai_key:
     _api_key, _base_url, _model = openai_key, None, "gpt-4o-mini"
@@ -29,9 +32,15 @@ def get_expanded_queries(query: str) -> list[str]:
     """Generate 3-4 query variations to improve documentation recall."""
     if _api_key is None:
         return [query]
-    from ..agents import shared_tracker
-    llm = ChatOpenAI(model=_model, api_key=_api_key, base_url=_base_url,
-                     temperature=0., callbacks=[shared_tracker])
+    if local_llm_base_url:
+        # Reuse the Kimi-aware client so reasoning_content survives any internal
+        # tool/message round trips and the role's configured effort is respected.
+        from ..agents import llm_nano
+        llm = llm_nano
+    else:
+        from ..agents import shared_tracker
+        llm = ChatOpenAI(model=_model, api_key=_api_key, base_url=_base_url,
+                         temperature=0., callbacks=[shared_tracker])
     prompt = ChatPromptTemplate.from_template(
         "You are an ImageJ/Fiji expert. Generate 3 search query variations for: {question}\n"
         "Focus on technical API terms, alternative function names, and common library methods.\n"

@@ -6,19 +6,36 @@ from config.rag_config import (
 # learning memory (pitfalls + recipes) is file-based in learned_memory.py.
 vec_store_docs = None
 _rag_initialized = False
+_sparse_rag_available = False
 
 
 def _try_init_vector_stores():
     """Attempt to initialize the docs vector store. Returns silently if RAG deps are unavailable."""
-    global vec_store_docs, _rag_initialized
+    global vec_store_docs, _rag_initialized, _sparse_rag_available
     if _rag_initialized:
         return
     _rag_initialized = True
     try:
-        from ..rag.RAG import init_vector_store
         from ..qdrant_client_singleton import get_qdrant_client
         client = get_qdrant_client(path=QDRANT_DATA_PATH)
-        vec_store_docs = init_vector_store(collection_name=DOCS_COLLECTION_NAME, client=client)
+        # Local Kimi runs have no text-embedding-3-large endpoint.  The
+        # shipped collection still has a complete sparse BM25 index, and the
+        # search path knows how to use it without constructing a hybrid store.
+        import os
+        local_provider = bool(os.getenv("LOCAL_LLM_BASE_URL"))
+        if local_provider:
+            if not client.collection_exists(collection_name=DOCS_COLLECTION_NAME):
+                raise RuntimeError(f"Qdrant collection {DOCS_COLLECTION_NAME!r} is missing")
+            # Keep the writable vector-store object unset: smart_file_reader
+            # must not try to ingest new documents without a compatible dense
+            # embedding model. Static documentation retrieval still works.
+            vec_store_docs = None
+            _sparse_rag_available = True
+        else:
+            from ..rag.RAG import init_vector_store
+            vec_store_docs = init_vector_store(
+                collection_name=DOCS_COLLECTION_NAME, client=client
+            )
         print("RAG system initialized successfully.")
     except Exception as e:
         print(f"RAG system unavailable (running without RAG): {e}")
@@ -58,7 +75,7 @@ def get_vec_store_docs():
 def is_rag_available():
     """Check if the documentation RAG is available."""
     _try_init_vector_stores()
-    return vec_store_docs is not None
+    return vec_store_docs is not None or _sparse_rag_available
 
 
 def is_plugin_db_available():
@@ -73,6 +90,7 @@ def is_plugin_db_available():
 
 def reset_vector_stores_for_test(docs=None):
     """Reset the lazy-init globals; tests use this to inject an in-memory store."""
-    global vec_store_docs, _rag_initialized
+    global vec_store_docs, _rag_initialized, _sparse_rag_available
     vec_store_docs = docs
     _rag_initialized = True
+    _sparse_rag_available = False
