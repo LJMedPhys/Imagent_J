@@ -75,6 +75,15 @@ The UI remains at <http://localhost:6081/vnc.html>. If Kimi instead listens on
 `0.0.0.0:18000`, normal `docker compose up` also works by setting
 `LOCAL_LLM_BASE_URL=http://host.docker.internal:18000/v1`.
 
+The benchmark adapter uses an isolated bridge network rather than the
+host-network override. In benchmark mode Agentic-J rewrites a loopback
+`LOCAL_LLM_BASE_URL` to `host.docker.internal` automatically. The endpoint must
+therefore be reachable on the host's Docker gateway address (for example, a
+server bound to `0.0.0.0` or a deliberately configured host-side relay). An SSH
+forward listening only on host `127.0.0.1` is not gateway-reachable; keep it
+private and relay only onto the Docker bridge interface instead of exposing an
+unauthenticated model port to the wider network.
+
 Place images you want to analyse in [`./data/`](data/) — the agent sees them at `/app/data` inside the container.
 
 > **Verifying LFS worked:** after cloning, check that `qdrant_data/collection/BioimageAnalysisDocs/storage.sqlite` is several MB, not a ~130-byte text file starting with `version https://git-lfs.github.com/...`. If it's a stub, run `git lfs install && git lfs pull`.

@@ -63,6 +63,7 @@ from .tools.learned_memory import (
 from imagentj.tracker import UsageMetrics, MetricsSignalBridge, UsageTrackerCallback
 from imagentj.kimi_chat import KimiChatOpenAI
 from imagentj.artifact_validation import validate_script_artifact
+from imagentj.provider_errors import is_transient_provider_error
 
 
 # ---------------------------------------------------------------------------
@@ -809,6 +810,19 @@ def _run_capped(agent, payload, on_cap):
                   "handoff so the rest of the run survives.",
                   "subagent", type(exc).__name__, exc)
         return on_cap()
+    except Exception as exc:
+        # The model client has already exhausted its in-place retries when a
+        # transport exception reaches this boundary. It invalidates one
+        # specialist call, not the whole supervisor session. Return the same
+        # artifact-aware fallback used for bounded/parse failures.
+        if is_transient_provider_error(exc):
+            log.error(
+                "[imagentj][provider] %s in subagent after client retries; "
+                "degrading to a structured handoff so the session survives: %s",
+                type(exc).__name__, exc,
+            )
+            return on_cap()
+        raise
 
 
 @tool

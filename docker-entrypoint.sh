@@ -488,6 +488,26 @@ if [ -f "$API_KEYS_FILE" ]; then
     . "$API_KEYS_FILE"
 fi
 
+# The benchmark adapter launches a bridge-network container even when a local
+# LLM deployment normally uses docker-compose.local-kimi.yml (host networking).
+# In that bridge, 127.0.0.1/localhost names the container rather than the Docker
+# host and the first model request fails.  docker-compose.yml already installs
+# the portable host-gateway alias, so translate only loopback local-LLM URLs in
+# benchmark mode.  Normal host-network sessions keep their original URL.
+case "$(printf '%s' "${BENCHMARK_MODE:-}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on)
+        if [ -n "${LOCAL_LLM_BASE_URL:-}" ]; then
+            _ORIGINAL_LOCAL_LLM_BASE_URL="$LOCAL_LLM_BASE_URL"
+            LOCAL_LLM_BASE_URL=$(python3 /app/src/imagentj/runtime_network.py "$LOCAL_LLM_BASE_URL")
+            export LOCAL_LLM_BASE_URL
+            if [ "$LOCAL_LLM_BASE_URL" != "$_ORIGINAL_LOCAL_LLM_BASE_URL" ]; then
+                echo "[entrypoint] Benchmark bridge: routing local LLM through host.docker.internal"
+            fi
+            unset _ORIGINAL_LOCAL_LLM_BASE_URL
+        fi
+        ;;
+esac
+
 # ── Run setup wizard if no key is configured ────────────────────────────────
 if [ -z "$LOCAL_LLM_BASE_URL" ] && [ -z "$OPENAI_API_KEY" ] && [ -z "$OPEN_ROUTER_API_KEY" ]; then
     echo "[entrypoint] No API key found — launching setup wizard on display :1"
