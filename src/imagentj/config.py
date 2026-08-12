@@ -73,6 +73,41 @@ def model_for(role: str, default: str) -> str:
     return val if isinstance(val, str) and val.strip() else default
 
 
+def local_model_for(role: str, default: str = "moonshotai/Kimi-K3") -> str:
+    """Return the model id exposed by the local OpenAI-compatible server.
+
+    ``local_llm.models.<role>`` can override individual roles; otherwise all
+    roles share ``local_llm.model``.  This is deliberately separate from the
+    cloud ``models`` mapping so enabling/disabling the local endpoint never
+    requires rewriting the user's OpenAI/OpenRouter choices.
+    """
+    local = _CFG.get("local_llm") if isinstance(_CFG.get("local_llm"), dict) else {}
+    models = local.get("models") if isinstance(local.get("models"), dict) else {}
+    role_val = models.get(role)
+    if isinstance(role_val, str) and role_val.strip():
+        return role_val.strip()
+    common = local.get("model")
+    if isinstance(common, str) and common.strip():
+        return common.strip()
+    return default
+
+
+def local_api(default: str = "responses") -> str:
+    """Return the protocol shared by every role on the local endpoint."""
+    local = _CFG.get("local_llm") if isinstance(_CFG.get("local_llm"), dict) else {}
+    val = local.get("api")
+    return val.strip().lower() if isinstance(val, str) and val.strip() else default
+
+
+def reasoning_for(role: str, default: str) -> str:
+    """Return the configured reasoning effort for an agent role."""
+    reasoning = (
+        _CFG.get("reasoning") if isinstance(_CFG.get("reasoning"), dict) else {}
+    )
+    val = reasoning.get(role)
+    return val.strip() if isinstance(val, str) and val.strip() else default
+
+
 def _agent_flag(name: str, default: bool = False) -> bool:
     agents = _CFG.get("agents") if isinstance(_CFG.get("agents"), dict) else {}
     val = agents.get(name, default)

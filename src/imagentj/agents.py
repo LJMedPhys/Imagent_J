@@ -61,6 +61,8 @@ from .tools.learned_memory import (
     library_add_pitfall, library_add_recipe, library_remove, library_set_core,
 )
 from imagentj.tracker import UsageMetrics, MetricsSignalBridge, UsageTrackerCallback
+from imagentj.kimi_chat import KimiChatOpenAI
+from imagentj.artifact_validation import validate_script_artifact
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +75,31 @@ shared_tracker = UsageTrackerCallback(shared_metrics, shared_bridge)
 
 open_router_key = os.getenv("OPEN_ROUTER_API_KEY")
 openai_key = os.getenv("OPENAI_API_KEY")
+local_llm_base_url = os.getenv("LOCAL_LLM_BASE_URL", "").strip().rstrip("/")
+local_llm_api_key = os.getenv("LOCAL_LLM_API_KEY", "").strip() or "local"
+_LOCAL_API_ALIASES = {
+    "responses": "responses",
+    "openai_responses": "responses",
+    "chat": "chat_completions",
+    "chat_completions": "chat_completions",
+    "openai_chat_completions": "chat_completions",
+}
+
+
+def _normalise_local_api(value: str, variable: str) -> str:
+    if value not in _LOCAL_API_ALIASES:
+        raise ValueError(
+            f"{variable} must be 'responses' or 'chat_completions' "
+            f"(got {value!r})."
+        )
+    return _LOCAL_API_ALIASES[value]
+
+
+local_llm_api = _normalise_local_api(
+    os.getenv("LOCAL_LLM_API", "").strip().lower()
+    or config.local_api("responses"),
+    "LOCAL_LLM_API",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -214,18 +241,31 @@ class VLMHandoff(BaseModel):
 # Models
 # ---------------------------------------------------------------------------
 
-if open_router_key:
+if local_llm_base_url:
+    api_key = local_llm_api_key
+    base_url = local_llm_base_url
+    use_local = True
+    use_openrouter = False
+elif open_router_key:
     api_key = open_router_key
     base_url = "https://openrouter.ai/api/v1"
+    use_local = False
     use_openrouter = True
 elif openai_key:
     api_key = openai_key
     base_url = None
+    use_local = False
     use_openrouter = False
 else:
-    raise RuntimeError("No API key found. Set OPEN_ROUTER_API_KEY or OPENAI_API_KEY.")
+    raise RuntimeError(
+        "No LLM provider found. Set LOCAL_LLM_BASE_URL, OPEN_ROUTER_API_KEY, "
+        "or OPENAI_API_KEY."
+    )
 
-def m(name: str) -> str:
+def m(name: str, role: str) -> str:
+    if use_local:
+        env_model = os.getenv("LOCAL_LLM_MODEL", "").strip()
+        return env_model or config.local_model_for(role, "moonshotai/Kimi-K3")
     if use_openrouter:
         return name
     if name.startswith("openai/"):
@@ -233,7 +273,10 @@ def m(name: str) -> str:
     raise ValueError(f"Model {name} not available on OpenAI direct; needs OpenRouter.")
 
 
-def _agent_reasoning_kwargs(reasoning_effort: Optional[str] = None) -> dict:
+def _agent_reasoning_kwargs(
+    reasoning_effort: Optional[str] = None,
+    local_api: Optional[str] = None,
+) -> dict:
     """Return endpoint-compatible options for tool-using text agents.
 
     OpenRouter currently serves these models through Chat Completions, while in OpenAI api endpoint,
@@ -242,6 +285,16 @@ def _agent_reasoning_kwargs(reasoning_effort: Optional[str] = None) -> dict:
     Refer to: https://community.openai.com/t/gpt-5-6-chat-completion-reasoning-effort-bug-behavior-change/1386454/2
     """
     options = {}
+    if use_local:
+        effective_local_api = local_api or local_llm_api
+        if effective_local_api == "responses":
+            options["use_responses_api"] = True
+            if reasoning_effort is not None:
+                options["reasoning"] = {"effort": reasoning_effort}
+        elif reasoning_effort is not None:
+            options["reasoning_effort"] = reasoning_effort
+        return options
+
     if use_openrouter:
         if reasoning_effort is not None:
             options["reasoning_effort"] = reasoning_effort
@@ -253,54 +306,138 @@ def _agent_reasoning_kwargs(reasoning_effort: Optional[str] = None) -> dict:
     return options
 
 
-llm_supervisor = ChatOpenAI(
-    model=m(config.model_for("supervisor", "openai/gpt-5.4")),
+# Every LLM client gets a read timeout and a retry.
+#
+# Without one, a provider that returns 200 OK headers and then stalls mid-body
+# leaves httpx blocked in `ssl.read()` FOREVER — the socket never errors, so the
+# agent thread simply stops and the whole run wedges with no traceback and no
+# tokens billed. Observed 2026-08-07: all three benchmark containers froze at the
+# same second on a single OpenRouter body-stall and never recovered.
+#
+# The curator and the VLM judge already carried timeouts for exactly this reason;
+# the four clients that do the real work did not. These are deliberately generous
+# — a long reasoning turn on a big context is legitimately slow — but finite.
+#
+# 240 rather than 300, and the 60 s of daylight is the entire point: it must be
+# LESS than agent_watchdog.STALL_SECONDS. At 300 the two raced and the watchdog
+# usually won, which is the bad outcome — a watchdog kill destroys the whole
+# subagent turn and everything it had accumulated, whereas an httpx timeout is
+# retried in place by _LLM_MAX_RETRIES and the turn continues.
+#
+# Nothing legitimate is at risk here. Measured across 419 unambiguously-paired
+# requests in two benchmark runs, the slowest healthy response was 78 s and NOT
+# ONE exceeded 90 s; these responses are non-streaming, so a hung stream delivers
+# no bytes at all and trips the read timeout cleanly. The distribution is bimodal
+# — a request either answers inside ~80 s or never answers at all — so a 240 s
+# deadline can only ever fire on a dead stream. Re-issuing works: all 13 stalls
+# observed so far returned 200 OK on the very next attempt, in 1.4-2.5 s.
+_LLM_TIMEOUT_S = float(os.environ.get("IMAGENTJ_LLM_TIMEOUT", "240"))
+_LLM_MAX_RETRIES = int(os.environ.get("IMAGENTJ_LLM_MAX_RETRIES", "2"))
+
+# ---------------------------------------------------------------------------
+# Thinking budget, and an available-but-unused determinism knob.
+#
+# NOTE on `temperature=0.` below: it is NOT a determinism guarantee on every
+# backend. It is absent from gpt-5.6-luna's supported_parameters on OpenRouter,
+# so that model silently discards it. Do not read it as one.
+#
+# `seed` IS supported on that model and would make sampling reproducible, but it
+# is OFF by default by choice: pinning a seed makes a wrong run reproducibly
+# wrong and hides genuine run-to-run variability that a scientific tool should
+# expose rather than mask. Available via IMAGENTJ_LLM_SEED=<int> for anyone
+# deliberately chasing reproducibility; unset means no seed is sent at all.
+#
+# Both knobs are env-overridable so a run can be A/B'd without touching this file:
+#   IMAGENTJ_LLM_SEED=1234         → opt in to a fixed seed (default: none)
+#   IMAGENTJ_REASONING_EFFORT=high → raise the thinking budget for the roles
+#                                    that make judgement calls
+#
+# gpt-5.6-luna-pro is the SAME model as gpt-5.6-luna served with
+# reasoning.mode=pro, so pinning it to reasoning_effort="low" — as this file did
+# for every role — works against the only thing that distinguishes it.
+_LLM_SEED_RAW = os.environ.get("IMAGENTJ_LLM_SEED", "").strip()
+_LLM_SEED: Optional[int] = int(_LLM_SEED_RAW) if _LLM_SEED_RAW not in ("", "0") else None
+
+def _reasoning_effort(role: str, default: str) -> Optional[str]:
+    """Resolve role-specific effort, with environment overrides for batch runs."""
+    role_env = os.environ.get(f"IMAGENTJ_{role.upper()}_REASONING_EFFORT", "").strip()
+    global_env = os.environ.get("IMAGENTJ_REASONING_EFFORT", "").strip()
+    return role_env or global_env or config.reasoning_for(role, default) or None
+
+
+def _seed_kwargs() -> dict:
+    """`seed` only when explicitly opted into; otherwise send nothing."""
+    return {"seed": _LLM_SEED} if _LLM_SEED is not None else {}
+
+_chat_model_class = (
+    KimiChatOpenAI
+    if use_local and local_llm_api == "chat_completions"
+    else ChatOpenAI
+)
+
+llm_supervisor = _chat_model_class(
+    model=m(config.model_for("supervisor", "openai/gpt-5.4"), "supervisor"),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
-    **_agent_reasoning_kwargs("low"),
+    **_agent_reasoning_kwargs(_reasoning_effort("supervisor", "max")),
+    **_seed_kwargs(),
+    timeout=_LLM_TIMEOUT_S,
+    max_retries=_LLM_MAX_RETRIES,
     verbose=True,
     callbacks=[shared_tracker],
 )
 
-llm_worker = ChatOpenAI(
-    model=m(config.model_for("worker", "openai/gpt-5.3-codex")),
+llm_worker = _chat_model_class(
+    model=m(config.model_for("worker", "openai/gpt-5.3-codex"), "worker"),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
-    **_agent_reasoning_kwargs("low"),
+    **_agent_reasoning_kwargs(_reasoning_effort("worker", "high")),
+    **_seed_kwargs(),
+    timeout=_LLM_TIMEOUT_S,
+    max_retries=_LLM_MAX_RETRIES,
     verbose=True,
     callbacks=[shared_tracker],
 )
 
-llm_analyst = ChatOpenAI(
-    model=m(config.model_for("analyst", "openai/gpt-5.3-codex")),
+llm_analyst = _chat_model_class(
+    model=m(config.model_for("analyst", "openai/gpt-5.3-codex"), "analyst"),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
-    **_agent_reasoning_kwargs("low"),
+    **_agent_reasoning_kwargs(_reasoning_effort("analyst", "high")),
+    **_seed_kwargs(),
+    timeout=_LLM_TIMEOUT_S,
+    max_retries=_LLM_MAX_RETRIES,
     verbose=True,
     callbacks=[shared_tracker],
 )
 
-llm_nano = ChatOpenAI(
-    model=m(config.model_for("nano", "openai/gpt-5.4-nano")),
+llm_nano = _chat_model_class(
+    model=m(config.model_for("nano", "openai/gpt-5.4-nano"), "nano"),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
-    **_agent_reasoning_kwargs(),
+    **_agent_reasoning_kwargs(_reasoning_effort("nano", "high")),
+    **_seed_kwargs(),
+    # Shorter: this backs the watchdogs and the fast path, where a slow call is
+    # worse than no call — a watchdog that hangs supervises nothing.
+    timeout=90,
+    max_retries=_LLM_MAX_RETRIES,
     verbose=True,
     callbacks=[shared_tracker],
 )
 
 # Model behind the background Librarian agent (curates the learned-memory wiki off
 # the hot path) and the gated recall() deep-search fallback. Kept small/cheap.
-llm_curator = ChatOpenAI(
-    model=m(config.model_for("curator", "openai/gpt-5.4-mini")),
+llm_curator = _chat_model_class(
+    model=m(config.model_for("curator", "openai/gpt-5.4-mini"), "curator"),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
-    **_agent_reasoning_kwargs("low"),
+    **_agent_reasoning_kwargs(_reasoning_effort("curator", "high")),
+    **_seed_kwargs(),
     timeout=30,          # never let a stalled call hang the curator thread or
     max_retries=1,       # the (gated) hot-path deep-recall fallback forever
     verbose=True,
@@ -311,12 +448,25 @@ llm_curator = ChatOpenAI(
 # OpenAI-only installation, GPT-5.6 reasoning plus function tools belongs on
 # the Responses API; keeping this explicit avoids Chat Completions'
 # reasoning/tool compatibility limit.
-if open_router_key:
+if use_local:
+    llm_vlm = _chat_model_class(
+        model=m(config.model_for("vlm", "google/gemini-3.5-flash"), "vlm"),
+        api_key=api_key,
+        base_url=base_url,
+        temperature=0.,
+        **_agent_reasoning_kwargs(_reasoning_effort("vlm", "high")),
+        timeout=90,
+        max_retries=1,
+        verbose=True,
+        callbacks=[shared_tracker],
+    )
+elif open_router_key:
     llm_vlm = ChatOpenAI(
         model=config.model_for("vlm", "google/gemini-3.5-flash"),
         api_key=open_router_key,
         base_url="https://openrouter.ai/api/v1",
         temperature=0.,
+        **_agent_reasoning_kwargs(_reasoning_effort("vlm", "high")),
         timeout=90,
         max_retries=1,
         verbose=True,
@@ -334,7 +484,7 @@ elif openai_key:
         model=_vlm_openai,
         api_key=openai_key,
         temperature=0.,
-        **_agent_reasoning_kwargs("high"),
+        **_agent_reasoning_kwargs(_reasoning_effort("vlm", "high")),
         timeout=90,
         max_retries=1,
         verbose=True,
@@ -699,10 +849,16 @@ def imagej_coder(task: str, project_root: str) -> ScriptHandoff:
         path = _newest_script_since(scripts_dir, pre_scripts)
         return _salvage_or_fail_script(path, "The coder")
 
-    return _run_capped(
+    handoff = _run_capped(
         agent,
         {"messages": [{"role": "user", "content": "\n\n".join(s for s in sections if s)}]},
         _on_cap,
+    )
+    return validate_script_artifact(
+        handoff,
+        allowed_directory=scripts_dir,
+        expected_suffix=".groovy",
+        producer="imagej_coder",
     )
 
 
@@ -740,6 +896,17 @@ def imagej_debugger(script_path: str, error_message: str, project_root: str = ""
         {"messages": [{"role": "user", "content": "\n\n".join(s for s in sections if s)}]},
         _on_cap,
     )
+    debugger_scripts_dir = (
+        os.path.join(project_root, "scripts", "imagej")
+        if project_root
+        else os.path.dirname(os.path.abspath(script_path))
+    )
+    handoff = validate_script_artifact(
+        handoff,
+        allowed_directory=debugger_scripts_dir,
+        expected_suffix=".groovy",
+        producer="imagej_debugger",
+    )
 
     # Buffer the lesson for deterministic capture. The debugger CANNOT verify its
     # own fix; execute_script persists this automatically once the supervisor
@@ -747,7 +914,7 @@ def imagej_debugger(script_path: str, error_message: str, project_root: str = ""
     # On a recursion-cap salvage the handoff carries no lesson/working_code, so
     # nothing is recorded — a run that never self-confirmed must not teach.
     try:
-        if handoff.lesson and handoff.working_code:
+        if handoff.success and handoff.lesson and handoff.working_code:
             register_pending_lesson(
                 handoff.script_path,
                 language="Groovy",
@@ -828,13 +995,24 @@ def python_data_analyst(task: str, input_path: str, output_dir: str, project_roo
         {"messages": [{"role": "user", "content": "\n\n".join(s for s in sections if s)}]},
         _on_cap,
     )
+    analyst_scripts_dir = (
+        os.path.join(project_root, "scripts", "python")
+        if project_root
+        else output_dir
+    )
+    handoff = validate_script_artifact(
+        handoff,
+        allowed_directory=analyst_scripts_dir,
+        expected_suffix=".py",
+        producer="python_data_analyst",
+    )
 
     # Deterministic lesson capture for the Python flow, mirroring imagej_debugger.
     # Populated only when this run fixed a failing script; execute_script commits
     # it once the rerun is green. A recursion-cap salvage carries no lesson, so a
     # run that never self-confirmed records nothing.
     try:
-        if handoff.lesson and handoff.working_code:
+        if handoff.success and handoff.lesson and handoff.working_code:
             register_pending_lesson(
                 handoff.script_path,
                 language="Python",
@@ -1025,7 +1203,8 @@ def vlm_judge(
     if _vlm_agent is None:
         return _vlm_failure(
             pipeline_step,
-            "VLM judge requires OPENAI_API_KEY or OPEN_ROUTER_API_KEY.",
+            "VLM judge requires LOCAL_LLM_BASE_URL, OPENAI_API_KEY, or "
+            "OPEN_ROUTER_API_KEY.",
         )
 
     sources = list(image_source) if isinstance(image_source, list) else [image_source]

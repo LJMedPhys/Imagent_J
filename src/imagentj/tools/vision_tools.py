@@ -126,7 +126,11 @@ def _call_vision_api(image_b64: str, question: str) -> str:
     if _llm is None:
         return "ERROR: vision LLM not initialised. Call set_vision_llm() first."
     msg = HumanMessage(content=[
-        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
+        {"type": "image_url", "image_url": {
+            "url": f"data:image/png;base64,{image_b64}",
+            # The local Kimi Responses schema requires this field explicitly.
+            "detail": "high",
+        }},
         {"type": "text", "text": question},
     ])
     try:

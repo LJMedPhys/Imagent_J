@@ -502,9 +502,13 @@ class UsageTrackerCallback(BaseCallbackHandler):
          # [{"tool": str, "status": "ok"|"error"|"soft_error", "detail": str|None, "code_preview": str|None}]
 
         self._user_feedback: str = ""
+        self._is_local_provider = bool(os.environ.get("LOCAL_LLM_BASE_URL"))
 
         # ── OpenRouter session-level cost tracking (only when key is set) ──
-        or_key = os.environ.get("OPEN_ROUTER_API_KEY", "")
+        or_key = (
+            "" if os.environ.get("LOCAL_LLM_BASE_URL")
+            else os.environ.get("OPEN_ROUTER_API_KEY", "")
+        )
         self._or_fetcher: _OpenRouterCostFetcher | None = (
             _OpenRouterCostFetcher(or_key) if or_key else None
         )
@@ -514,7 +518,10 @@ class UsageTrackerCallback(BaseCallbackHandler):
         self._or_lock = threading.Lock()
 
         # ── OpenRouter session-level cost tracking (only when key is set) ──
-        or_key = os.environ.get("OPEN_ROUTER_API_KEY", "")
+        or_key = (
+            "" if os.environ.get("LOCAL_LLM_BASE_URL")
+            else os.environ.get("OPEN_ROUTER_API_KEY", "")
+        )
         self._or_fetcher: _OpenRouterCostFetcher | None = (
             _OpenRouterCostFetcher(or_key) if or_key else None
         )
@@ -858,7 +865,7 @@ class UsageTrackerCallback(BaseCallbackHandler):
             with self._m._lock:
                 self._m.input_tokens  += added_in
                 self._m.output_tokens += added_out
-                if not self._or_fetcher:
+                if not self._or_fetcher and not self._is_local_provider:
                     # Estimated cost — only applied when OR key is not set
                     p_in, p_out, cache_factor = _price_for_model(model)
                     non_cached = added_in - cached_in
@@ -874,7 +881,7 @@ class UsageTrackerCallback(BaseCallbackHandler):
             )
             entry["input_tokens"]  += added_in
             entry["output_tokens"] += added_out
-            if not self._or_fetcher:
+            if not self._or_fetcher and not self._is_local_provider:
                 entry["cost_usd"] = round(entry["cost_usd"] + cost, 6)
 
             self._emit()
