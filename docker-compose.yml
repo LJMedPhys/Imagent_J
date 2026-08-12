@@ -113,5 +113,7 @@ networks:
     ipam:
       driver: default
       config:
-        # Using 10.10.10.0/24 is usually safe from 172.x conflicts
-        - subnet: 10.10.10.0/24
+        # 10.10.10.0/24 is usually safe from 172.x conflicts. Benchmark adapters run
+        # many parallel containers against this checkout and must each get a
+        # distinct /24: they override IMAGENTJ_SUBNET per run.
+        - subnet: ${IMAGENTJ_SUBNET:-10.10.10.0/24}

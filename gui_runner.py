@@ -31,7 +31,11 @@ import imagentj.stop_signal as stop_signal
 from imagentj import run_control
 from imagentj import watchdog
 
-from imagentj.benchmark_gui_hooks import is_benchmark_mode, setup_benchmark_gui
+from imagentj.benchmark_gui_hooks import (
+    is_benchmark_mode,
+    record_benchmark_failure,
+    setup_benchmark_gui,
+)
 
 logging.basicConfig(
     filename="/app/data/agentic-j_debug.log",
@@ -1250,6 +1254,12 @@ class ImageJAgentGUI(QWidget):
             return
         self._agent_had_error    = True
         self._last_agent_error   = msg
+        # In benchmark mode a mid-run agent crash (e.g. an LLMClientParseError
+        # inside the supervisor graph) must leave evidence: the adapter polls
+        # for result.json and otherwise reads "container exited, no sentinel"
+        # as a confused finish. Belt-and-braces — the auto-finish hook is still
+        # the primary path; record_benchmark_failure never clobbers its file.
+        record_benchmark_failure(msg)
         self.chat_scroll.add_message('error', f"Agent error:\n{msg}")
         self.status_label.setText("Error")
         self.status_label.setStyleSheet("color: red;")

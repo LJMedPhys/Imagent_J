@@ -22,6 +22,30 @@ def _try_init_vector_stores():
         print("RAG system initialized successfully.")
     except Exception as e:
         print(f"RAG system unavailable (running without RAG): {e}")
+        # The Qdrant stores are tracked with Git-LFS in this repository. When
+        # they appear on disk as tiny Git-LFS pointer stubs instead of real
+        # SQLite files, surface an actionable hint (this is what actually kills
+        # RAG on a fresh checkout, not an actual dependency problem).
+        store_hint = ""
+        try:
+            import pathlib
+            root = pathlib.Path(QDRANT_DATA_PATH).parent
+            for stub in root.rglob("storage.sqlite"):
+                try:
+                    if stub.stat().st_size < 4096 and stub.read_text(errors="ignore").startswith("version https://git-lfs"):
+                        store_hint = (
+                            f" Note: {stub} is an unfetched Git-LFS pointer stub "
+                            "(contains an 'oid sha256:' line, not a database). "
+                            "Enable git-lfs (`git lfs pull`) or restore the Qdrant "
+                            "snapshot to re-enable documentation RAG."
+                        )
+                        break
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        if store_hint:
+            print(store_hint)
         vec_store_docs = None
 
 

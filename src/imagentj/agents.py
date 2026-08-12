@@ -1,3 +1,5 @@
+import json
+import logging
 import os
 import sqlite3
 from typing import Literal, Optional
@@ -18,8 +20,10 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.errors import GraphRecursionError
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from deepagents.middleware.skills import SkillsMiddleware
+
+log = logging.getLogger("imagentj")
 
 
 from .prompts import (
@@ -38,7 +42,7 @@ from .tools import (
     show_in_imagej_gui, close_imagej_windows,
     rag_retrieve_docs, recall_concepts, inspect_java_class,
     inspect_folder_tree,
-    smart_file_reader, inspect_csv_header,
+    smart_file_reader, inspect_csv_header, summarize_deliverables,
     extract_image_metadata, search_fiji_plugins, install_fiji_plugin,
     check_plugin_installed, mkdir_copy, save_script, edit_script, copy_file, execute_script,
     get_script_info, load_script, get_script_history,
@@ -141,6 +145,8 @@ class QAHandoff(BaseModel):
     minimal_workflow_passed: int
     minimal_workflow_total: int
     critical_failures: list[str]
+    plausibility_verdict: str = "NOT MEASURED"
+    measured_median: float = 0.0
     success: bool
 
 
@@ -456,6 +462,7 @@ _qa_agent = create_agent(
         get_script_info,
         save_markdown,
         inspect_csv_header,
+        summarize_deliverables,
         load_script,
     ],
     system_prompt=qa_reporter_prompt,
@@ -636,6 +643,21 @@ def _run_capped(agent, payload, on_cap):
         ).run()
         return result["structured_response"]
     except GraphRecursionError:
+        return on_cap()
+    except (json.JSONDecodeError, ValidationError) as exc:
+        # Malformed structured output — one observed kill was a raw
+        # JSONDecodeError ("Expecting ',' delimiter: line 1 column 377767")
+        # raised while parsing a ~380 KB ToolStrategy `edits` payload, escaping
+        # through the supervisor's tool node and ending the whole run with
+        # "unhandled agent error". It breaks ONE subagent invocation; the
+        # deliverables already on disk are unaffected, so degrade the same way
+        # as a transport failure instead of taking the session down. Not folded
+        # into the transport branch: this is corrupt content, not a dead socket,
+        # and the log line has to say which.
+        log.error("[imagentj][fatal] LLMClientParseError in %s (%s: %s) — "
+                  "malformed structured response; degrading to a failure "
+                  "handoff so the rest of the run survives.",
+                  "subagent", type(exc).__name__, exc)
         return on_cap()
 
 
@@ -834,6 +856,61 @@ def python_data_analyst(task: str, input_path: str, output_dir: str, project_roo
 
 _qa_enabled: bool = False
 
+# Last plausibility verdict from qa_reporter, so the run-level outcome can reflect
+# whether the SCIENCE passed rather than only whether the process avoided crashing.
+# Without this the benchmark's result.json reported success=true on a deliverable the
+# QA agent had just measured as 65x too small: the verdict existed, but stayed trapped
+# inside the handoff and never reached the file an evaluator reads.
+LAST_QA_VERDICT: dict = {}
+
+
+# Ground-truth counting for the QA plausibility check. Which folder the input
+# images read FROM is a fact the harness already knows (BENCHMARK_INPUT_DIR in
+# benchmark runs) — leaving it to the reporter to discover produced "324 input
+# image(s)" verdicts for 10-image tasks, because the agent measured whatever
+# shared data directory it stumbled upon UNDER benchmark input instead.
+_QA_IMAGE_EXT = {
+    ".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp",
+    ".nd2", ".czi", ".lif", ".lsm", ".svs", ".ics", ".ids",
+}
+
+
+def _count_input_images(input_dir: str) -> int:
+    """Count image files under `input_dir` recursively. 0 on any error or when
+    the dir is missing, so a bad path degrades the coverage check instead of
+    manufacturing a wrong-but-confident number."""
+    try:
+        n = 0
+        for root, _dirs, files in os.walk(input_dir):
+            for fn in files:
+                if os.path.splitext(fn)[1].lower() in _QA_IMAGE_EXT:
+                    n += 1
+        return n
+    except Exception:
+        return 0
+
+
+def _qa_input_ground_truth() -> tuple[str, int]:
+    """(path, image_count) of the benchmark input mount, or ("", 0) outside a
+    benchmark run — the reporter then passes no input_dir and the coverage
+    check is skipped rather than pointed at a guessed folder."""
+    root = os.environ.get("BENCHMARK_INPUT_DIR", "").strip()
+    if not root or not os.path.isdir(root):
+        return "", 0
+    return root, _count_input_images(root)
+
+
+def _record_qa_verdict(handoff) -> None:
+    global LAST_QA_VERDICT
+    try:
+        LAST_QA_VERDICT = {
+            "plausibility_verdict": getattr(handoff, "plausibility_verdict", "NOT MEASURED"),
+            "measured_median": float(getattr(handoff, "measured_median", 0.0) or 0.0),
+            "qa_success": bool(getattr(handoff, "success", False)),
+            "critical_failures": list(getattr(handoff, "critical_failures", []) or []),
+        }
+    except Exception:                                     # never break QA over telemetry
+        LAST_QA_VERDICT = {}
 
 def set_qa_enabled(enabled: bool) -> None:
     global _qa_enabled
@@ -841,7 +918,7 @@ def set_qa_enabled(enabled: bool) -> None:
 
 
 @tool
-def qa_reporter(project_root: str) -> QAHandoff:
+def qa_reporter(project_root: str, user_request: str = "", deliverable_dir: str = "") -> QAHandoff:
     """
     Audit the completed project folder and generate QA_Checklist_Report.md.
 
@@ -865,6 +942,28 @@ def qa_reporter(project_root: str) -> QAHandoff:
         )
 
     sections = [f"PROJECT ROOT: {project_root}"]
+    if deliverable_dir:
+        sections.append(f"DELIVERABLE DIRECTORY (measure this one): {deliverable_dir}")
+    # Deterministic ground truth, not negotiable. The reporter used to pass an
+    # input_dir it had guessed itself, and on benchmark runs it kept pointing the
+    # coverage check at whatever shared data folder it found UNDER the input
+    # mount — 324 files for a 10-image task — turning a complete deliverable into
+    # a spurious "batch stopped early" FAIL.
+    input_gt, input_gt_count = _qa_input_ground_truth()
+    if input_gt:
+        sections.append(
+            "INPUT IMAGES (ground truth, counted by the harness — pass this to "
+            f"summarize_deliverables as input_dir, do NOT substitute another folder): "
+            f"{input_gt} ({input_gt_count} input image files)"
+        )
+    if user_request:
+        # The stated quantities live here and nowhere else — the ledger's
+        # scientific_goal is a paraphrase that drops the numbers.
+        sections.append(
+            "ORIGINAL USER REQUEST (verbatim — extract any stated quantity from it "
+            "and pass it to summarize_deliverables as expected_per_file):\n"
+            f"{user_request}"
+        )
     # Inject the full ledger — it contains the workflow summary, all parameters,
     # all scripts, all outputs. This is exactly what the QA agent needs to audit.
     ledger_ctx = get_ledger_context(project_root)
@@ -875,7 +974,9 @@ def qa_reporter(project_root: str) -> QAHandoff:
         _qa_agent.invoke,
         {"messages": [{"role": "user", "content": "\n\n".join(sections)}]},
     ).run()
-    return result["structured_response"]
+    handoff = result["structured_response"]
+    _record_qa_verdict(handoff)
+    return handoff
 
 
 def _vlm_failure(pipeline_step: str, message: str) -> VLMHandoff:

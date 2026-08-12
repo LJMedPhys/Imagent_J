@@ -138,6 +138,46 @@ STEP 1 — PROJECT DISCOVERY
 
 
 ────────────────────────────────────────
+STEP 1.5 — MEASURE THE DELIVERABLES (MANDATORY, DO THIS BEFORE SCORING)
+────────────────────────────────────────
+Everything else you check is about FORM: correct filenames, correct columns, correct
+file count. None of it can tell you the answer is WRONG. A folder of perfectly-named,
+perfectly-schema'd CSVs can hold a hundred times too few rows and pass every other item
+on this checklist.
+
+So before you score anything:
+
+1. Identify the deliverable the user actually asked for and the glob that matches it
+   (e.g. '*.csv', '*_seg.tif', '*nuclei*.tif'). Do NOT audit with '*'. The output folder
+   also holds the staged input images, scripts, logs and figures, and measuring those
+   produces a number that describes the input rather than the result.
+2. Re-read the ORIGINAL USER REQUEST for any stated quantity — "up to 2,000 cells per
+   image", "roughly 50 nuclei", "about 200 foci". Note the number.
+3. Call summarize_deliverables(output_dir, pattern, expected_per_file=<that number>,
+   input_dir=<the folder the images were read FROM>). Pass 0.0 only if the request truly
+   states no quantity; pass input_dir whenever you know it. If the task context carries
+   an "INPUT IMAGES (ground truth …)" line, use THAT path as input_dir verbatim — it was
+   counted by the harness. Never go hunting for an input folder of your own when it is
+   given; pointing the check at a workspace or shared data directory fabricates wrong
+   input counts.
+4. Read its PLAUSIBILITY VERDICT and obey it. There are four:
+     FAIL       — the result is wrong. Report it and set success=false.
+     SUSPECT    — either the result or the MEASUREMENT is unsound. Most often it means
+                  your glob matched more than one kind of file. Fix the glob and measure
+                  again before you score anything; do not report SUSPECT as a pass.
+     INCOMPLETE — nothing structural was wrong, but nothing was checked against either.
+                  This is NOT a pass. If the request states a quantity, call again with
+                  it. If it genuinely states none, say plainly in the report that
+                  plausibility could not be verified.
+     PASS       — measured and within an order of magnitude, with no structural anomaly.
+
+DO NOT trust the state ledger's reported counts. The ledger records what a script
+REPORTED at the time it ran; a later corrective pass can change the files on disk
+without updating it. In one real run the ledger said 71,768 objects while the delivered
+files held 681 — a 105x discrepancy that no reader of the ledger could have seen.
+Only summarize_deliverables reads the actual bytes on disk. It is the ground truth.
+
+────────────────────────────────────────
 STEP 2 — QA CHECKLIST AUDIT
 ────────────────────────────────────────
 Evaluate the project against the following checklist.
@@ -1444,7 +1484,20 @@ USER INTERACTION
 - The only mandatory user confirmation point is sample verification (Phase 4b).
 """
 
-_QA_TOOL_ENTRY = "- qa_reporter: Audits the completed project folder and generates QA_Checklist_Report.md. Called once at project end."
+_QA_TOOL_ENTRY = (
+    "- qa_reporter(project_root, user_request, deliverable_dir): Audits the completed project "
+    "and generates QA_Checklist_Report.md. Called once at project end. ALWAYS pass user_request "
+    "as the user's ORIGINAL wording, verbatim, including any stated quantity (\"up to 2,000 cells "
+    "per image\") — the reporter measures the delivered files against that number, and without it "
+    "the verdict comes back INCOMPLETE, which is not a pass. The reporter already knows the true "
+    "input folder from the harness when there is one — do NOT point it elsewhere. "
+    "Pass deliverable_dir when the final files were written "
+    "somewhere other than project_root. If it returns success=false or a FAIL plausibility_verdict, "
+    "the RESULT is wrong, not merely undocumented: do NOT announce the work as complete. Send the "
+    "fix back to the agent that produced the deliverable, quoting the measured numbers, re-run it, "
+    "then call qa_reporter again to confirm — at most TWO correction rounds, then stop and tell the "
+    "user plainly what is still wrong. See phase_7_qa.md."
+)
 
 # Phase files now live as skill files read on demand by the supervisor — see
 # /app/skills/workflow/supervisor_pipeline_phases/. The PhaseGuardMiddleware
@@ -1513,5 +1566,4 @@ not featured). Never put plugin/environment-specific pitfalls in CORE.
 Mutate the wiki ONLY through the library_* tools — never write files directly. When
 there is nothing new and no duplicate to fix, do nothing and stop.
 """
-
 

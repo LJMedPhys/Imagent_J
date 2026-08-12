@@ -21,11 +21,11 @@
 #   * With only OPENAI_API_KEY, the "openai/" prefix is stripped and any
 #     non-openai/ model is rejected.
 models:
-  supervisor: "openai/gpt-5.4"          # orchestrator / planner
-  worker:     "openai/gpt-5.3-codex"    # imagej_coder + imagej_debugger
-  analyst:    "openai/gpt-5.3-codex"    # python_data_analyst
-  nano:       "openai/gpt-5.4-nano"     # fast-path / lightweight calls
-  curator:    "openai/gpt-5.4-mini"     # background Librarian + deep recall
+  supervisor: "openai/gpt-5.6-luna"     # orchestrator / planner
+  worker:     "openai/gpt-5.6-luna"     # imagej_coder + imagej_debugger
+  analyst:    "openai/gpt-5.6-luna"     # python_data_analyst
+  nano:       "openai/gpt-5.6-luna"     # fast-path / lightweight calls
+  curator:    "openai/gpt-5.6-luna"     # background Librarian + deep recall
   vlm:        "google/gemini-3.5-flash" # Vision judge (OpenRouter); on OpenAI-only
                                         # installs this falls back to gpt-5.6-luna
 
