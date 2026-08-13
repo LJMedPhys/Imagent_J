@@ -344,7 +344,7 @@ def _seed_kwargs() -> dict:
     return {"seed": _LLM_SEED} if _LLM_SEED is not None else {}
 
 llm_supervisor = ChatOpenAI(
-    model=m(config.model_for("supervisor", "openai/gpt-5.4")),
+    model=m(config.model_for("supervisor", "openai/gpt-5.6-luna")),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
