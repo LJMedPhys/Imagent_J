@@ -909,7 +909,10 @@ imagej_coder_prompt = """
    ────────────────────────────────────────
    - PREFER `IJ.run(imp, "Command...", "options")` for standard operations.
    - API VALIDATION: Use `inspect_java_class` if uncertain about a method signature.
-   - Use `WaitForUserDialog` instead of `GenericDialog` for simple pauses.
+   - In unattended/auto-pilot scripts, NEVER create `GenericDialog`,
+     `WaitForUserDialog`, `JOptionPane`, file choosers, or any other prompt. A
+     virtual display is present but no human can answer it. Use direct APIs with
+     explicit parameters; throw an exception instead of calling `IJ.error`.
    - Retrieve image via `#@ ImagePlus imp` or `IJ.openImage(path)
    - NEVER open a Bio-Formats format with `IJ.open`/`IJ.openImage` — that includes
      `.ome.tif`/`.ome.tiff` (the suffix is plain `.tif`, so it is easy to miss) and
@@ -1517,8 +1520,12 @@ rule out "not installed" as the cause and move on to code-level fixes. Never ask
 the user "is X installed?" — you have the tools to answer that yourself.
 
 Groovy:
-1. On failure, call update_state_ledger(step="<step>_failed", status="failed", details="<error summary>").
-2. Send path + error + project_root to imagej_debugger tool. The debugger calls
+1. On failure, FIRST send path + error + project_root to imagej_debugger tool.
+   Only after that call returns, call update_state_ledger(step="<step>_failed",
+   status="failed", details="<error summary>"). Do these SEQUENTIALLY, never in
+   the same parallel tool-call batch: a provider content-block shape in one
+   concurrent branch must not prevent the debugger branch from running.
+2. The debugger calls
    `recall` itself with the error symptom before patching, so you do NOT need to
    retrieve lessons yourself first.
 3. Execute the returned fixed script with execute_script. The lesson the
@@ -1632,5 +1639,3 @@ not featured). Never put plugin/environment-specific pitfalls in CORE.
 Mutate the wiki ONLY through the library_* tools — never write files directly. When
 there is nothing new and no duplicate to fix, do nothing and stop.
 """
-
-
