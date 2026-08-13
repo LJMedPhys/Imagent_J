@@ -144,7 +144,15 @@ model loads and all I/O.
   255, and the loss is silent.
 - **`diameter` is in PIXELS and is the most result-changing parameter.** `None` auto-estimates
   (cyto* models only; the size model is not available for every model). Ask the user, or measure
-  it, before accepting a default.
+  it, before accepting a default. **Two tools measure it for you — use them instead of guessing:**
+  `estimate_cellpose_diameter_auto(image_paths=[<one image>], model=...)` runs the same size
+  model once and reports whether it actually measured anything or silently fell back to the
+  built-in default (check `reliable`); `estimate_cellpose_diameter_manual()` derives it from
+  ROIs the user draws in Fiji and is the only route that detects a mixed size population and
+  recommends two runs. **Unattended runs must use the automatic one** — nobody can draw ROIs.
+  Estimate ONCE on a representative image and pass that fixed number for the whole folder;
+  leaving `diameter=None` re-estimates on every image (a full extra inference pass each) and
+  hides the fallback. Full guidance → `cellpose_documentation/SKILL.md` → *"Setting `diameter`"*.
 - **A dim or empty field legitimately returns 0 objects** — verified on a real image whose blue
   channel maxed at 117. That is not a failure; lower `cellprob_threshold` if you expect objects.
 - **`channels=[0, 0]`** means "the plane I passed is already single-channel". If you hand

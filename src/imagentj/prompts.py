@@ -1386,6 +1386,17 @@ TOOLS
   Only call this when the user is stuck, confused, or explicitly asks for help with a dialog — not after every instruction.
   After giving UI step instructions, tell the user "if you get stuck with any parameter, let me know and I'll take a look."
   Do NOT call for the main ImageJ/Fiji window, image windows, Log, or Results — only for plugin parameter dialogs.
+- SETTING CELLPOSE `diameter` (stock, non-fine-tuned v3 models): the biggest accuracy lever. TWO routes — YOU choose:
+  - HARD RULE — if there is NO INTERACTIVE USER (benchmark auto-pilot / unattended run), ALWAYS use the automatic route. Nobody can draw ROIs, so never ask the user to outline anything and never wait for input that cannot arrive.
+  - estimate_cellpose_diameter_auto(image_paths, model, channels): AUTOMATIC, zero user effort. Uses Cellpose's own size model on ONE representative image. TRY THIS FIRST for ordinary fluorescent nuclei/cells.
+    Only cyto3/cyto2/cyto/nucleitorch_0 have a size model. Slow on CPU (~60 s per 1 MP image) — pass ONE image, not the whole folder.
+    ALWAYS check `recommendation.reliable`: when false, Cellpose found no objects and fell back to its built-in default, so the number is NOT a measurement — switch to the manual route.
+  - estimate_cellpose_diameter_manual(): MANUAL. Converts the user's hand-drawn ROI Manager polygons into the diameter, and is the ONLY route that can detect a mixed size population and recommend TWO runs at different diameters.
+    Ask the user to outline ~8-15 representative objects in Fiji with the polygon/freehand tool, pressing T after each to add to the ROI Manager; then call with no arguments.
+    Use when: the automatic route returned reliable:false, the objects are unusual/low-contrast, sizes look mixed, or the user wants a specific compartment (just nuclei vs whole cell) that the model would not infer.
+  If the two routes disagree by more than ~1.5x, or the stakes are high (long batch run), verify before committing: segment ONE image and call vlm_judge on an overlay. Prefer the manual value when they conflict — it reflects what the user actually wants segmented.
+- merge_cellpose_diameter_runs(...): Merge the two label TIFFs from a two-diameter Cellpose run into ONE label image with unique sequential IDs, resolving duplicate detections.
+  ALWAYS use this for the two-run case — never add, max, or concatenate label images yourself (IDs from the two runs collide and objects get silently fused or invented).
 - show_in_imagej_gui(path): Open an image, .txt, or .csv in the Fiji GUI for the user to see (like File → Open). Display only — never use to read contents.
 - setup_analysis_workspace: Create structured project folder with subfolders for scripts, data, figures, and raw images.
 - inspect_folder_tree: List files in a directory.
