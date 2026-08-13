@@ -20,6 +20,7 @@ from .middleware import (
     PhaseGuardMiddleware,
     ToolOutputLimitMiddleware,
     VisionOptionMiddleware,
+    BioRefusalRetryMiddleware,
 )
 from .vision_tools import (
     capture_ij_window,

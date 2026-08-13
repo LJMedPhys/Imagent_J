@@ -9,6 +9,13 @@ from langchain_core.messages import ToolMessage, SystemMessage, AIMessage
 from langgraph.types import Command
 from langchain.agents.middleware import TodoListMiddleware
 
+from ..safety_filter import (
+    filter_injected_blocks,
+    find_sensitive_terms,
+    is_bio_refusal,
+    scrub_messages_report,
+)
+
 
 _log = logging.getLogger("imagentj")
 
@@ -67,6 +74,91 @@ def _bounded_tool_message(message: ToolMessage, max_chars: int) -> ToolMessage:
     if hasattr(message, "model_copy"):
         return message.model_copy(update={"content": bounded})
     return message.copy(update={"content": bounded})
+
+
+class BioRefusalRetryMiddleware(AgentMiddleware):
+    """Catch provider-side biological-risk refusals at the model boundary.
+
+    A refusal here would otherwise unwind the whole agent loop. Retry up to
+    twice per call and only re-raise the *original* refusal if the provider
+    also refuses every reformulation.
+
+    Mount this LAST in an agent's ``middleware`` list. Composition makes the
+    first entry outermost (``langchain.agents.factory._chain_model_call_handlers``),
+    so last means innermost: the request seen here already carries the skill
+    catalogue that ``SkillsMiddleware`` appended, and ``handler(retry_req)``
+    goes straight to the model without re-injecting it. Mounted anywhere else,
+    rung 1 below would be undone before the retry left the stack.
+
+    The rungs, matching what the evidence implicates (see
+    :mod:`imagentj.safety_filter`):
+
+    1. drop the injected skill catalogue from the system message, and strip
+       reasoning state from the outgoing messages;
+    2. additionally neutralise pathogen proper nouns in the message prose.
+
+    A rung that would change nothing is skipped rather than spending a call on
+    a byte-identical replay. The caller's stored history is never modified;
+    every rewrite acts on a copy of this attempt's outgoing payload.
+    """
+
+    def wrap_model_call(self, request, handler):
+        try:
+            return handler(request)
+        except Exception as exc:
+            if not is_bio_refusal(exc):
+                raise
+            last_exc = exc
+
+        for neutralize in (False, True):
+            retry_req = self._reformulate(request, neutralize=neutralize)
+            if retry_req is None:
+                continue
+            try:
+                return handler(retry_req)
+            except Exception as exc:
+                if not is_bio_refusal(exc):
+                    raise
+                last_exc = exc
+        # Bare `raise` here would be a RuntimeError("No active exception to
+        # reraise") — the except blocks above have already exited — which would
+        # then fail is_bio_refusal() downstream and lose the diagnosis.
+        raise last_exc
+
+    def _reformulate(self, request, *, neutralize: bool):
+        """Build the retry request for one rung, or None if it changes nothing."""
+        overrides = {}
+        changed = []
+
+        system_message = getattr(request, "system_message", None)
+        blocks = list(getattr(system_message, "content_blocks", None) or [])
+        kept, dropped = filter_injected_blocks(blocks)
+        if dropped:
+            overrides["system_message"] = SystemMessage(content_blocks=kept)
+            changed.append(f"dropped injected section(s) {', '.join(dropped)!r}")
+
+        messages = list(getattr(request, "messages", []) or [])
+        if messages:
+            if neutralize:
+                terms = find_sensitive_terms(messages)
+                if terms:
+                    changed.append(
+                        "neutralised "
+                        + ", ".join(f"{term}×{n}" for term, n in sorted(terms.items()))
+                    )
+            scrubbed, stats = scrub_messages_report(messages, neutralize=neutralize)
+            if stats["reasoning_dropped"]:
+                changed.append(f"stripped {stats['reasoning_dropped']} reasoning block(s)")
+            if stats["reasoning_dropped"] or stats["terms_replaced"]:
+                overrides["messages"] = scrubbed
+
+        if not overrides:
+            return None
+        _log.warning(
+            "model call refused by biological-risk filter — retrying: %s",
+            "; ".join(changed),
+        )
+        return request.override(**overrides)
 
 
 class ToolOutputLimitMiddleware(AgentMiddleware):
