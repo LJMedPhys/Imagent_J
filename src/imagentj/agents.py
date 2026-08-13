@@ -842,6 +842,24 @@ def _run_capped(agent, payload, on_cap, name: str = "subagent"):
         log.warning("%s failed at the transport layer (%s: %s) — degrading to a "
                     "failure handoff.", name, type(exc).__name__, exc)
         return on_cap()
+    except Exception as exc:
+        # Nested tool validation/runtime failures must stay local to the subagent.
+        # One observed example is a provider emitting a content-block list for a
+        # regex ``pattern`` argument; FilesystemFileSearchMiddleware then raises
+        # ``TypeError: expected string or bytes-like object, got 'list'``. Letting
+        # that escape aborts the entire supervisor and discards otherwise valid
+        # image deliverables. Return the same typed failure handoff used for a
+        # watchdog/transport failure so the supervisor can debug, retry, or choose
+        # another backend. BaseException subclasses (KeyboardInterrupt,
+        # SystemExit) deliberately remain uncaught.
+        log.exception(
+            "%s failed inside a nested model/tool call (%s: %s) — degrading "
+            "to a failure handoff so the pipeline continues.",
+            name,
+            type(exc).__name__,
+            exc,
+        )
+        return on_cap()
     finally:
         agent_watchdog.release(handle)
 
