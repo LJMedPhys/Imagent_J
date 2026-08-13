@@ -1,3 +1,6 @@
+import json
+import logging
+import os
 import re
 
 from langchain.agents.middleware import AgentMiddleware
@@ -5,6 +8,102 @@ from langchain.agents.middleware.types import ToolCallRequest, AgentState
 from langchain_core.messages import ToolMessage, SystemMessage, AIMessage
 from langgraph.types import Command
 from langchain.agents.middleware import TodoListMiddleware
+
+
+_log = logging.getLogger("imagentj")
+
+
+def _truncate_tool_text(text: str, max_chars: int) -> str:
+    """Bound one tool result while retaining both its summary and error tail."""
+    if len(text) <= max_chars:
+        return text
+
+    marker_template = (
+        "\n\n[TOOL OUTPUT TRUNCATED: original={original} characters, "
+        "omitted={omitted}. Use a narrower query/path for more detail.]\n\n"
+    )
+    # Compute the marker twice because its own length depends on omitted digits.
+    marker = marker_template.format(original=len(text), omitted=len(text) - max_chars)
+    available = max(0, max_chars - len(marker))
+    head_chars = (available * 3) // 4
+    tail_chars = available - head_chars
+    omitted = len(text) - head_chars - tail_chars
+    marker = marker_template.format(original=len(text), omitted=omitted)
+    available = max(0, max_chars - len(marker))
+    head_chars = (available * 3) // 4
+    tail_chars = available - head_chars
+    return text[:head_chars] + marker + (text[-tail_chars:] if tail_chars else "")
+
+
+def _bounded_tool_content(content, max_chars: int):
+    """Return ToolMessage-compatible content no larger than ``max_chars``.
+
+    Function-call outputs in this application are normally strings. For a list of
+    content blocks, serialize the list only when it is too large; this preserves
+    normal multimodal blocks while ensuring an oversized block cannot bypass the
+    provider's per-output limit.
+    """
+    if isinstance(content, str):
+        return _truncate_tool_text(content, max_chars)
+    try:
+        serialized = json.dumps(content, ensure_ascii=False, default=str)
+    except Exception:
+        serialized = str(content)
+    if len(serialized) <= max_chars:
+        return content
+    return _truncate_tool_text(serialized, max_chars)
+
+
+def _bounded_tool_message(message: ToolMessage, max_chars: int) -> ToolMessage:
+    bounded = _bounded_tool_content(message.content, max_chars)
+    if bounded is message.content or bounded == message.content:
+        return message
+    _log.warning(
+        "tool output truncated before model call: tool=%s original_chars=%d limit=%d",
+        getattr(message, "name", None) or "unknown",
+        len(str(message.content)),
+        max_chars,
+    )
+    if hasattr(message, "model_copy"):
+        return message.model_copy(update={"content": bounded})
+    return message.copy(update={"content": bounded})
+
+
+class ToolOutputLimitMiddleware(AgentMiddleware):
+    """Enforce a per-ToolMessage limit at production and again before model I/O.
+
+    The second check is deliberate: it also sanitizes messages restored from an
+    older checkpoint or emitted inside a LangGraph Command. The provider limit is
+    10 MiB for one function-call output; the much lower default here protects the
+    useful context window and cost as well as avoiding the hard API rejection.
+    """
+
+    def __init__(self, max_chars: int | None = None):
+        super().__init__()
+        configured = max_chars if max_chars is not None else int(
+            os.environ.get("IMAGENTJ_MAX_TOOL_OUTPUT_CHARS", "100000")
+        )
+        self.max_chars = max(2_000, min(int(configured), 1_000_000))
+
+    def wrap_tool_call(self, request: ToolCallRequest, handler):
+        result = handler(request)
+        if isinstance(result, ToolMessage):
+            return _bounded_tool_message(result, self.max_chars)
+        if isinstance(result, str):
+            return _truncate_tool_text(result, self.max_chars)
+        return result
+
+    def wrap_model_call(self, request, handler):
+        messages = list(request.messages)
+        bounded = [
+            _bounded_tool_message(message, self.max_chars)
+            if isinstance(message, ToolMessage)
+            else message
+            for message in messages
+        ]
+        if any(new is not old for old, new in zip(messages, bounded)):
+            request = request.override(messages=bounded)
+        return handler(request)
 
 try:  # py3.11+
     from typing import NotRequired

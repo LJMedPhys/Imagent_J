@@ -25,6 +25,9 @@ services:
       - IMAGENTJ_MCP_DISCOVERY_TIMEOUT_SECONDS=${IMAGENTJ_MCP_DISCOVERY_TIMEOUT_SECONDS:-20}
       - IMAGENTJ_MCP_TOOL_TIMEOUT_SECONDS=${IMAGENTJ_MCP_TOOL_TIMEOUT_SECONDS:-90}
       - IMAGENTJ_MCP_KEEP_ALIVE=${IMAGENTJ_MCP_KEEP_ALIVE:-true}
+      # Hard per-message backstop for tool results sent to an LLM. Individual
+      # tools use smaller semantic limits where appropriate.
+      - IMAGENTJ_MAX_TOOL_OUTPUT_CHARS=${IMAGENTJ_MAX_TOOL_OUTPUT_CHARS:-100000}
       - DISPLAY=:1
       # Optional: Set a VNC password (recommended if exposing to network)
       - VNC_PASSWORD=${VNC_PASSWORD:-}
@@ -114,4 +117,4 @@ networks:
       driver: default
       config:
         # Using 10.10.10.0/24 is usually safe from 172.x conflicts
-        - subnet: 10.10.10.0/24
+        - subnet: ${IMAGENTJ_SUBNET:-10.10.10.0/24}

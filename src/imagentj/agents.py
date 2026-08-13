@@ -49,7 +49,8 @@ from .tools import (
     check_plugin_installed, mkdir_copy, save_script, edit_script, copy_file, execute_script,
     get_script_info, load_script, get_script_history,
     setup_analysis_workspace, save_markdown,
-    NarrationReminderMiddleware, PhaseGuardMiddleware, VisionOptionMiddleware,
+    NarrationReminderMiddleware, PhaseGuardMiddleware, ToolOutputLimitMiddleware,
+    VisionOptionMiddleware,
     update_state_ledger, read_state_ledger, set_ledger_metadata, get_ledger_context,
     check_environment,
     set_dialog_vision_llm,
@@ -492,6 +493,7 @@ def _make_coder_agent(model, name, system_prompt):
         response_format=ProviderStrategy(schema=ScriptHandoff, strict=True),
         name=name,
         middleware=[
+            ToolOutputLimitMiddleware(),
             agent_watchdog.middleware(),
             FilesystemFileSearchMiddleware(
                 # Scoped to /app/skills/ — the workflow templates / SKILL.md the coder
@@ -565,6 +567,7 @@ _analyst_agent = create_agent(
     response_format=ProviderStrategy(schema=AnalystHandoff, strict=True),
     name="python_data_analyst",
     middleware=[
+        ToolOutputLimitMiddleware(),
         SkillsMiddleware(
             backend=_python_skills_backend,
             # /app/skills/napari/ is included so the analyst can read the micro_sam skill and
@@ -602,7 +605,7 @@ _qa_agent = create_agent(
     name="qa_reporter",
     # Feeds the agent watchdog its tool-call history — this is the agent whose
     # write→re-read loop went unbounded for 34 minutes.
-    middleware=[agent_watchdog.middleware()],
+    middleware=[ToolOutputLimitMiddleware(), agent_watchdog.middleware()],
 )
 
 # Plugin manager — gets SkillsMiddleware so it sees all plugin skill descriptions
@@ -646,6 +649,7 @@ _plugin_agent = create_agent(
     response_format=ProviderStrategy(schema=PluginRecommendation),
     name="plugin_manager",
     middleware=[
+        ToolOutputLimitMiddleware(),
         SkillsMiddleware(
             backend=_plugin_skills_backend,
             # Three skill families, so the manager can route each pipeline step to the
@@ -677,6 +681,7 @@ librarian_agent = create_agent(
     system_prompt=librarian_prompt,
     name="librarian",
     middleware=[
+        ToolOutputLimitMiddleware(),
         SkillsMiddleware(
             backend=_librarian_skills_backend,
             sources=["/app/skills/learned_memory/"],  # only the Librarian's own skill
@@ -696,7 +701,7 @@ _vlm_agent = (
         system_prompt=vlm_judge_prompt,
         response_format=ToolStrategy(schema=VLMHandoff, handle_errors=True),
         name="vlm_judge",
-        middleware=[agent_watchdog.middleware()],
+        middleware=[ToolOutputLimitMiddleware(), agent_watchdog.middleware()],
     )
     if llm_vlm is not None
     else None
@@ -1335,6 +1340,7 @@ def init_agent():
     no_vision_prompt = build_supervisor_prompt(enable_qa=True, enable_vision=False)
 
     supervisor_middleware = [
+        ToolOutputLimitMiddleware(),
         ContextEditingMiddleware(
             edits=[
                 ClearToolUsesEdit(
