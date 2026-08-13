@@ -78,10 +78,6 @@ dependencies:
       - deprecated
       - dill
       - distro
-      - docling
-      - docling-core
-      - docling-ibm-models
-      - docling-parse
       - docstring-parser
       - environs
       - et-xmlfile
@@ -105,7 +101,6 @@ dependencies:
       - langchain-classic
       - langchain-community
       - langchain-core
-      - langchain-docling
       - langchain-openai
       - langchain-pymupdf4llm
       - langchain-qdrant
@@ -151,7 +146,6 @@ dependencies:
       - python-pptx
       - qdrant-client
       - rank-bm25
-      - rapidocr
       - readlif
       - regex
       - rich

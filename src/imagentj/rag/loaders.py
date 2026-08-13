@@ -26,7 +26,20 @@ Each file type gets the chunking strategy that respects its structure:
 
 NOTE: tiktoken (used for chunk sizing) is LOCAL — no API key needed.
       API keys are only used in rag.py for actual embedding calls via OpenRouter.
+
+DOCLING IS OPTIONAL AT IMPORT TIME. It is not installed in the shipped runtime
+image (see environment.yml) — only the offline ingestion path below needs it.
+PDF/Markdown/plain-text/notebook chunking (load_and_chunk_pdf/_markdown/_text/
+_notebook, get_docling_converter, get_hybrid_chunker) raise a clear ImportError
+if called without it installed; Python/Java/Groovy/JS/TS chunking
+(_split_python_by_ast, _split_java_groovy, _fallback_code_split) never touch
+docling and work regardless. To run ingestion, set up a separate local
+environment with docling installed (`pip install docling docling-core
+docling-ibm-models docling-parse rapidocr langchain-docling`) — do not add it
+back to environment.yml, it transitively pulls in torch+transformers (~4.7 GB).
 """
+
+from __future__ import annotations
 
 import ast
 import json
@@ -38,24 +51,52 @@ from pathlib import Path
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
 
-from docling.document_converter import DocumentConverter, PdfFormatOption
-from docling.datamodel.pipeline_options import (
-    PdfPipelineOptions,
-    AcceleratorOptions,
-)
-from docling.datamodel.base_models import InputFormat
-from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
-from docling.chunking import HybridChunker
+try:
+    from docling.document_converter import DocumentConverter, PdfFormatOption
+    from docling.datamodel.pipeline_options import (
+        PdfPipelineOptions,
+        AcceleratorOptions,
+    )
+    from docling.datamodel.base_models import InputFormat
+    from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
+    from docling.chunking import HybridChunker
 
-from docling_core.transforms.chunker.tokenizer.openai import OpenAITokenizer
-from docling_core.transforms.chunker.hierarchical_chunker import (
-    ChunkingDocSerializer,
-    ChunkingSerializerProvider,
-)
-from docling_core.transforms.serializer.markdown import (
-    MarkdownParams,
-    MarkdownTableSerializer,
-)
+    from docling_core.transforms.chunker.tokenizer.openai import OpenAITokenizer
+    from docling_core.transforms.chunker.hierarchical_chunker import (
+        ChunkingDocSerializer,
+        ChunkingSerializerProvider,
+    )
+    from docling_core.transforms.serializer.markdown import (
+        MarkdownParams,
+        MarkdownTableSerializer,
+    )
+
+    class MarkdownTableSerializerProvider(ChunkingSerializerProvider):
+        """Serialize tables as compact Markdown instead of default triplet notation."""
+
+        def get_serializer(self, doc):
+            return ChunkingDocSerializer(
+                doc=doc,
+                table_serializer=MarkdownTableSerializer(),
+                params=MarkdownParams(
+                    compact_tables=True,
+                    image_placeholder="",
+                ),
+            )
+
+    _DOCLING_IMPORT_ERROR: Exception | None = None
+except ImportError as _exc:
+    _DOCLING_IMPORT_ERROR = _exc
+
+
+def _require_docling() -> None:
+    if _DOCLING_IMPORT_ERROR is not None:
+        raise ImportError(
+            "docling is not installed in this environment. It is deliberately "
+            "excluded from the shipped runtime image (see environment.yml) "
+            "since only offline RAG ingestion needs it. Run ingestion from a "
+            "separate environment with docling installed instead."
+        ) from _DOCLING_IMPORT_ERROR
 
 
 # ---------------------------------------------------------------------------
@@ -67,24 +108,6 @@ TIKTOKEN_MODEL = "text-embedding-3-large"
 
 # For code files: max lines per chunk before we force-split a large function
 CODE_MAX_LINES = 80
-
-
-# ---------------------------------------------------------------------------
-# Markdown table serializer for Docling
-# ---------------------------------------------------------------------------
-
-class MarkdownTableSerializerProvider(ChunkingSerializerProvider):
-    """Serialize tables as compact Markdown instead of default triplet notation."""
-
-    def get_serializer(self, doc):
-        return ChunkingDocSerializer(
-            doc=doc,
-            table_serializer=MarkdownTableSerializer(),
-            params=MarkdownParams(
-                compact_tables=True,
-                image_placeholder="",
-            ),
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +125,7 @@ def get_hybrid_chunker(max_tokens: int = CHUNK_MAX_TOKENS) -> HybridChunker:
       3. Merges undersized peer chunks that share the same section headings
       4. Repeats table headers in each chunk so every chunk is self-contained
     """
+    _require_docling()
     tokenizer = OpenAITokenizer(
         tokenizer=tiktoken.encoding_for_model(TIKTOKEN_MODEL),
         max_tokens=max_tokens,
@@ -128,6 +152,7 @@ def get_docling_converter() -> DocumentConverter:
     - device='auto': Auto-detects best accelerator (CUDA > MPS > CPU).
                     No need to manually toggle use_gpu.
     """
+    _require_docling()
     pipeline_options = PdfPipelineOptions()
     pipeline_options.do_ocr = True                # Selective OCR — only where needed
     pipeline_options.do_table_structure = True     # Table structure recognition
