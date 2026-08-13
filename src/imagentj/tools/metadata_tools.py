@@ -63,11 +63,14 @@ def _estimate_tiff_uncompressed_bytes(file_path: str) -> int:
     """
     try:
         with tifffile.TiffFile(file_path) as tif:
-            page     = tif.pages[0]
-            dtype_sz = np.dtype(page.dtype).itemsize
-            page_px  = int(np.prod(page.shape))   # (H, W) or (H, W, C)
-            n_pages  = len(tif.pages)
-            return page_px * dtype_sz * n_pages
+            # Use the logical series, not the number of IFDs. ImageJ can store a
+            # contiguous hyperstack in one IFD followed by raw planes; in that case
+            # ``len(tif.pages)`` is 1 even though ``series.shape`` contains the full
+            # T/C/Z extent. The old page-size * page-count estimate therefore
+            # undercounted these files by hundreds of times and let them through the
+            # pre-load OOM guard.
+            series = tif.series[0]
+            return int(np.prod(series.shape)) * np.dtype(series.dtype).itemsize
     except Exception:
         return 0
 # ────────────────────────────────────────────────────────────────────────────
