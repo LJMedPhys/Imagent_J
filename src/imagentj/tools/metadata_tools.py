@@ -63,11 +63,14 @@ def _estimate_tiff_uncompressed_bytes(file_path: str) -> int:
     """
     try:
         with tifffile.TiffFile(file_path) as tif:
-            page     = tif.pages[0]
-            dtype_sz = np.dtype(page.dtype).itemsize
-            page_px  = int(np.prod(page.shape))   # (H, W) or (H, W, C)
-            n_pages  = len(tif.pages)
-            return page_px * dtype_sz * n_pages
+            # Use the logical series, not the number of IFDs. ImageJ can store a
+            # contiguous hyperstack in one IFD followed by raw planes; in that case
+            # ``len(tif.pages)`` is 1 even though ``series.shape`` contains the full
+            # T/C/Z extent. The old page-size * page-count estimate therefore
+            # undercounted these files by hundreds of times and let them through the
+            # pre-load OOM guard.
+            series = tif.series[0]
+            return int(np.prod(series.shape)) * np.dtype(series.dtype).itemsize
     except Exception:
         return 0
 # ────────────────────────────────────────────────────────────────────────────
@@ -875,6 +878,45 @@ def extract_file_metadata(file_path: str) -> Dict[str, Any]:
                 dims['height'] = shape[0]
                 dims['width']  = shape[1] if len(shape) > 1 else 1
                 dims['pages']  = len(tif.pages)
+
+                # `len(tif.pages)` counts IFDs, which is 1 for a CONTIGUOUS ImageJ
+                # hyperstack no matter how many planes it holds — a 263x3x2048x2048
+                # 6.2 GiB movie reported as "pages: 1", i.e. indistinguishable from a
+                # single 8 MiB plane. An agent told that opens the whole thing and dies
+                # of OOM. Read the series instead: it knows the real T/C/Z extent.
+                try:
+                    series = tif.series[0]
+                    axes = getattr(series, 'axes', '') or ''
+                    dims['series_shape'] = list(series.shape)
+                    dims['series_axes'] = axes
+                    for axis, label in (('T', 'n_timepoints'), ('C', 'n_channels'),
+                                        ('Z', 'n_slices')):
+                        if axis in axes:
+                            dims[label] = int(series.shape[axes.index(axis)])
+                    n_planes = 1
+                    for axis, size in zip(axes, series.shape):
+                        if axis not in ('Y', 'X', 'S'):
+                            n_planes *= int(size)
+                    dims['n_planes'] = n_planes
+                    itemsize = getattr(series.dtype, 'itemsize', 2)
+                    total = 1
+                    for size in series.shape:
+                        total *= int(size)
+                    full_mib = total * itemsize / (1 << 20)
+                    dims['full_size_mib'] = round(full_mib, 1)
+                    dims['plane_size_mib'] = round(
+                        dims['height'] * dims['width'] * itemsize / (1 << 20), 2)
+                    # Say it plainly rather than leaving the agent to multiply.
+                    if full_mib >= 1024:
+                        dims['size_warning'] = (
+                            f"This file is {full_mib / 1024:.2f} GiB in memory "
+                            f"({n_planes} planes). Do NOT open it whole — it will exhaust "
+                            "the JVM/container heap. Open a virtual stack, or read only "
+                            "the planes you need (e.g. tifffile.memmap(path)[index], which "
+                            "materialises just that slice)."
+                        )
+                except Exception:
+                    pass
 
         elif is_ome or suffix in ['.ome.tif', '.ome.tiff']:
             with tifffile.TiffFile(file_path) as tif:

@@ -17,7 +17,7 @@ import json
 import os
 import tempfile
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from langchain_core.tools import tool
 
@@ -69,6 +69,24 @@ def _save_ledger(project_root: str, ledger: dict) -> None:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _content_text(value: Any) -> str:
+    """Normalize provider text blocks used accidentally as ledger text fields."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "\n".join(part for item in value if (part := _content_text(item)))
+    if isinstance(value, dict):
+        if "text" in value:
+            return _content_text(value.get("text"))
+        if "content" in value:
+            return _content_text(value.get("content"))
+        return json.dumps(value, ensure_ascii=False, default=str)
+    text = getattr(value, "text", None)
+    return _content_text(text) if text is not None else str(value)
 
 
 def _format_ledger(ledger: dict) -> str:
@@ -215,7 +233,7 @@ def update_state_ledger(
     phase: str,
     step: str,
     status: str,
-    details: str,
+    details: Any,
     script_path: Optional[str] = None,
     output_paths: Optional[list[str]] = None,
     parameters: Optional[dict] = None,
@@ -244,6 +262,10 @@ def update_state_ledger(
         A one-line confirmation. This tool no longer echoes the whole ledger —
         call read_state_ledger when you need the full project state.
     """
+    # Some provider/tool-call paths encode a text argument as a list of content
+    # blocks. Accept and normalize that representation instead of letting a
+    # downstream string validator/regex abort the whole supervisor turn.
+    details = _content_text(details).strip()
     ledger = _load_ledger(project_root)
 
     # Ensure structure exists

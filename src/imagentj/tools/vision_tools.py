@@ -17,8 +17,12 @@ Comparison workflow:
 from __future__ import annotations
 
 import base64
+import concurrent.futures
+import contextlib
 import io
+import logging
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -28,9 +32,110 @@ from PIL import Image, ImageDraw, ImageFont
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 
+from imagentj.imagej_context import needs_bioformats, open_image_windowless
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
+_log = logging.getLogger(__name__)
+
 _MAX_PX          = 1024   # longest side cap applied to the final compilation
+
+# Hard ceiling on a single Fiji open. `IJ.open` is a synchronous JVM round-trip
+# with no timeout of its own: if the opener stalls — an unexpected reader, a
+# dialog waiting on input, a format Bio-Formats chokes on — it simply never
+# returns, and because the VLM judge calls it inline that wedges the ENTIRE
+# agent, not just the visual check. Observed in benchmarking: 29 minutes of a
+# completely idle process, killed from outside, with all deliverables already
+# written. Generous enough for a large 3D stack over a slow mount; finite so a
+# stuck open degrades into a skipped visual check instead of a dead run.
+_FIJI_OPEN_TIMEOUT_S = float(os.environ.get("IMAGENTJ_FIJI_OPEN_TIMEOUT", "180"))
+
+# One reusable worker so a timed-out open (whose thread we can never reclaim —
+# it is blocked in the JVM) does not leak an unbounded number of threads.
+_fiji_open_pool = concurrent.futures.ThreadPoolExecutor(
+    max_workers=2, thread_name_prefix="fiji-open"
+)
+
+
+# Fiji's WindowManager is process-global mutable state and its display stack is
+# not thread-safe, but nothing stopped two agent threads entering the capture
+# path at once — the supervisor and a subagent both reaching for a visual check,
+# for instance. That went wrong in two distinct ways.
+#
+# The visible one: the process froze completely. Two benchmark tasks (b04 of the
+# v4 run, b14 of the w2 run) burned their entire 60-minute cap with ZERO log
+# output — not one DEBUG line — after their last vision call, and were killed
+# from outside with all deliverables already on disk. In both, every HTTP body
+# that had been opened had also completed (104/104 and 99/99), so the network was
+# idle: the freeze was local, inside the JVM. Both wrote two preview PNGs of
+# IDENTICAL size 2.0 ms and 17.2 ms apart — far too fast to be two sequential
+# tool calls, each of which needs an API round trip, so two threads were
+# genuinely inside the capture at once.
+#
+# The quiet one: `capture_image_file_via_fiji` identifies its new window by
+# diffing WindowManager ids before and after IJ.open. That diff is only correct
+# if no other thread opens a window in between; concurrently, two captures can
+# claim each other's windows and each save the wrong image — which is the most
+# likely reason both frozen runs produced byte-identical previews.
+#
+# So every JVM-touching vision section runs under one lock, taken with a
+# deadline. The deadline matters as much as the lock: if a previous caller has
+# already wedged the JVM, waiting forever to enter would spread one stuck call
+# into a stuck agent. Timing out instead degrades to a skipped visual check,
+# which is the same trade `_FIJI_OPEN_TIMEOUT_S` already makes for IJ.open.
+_JVM_VISION_LOCK = threading.RLock()
+_VISION_LOCK_TIMEOUT_S = float(os.environ.get("IMAGENTJ_VISION_LOCK_TIMEOUT", "240"))
+
+
+class _VisionBusy(RuntimeError):
+    """Raised when the JVM vision section could not be entered in time."""
+
+
+@contextlib.contextmanager
+def _jvm_vision_section(what: str):
+    """Serialize a JVM-touching vision operation, with a bounded wait."""
+    if not _JVM_VISION_LOCK.acquire(timeout=_VISION_LOCK_TIMEOUT_S):
+        _log.warning("vision: %s waited %.0fs for the JVM lock and gave up",
+                     what, _VISION_LOCK_TIMEOUT_S)
+        raise _VisionBusy(
+            f"another visual operation has held the Fiji/JVM lock for more than "
+            f"{_VISION_LOCK_TIMEOUT_S:.0f}s, so '{what}' was skipped rather than "
+            f"blocking the agent behind it."
+        )
+    try:
+        yield
+    finally:
+        _JVM_VISION_LOCK.release()
+
+
+def _attach_to_jvm() -> None:
+    """Attach the calling thread to the JVM.
+
+    Any thread that touches the JVM must be attached to it first — a pool worker
+    is created outside PyImageJ's knowledge, so without this the call raises
+    instead of opening. Mirrors the attach done in gui_runner and the benchmark
+    dialog dismisser.
+
+    Kept separate from _ij_open_blocking because the Bio-Formats route
+    (open_image_windowless) runs on the same pool threads and jimports its own
+    Java classes, so it needs the identical attach — folding this into only the
+    IJ.open path would leave that route raising on the very formats it exists to
+    handle.
+    """
+    try:
+        import jpype
+        if jpype.isJVMStarted() and not jpype.isThreadAttachedToJVM():
+            jpype.attachThreadToJVM()
+    except Exception:
+        # No jpype, or already attached under a different binding — the caller
+        # below will surface any real problem.
+        _log.debug("Could not attach pool thread to the JVM", exc_info=True)
+
+
+def _ij_open_blocking(IJ, path: str) -> None:
+    """Call ``IJ.open`` from a pool thread."""
+    _attach_to_jvm()
+    IJ.open(path)
 
 _CAPTURE_DIR = Path(os.environ.get("CHAT_DATA_PATH", "/app/data/chats")) / "vlm_captures"
 _CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
@@ -204,15 +309,19 @@ def capture_ij_window(window_name: str, label: Optional[str] = None) -> str:
     except RuntimeError as e:
         return f"ERROR: {e}"
 
-    imp = WindowManager.getImage(window_name)
-    if imp is None:
-        return (
-            f"ERROR: Window not found: '{window_name}'. "
-            f"Open windows: {list(WindowManager.getImageTitles())}"
-        )
-
+    # getImage/duplicate/saveAs all touch the shared display stack, so they must
+    # be one atomic section — see _jvm_vision_section.
     try:
-        IJ.saveAs(imp.duplicate(), "PNG", str(out_path))
+        with _jvm_vision_section(f"capture_ij_window({window_name!r})"):
+            imp = WindowManager.getImage(window_name)
+            if imp is None:
+                return (
+                    f"ERROR: Window not found: '{window_name}'. "
+                    f"Open windows: {list(WindowManager.getImageTitles())}"
+                )
+            IJ.saveAs(imp.duplicate(), "PNG", str(out_path))
+    except _VisionBusy as e:
+        return f"ERROR: {e}"
     except Exception as e:
         return f"ERROR: IJ.saveAs failed — {type(e).__name__}: {e}"
 
@@ -251,15 +360,61 @@ def capture_image_file_via_fiji(image_path: str) -> str:
     except RuntimeError as exc:
         return f"ERROR: {exc}"
 
+    out_path = _capture_path("fiji_preview")
+
+    # The whole open-diff-save-close sequence is one section. Holding the lock
+    # only around IJ.open would leave the before/after window diff below racing
+    # any other thread's open, which is how two concurrent captures end up
+    # claiming each other's windows.
+    try:
+        _vision_lock_cm = _jvm_vision_section(f"fiji_preview({source.name})")
+        _vision_lock_cm.__enter__()
+    except _VisionBusy as e:
+        return f"ERROR: {e}"
+
     before_ids = _image_window_ids(WindowManager)
     new_ids: set[int] = set()
     duplicate = None
-    out_path = _capture_path("fiji_preview")
 
     try:
         # IJ.open follows Fiji's normal opener/plugin dispatch. In a Fiji
-        # installation this includes Bio-Formats for its registered formats.
-        IJ.open(str(source.resolve()))
+        # installation this includes Bio-Formats for its registered formats —
+        # but for those it takes the PROMPTING path, building a modal importer
+        # dialog that cannot be answered under Xvfb and throws/retries forever
+        # (see imagej_context.open_image_windowless). Route those around it.
+        #
+        # Both routes still run on a worker with a deadline. Avoiding the modal
+        # dialog removes the KNOWN cause of a wedged open; the deadline covers
+        # the rest (an unexpected reader, a slow mount, a format Bio-Formats
+        # chokes on). Neither call is cancellable — once the JVM blocks, that
+        # thread is gone for the life of the process — so on timeout we abandon
+        # it (bounded pool, so leakage is capped) and return an error. Skipping
+        # one visual check is far better than freezing the agent that asked.
+        resolved = str(source.resolve())
+
+        def _open() -> None:
+            if needs_bioformats(resolved):
+                _attach_to_jvm()          # BF.openImagePlus jimports on this thread
+                if not open_image_windowless(resolved, show=True):
+                    raise RuntimeError(
+                        f"Bio-Formats returned no image for '{source}'."
+                    )
+            else:
+                _ij_open_blocking(IJ, resolved)
+
+        try:
+            _fiji_open_pool.submit(_open).result(timeout=_FIJI_OPEN_TIMEOUT_S)
+        except concurrent.futures.TimeoutError:
+            _log.warning("Fiji open timed out after %.0fs: %s",
+                         _FIJI_OPEN_TIMEOUT_S, source)
+            return (
+                f"ERROR: Fiji did not finish opening '{source}' within "
+                f"{_FIJI_OPEN_TIMEOUT_S:.0f}s and was abandoned. The reader may be "
+                "waiting on an import dialog or the format may be unsupported. "
+                "Skip the visual check for this source, or pass a PNG/JPG preview."
+            )
+        except RuntimeError as exc:
+            return f"ERROR: {exc}"
         new_ids = _image_window_ids(WindowManager) - before_ids
         if not new_ids:
             return (
@@ -303,6 +458,10 @@ def capture_image_file_via_fiji(image_path: str) -> str:
                     opened.close()
             except Exception:
                 pass
+
+        # Released only after the windows this call created are closed, so the
+        # next caller's before/after diff starts from a clean stack.
+        _vision_lock_cm.__exit__(None, None, None)
 
 
 @tool
