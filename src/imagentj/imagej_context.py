@@ -57,14 +57,26 @@ def _available_memory_gb() -> Optional[int]:
 
 
 def _default_heap_gb() -> int:
-    """Half of what is available, but never below the historical default on a
-    machine that can afford it — so docker-compose's 8 GB cap still yields the
-    6 g it always did, while an uncapped 188 GB node gets a heap that matches."""
+    """Half of what is available — and NOT more.
+
+    There is deliberately no floor at the historical 6 g. That floor meant an
+    8 GiB cap handed 6 g to this JVM while the batch worker took another 2 g:
+    8 of 8 GiB committed to heaps alone, with nothing left for Python, Fiji's
+    native allocations or napari. The kernel then OOM-killed the whole container
+    (exit 137, OOMKilled=true) instead of any one script failing cleanly — seen
+    twice, most recently on the CTC mosaic BigStitcher run, where the 2 g batch
+    worker also logged OutOfMemoryError three times before the container died.
+
+    Paired with the batch worker's quarter (script_tools._batch_env), the two
+    JVMs total ~75% of the cap, leaving real headroom:
+        8 GiB  -> 4 g app + 2 g batch   (was 6 + 2 = the entire cap)
+        12 GiB -> 6 g app + 3 g batch
+        188 GiB-> 94 g app + 47 g batch
+    """
     limit = _available_memory_gb()
     if limit is None:
         return 6
-    half = max(1, limit // 2)
-    return max(6, half) if limit >= 8 else max(2, half)
+    return max(2, limit // 2)
 
 
 _JVM_HEAP = os.environ.get("IMAGENTJ_JVM_HEAP") or f"{_default_heap_gb()}g"

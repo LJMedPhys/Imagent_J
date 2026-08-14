@@ -1180,6 +1180,69 @@ _BATCH_MARKERS = (
 )
 
 
+# Work that routinely needs GIGABYTES outside the Java heap: BigStitcher fusion
+# buffers, and the TensorFlow-backed networks (CSBDeep/StarDist/DeepImageJ), whose
+# native allocations `-Xmx` does not bound at all.
+_HEAVY_MARKERS = (
+    "bigstitcher", "define multi-view", "calculate pairwise shifts",
+    "optimize globally", "image fusion", "fuse dataset",
+    "csbdeep", "stardist", "deepimagej", "tensorflow", "genericnetwork",
+    "trainable weka",
+)
+
+
+def _check_inprocess_heavy(code: str) -> Optional[str]:
+    """Refuse a script that needs the LIVE image AND does heavy native work.
+
+    Those two together are the one combination the executor cannot make safe.
+    Live state forces in-process execution (the batch worker has its own empty
+    Fiji), and in-process means the app's own JVM — so an out-of-memory death
+    takes the whole application with it rather than failing one script.
+
+    That is not hypothetical: a container running exactly this was OOM-killed by
+    the kernel 3 min 13 s after start (exit 137), while loading a TensorFlow
+    SavedModel from a Groovy script the router had logged as
+    `routed in-process: uses live state (ij.getimage())`. There was no Java
+    OutOfMemoryError to catch — `-Xmx` does not bound TensorFlow's native
+    allocations — and the whole session was lost, unsaved.
+
+    The fix is cheap for the caller: read the input from disk instead of the live
+    window, which makes the script self-contained, so it runs in the isolated
+    batch worker where an OOM costs only that script.
+    """
+    lowered = code.lower()
+    if _EXEC_OVERRIDE_RE.search(code):
+        return None  # an explicit override is a deliberate choice; respect it
+    live_hit = next((m for m in _LIVE_STATE_MARKERS if m in lowered), None)
+    if not live_hit:
+        return None
+    heavy_hit = next((m for m in _HEAVY_MARKERS if m in lowered), None)
+    if not heavy_hit:
+        return None
+    return (
+        f"SUMMARY: ERROR — heavy work ('{heavy_hit}') combined with live-image state "
+        f"('{live_hit}') would run in the app's own JVM\n"
+        "STATUS: ERROR\n"
+        "LANGUAGE: Groovy\n"
+        "PRE-FLIGHT CHECK FAILED (script never executed):\n"
+        f"This script reads the LIVE image ({live_hit}), which forces it to run "
+        "in-process — inside the application's own Fiji/JVM. It also does heavy work "
+        f"({heavy_hit}), whose memory is largely NATIVE and therefore not bounded by "
+        "-Xmx. If it exhausts memory there, the kernel kills the entire container: no "
+        "Java OutOfMemoryError to catch, no partial results, the whole session lost. A "
+        "real run died this way 3 minutes after startup while loading a TensorFlow model.\n"
+        "FIX: make the script self-contained so it runs in the isolated batch worker —\n"
+        "  - open the input from DISK instead of the live window:\n"
+        "      def imp = IJ.openImage(path)          // plain TIFF/PNG\n"
+        "      def imp = BF.openImagePlus(opts)[0]   // Bio-Formats formats, windowless\n"
+        "  - save any result to disk rather than leaving it in a window.\n"
+        "Then an out-of-memory failure costs only this script, and the app survives.\n"
+        "If the live window genuinely is the only possible input, say so explicitly with\n"
+        "  // imagentj-exec: inprocess\n"
+        "on its own line — but expect to lose the session if it runs out of memory."
+    )
+
+
 def _should_run_in_subprocess(code: str) -> tuple[bool, str]:
     """Decide where a Groovy script runs. Returns (use_subprocess, why)."""
     override = _EXEC_OVERRIDE_RE.search(code)
@@ -1975,6 +2038,7 @@ def execute_script(directory: str, filename: str) -> str:
         preflight_error = (_check_cellpose_model_name(code_content)
                            or _check_bioformats_dialog_open(code_content)
                            or _check_bigstitcher_direct_loader_z(code_content)
+                           or _check_inprocess_heavy(code_content)
                            or (_check_unattended_dialog_usage(code_content)
                                if _is_unattended_mode() else None))
         if preflight_error:

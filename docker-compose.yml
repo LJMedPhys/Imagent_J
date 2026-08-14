@@ -88,11 +88,19 @@ services:
       - imagent_net
 
     # ── Resource limits ────────────────────────────────────────────────────
+    # memory: the JVM heaps are derived from THIS number at startup
+    # (imagej_context._default_heap_gb takes half for the app JVM,
+    # script_tools._batch_env a quarter for the batch worker), so raising it
+    # raises them and lowering it lowers them — no separate tuning needed.
+    #   8G  -> 4 g app + 2 g batch   (was OOM-killing the container at 6 g + 2 g)
+    #  12G  -> 6 g app + 3 g batch   <- current: fits a 4-channel 8x8 mosaic stitch
+    # Keep headroom on the host: this is a limit, not a reservation, but the
+    # kernel will OOM-kill the container if the host itself runs out.
     deploy:
       resources:
         limits:
           cpus: '4'
-          memory: 8G
+          memory: 12G
         reservations:
           memory: 2G
 
