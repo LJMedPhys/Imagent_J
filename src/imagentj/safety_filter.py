@@ -67,7 +67,15 @@ _BIO_REFUSAL_NEEDLES: tuple[str, ...] = (
     "flagged for possible biological",
 )
 
-_BIO_REFUSAL_HINT_NEEDLE = "invalid_prompt"
+# The provider's error CODE for this refusal is not stable, so match any of the
+# known ones. Observed so far:
+#   invalid_prompt  — code seen in the Aug-9 evidence log
+#   bio_policy      — code='bio_policy', type='invalid_request_error' (Aug-14)
+# Pinning only the first meant is_bio_refusal() returned False for the newer
+# code, wrap_model_call re-raised on the spot, and the whole retry ladder was
+# skipped — which reads exactly like "the mitigation stopped working" even
+# though every rung below was intact.
+_BIO_REFUSAL_HINT_NEEDLES: tuple[str, ...] = ("invalid_prompt", "bio_policy")
 
 BIO_REFUSAL_HINT = (
     "The provider refused this request as a possible biological-risk prompt. "
@@ -94,12 +102,13 @@ def _exception_chain(exc: BaseException) -> Iterable[BaseException]:
 def is_bio_refusal(exc: BaseException) -> bool:
     """True only for the specific OpenAI/OpenRouter biological-risk refusal.
 
-    Requires both the ``invalid_prompt`` code *and* a biosecurity phrase, so
-    unrelated request validation errors still surface as ordinary failures.
+    Requires both a known refusal code (``invalid_prompt`` / ``bio_policy``)
+    *and* a biosecurity phrase, so unrelated request validation errors still
+    surface as ordinary failures.
     """
     for link in _exception_chain(exc):
         text = str(link)
-        if _BIO_REFUSAL_HINT_NEEDLE not in text:
+        if not any(needle in text for needle in _BIO_REFUSAL_HINT_NEEDLES):
             continue
         lowered = text.lower()
         if any(needle in lowered for needle in _BIO_REFUSAL_NEEDLES):
