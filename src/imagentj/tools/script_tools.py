@@ -380,6 +380,41 @@ def _read_window_text(window) -> str:
 _IGNORE_TITLES = {"ImageJ", "Fiji", "Log", "ROI Manager", "Results", ""}
 
 
+def _is_unattended_mode() -> bool:
+    """Whether scripts are running without a human available to answer dialogs.
+
+    Benchmark auto-pilot predates ``IMAGENTJ_UNATTENDED`` and does not set it, so
+    derive the same fact from the benchmark flags as well.  An explicit true
+    unattended flag always wins; an explicit false flag only disables the generic
+    unattended mode, not benchmark auto-pilot.
+    """
+    explicit = os.environ.get("IMAGENTJ_UNATTENDED", "").strip().lower()
+    if explicit in {"1", "true", "yes", "on"}:
+        return True
+    return (
+        os.environ.get("BENCHMARK_MODE", "").strip().lower() == "true"
+        and os.environ.get("BENCHMARK_INTERACTIVE", "").strip().lower() != "true"
+    )
+
+
+def _is_dialog_window(window) -> bool:
+    """Return True for any java.awt.Dialog/JDialog, modal or modeless.
+
+    ``WaitForUserDialog`` is deliberately modeless at the AWT level but still
+    blocks the calling workflow until a button is pressed, so ``isModal()`` is not
+    a sufficient unattended-safety test.
+    """
+    try:
+        cls = window.getClass()
+        while cls is not None:
+            if str(cls.getName()) in {"java.awt.Dialog", "javax.swing.JDialog"}:
+                return True
+            cls = cls.getSuperclass()
+    except Exception:
+        pass
+    return False
+
+
 def _snapshot_all_windows() -> dict:
     """
     Snapshot {classname::title: window} for ALL visible AWT windows
@@ -409,11 +444,22 @@ class _WindowMonitor:
     Classifies each new window into errors / results / info buckets.
     """
 
-    def __init__(self, snapshot_before: dict, poll_interval: float = 0.05):
+    def __init__(
+        self,
+        snapshot_before: dict,
+        poll_interval: float = 0.05,
+        modal_grace: float = 0.5,
+        unattended: Optional[bool] = None,
+    ):
         self._seen = dict(snapshot_before)
         self._errors: list[str] = []
         self._results_count = 0
         self._info: list[str] = []
+        self._unattended = _is_unattended_mode() if unattended is None else unattended
+        self._poll_interval = poll_interval
+        self._modal_grace = modal_grace
+        self._pending_modals: dict[str, float] = {}
+        self._fatal_dialog: Optional[str] = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -425,11 +471,12 @@ class _WindowMonitor:
     def _run(self):
         while not self._stop.is_set():
             self._poll()
-            time.sleep(0.05)
+            time.sleep(self._poll_interval)
 
     def _poll(self):
         try:
             Window = jimport("java.awt.Window")
+            visible_keys: set[str] = set()
             for window in Window.getWindows():
                 if not window.isVisible():
                     continue
@@ -439,10 +486,33 @@ class _WindowMonitor:
                     title = str(window.getClass().getSimpleName())
 
                 key = f"{window.getClass().getSimpleName()}::{title}"
+                visible_keys.add(key)
 
                 if key in self._seen:
                     continue
                 if title in _IGNORE_TITLES:
+                    self._seen[key] = window
+                    continue
+
+                # A macro can instantiate a dialog and immediately satisfy it from
+                # recorded options.  Give those transient windows a short grace
+                # period, but a modal that remains visible in unattended mode is
+                # necessarily waiting for input that will never arrive.  Do not
+                # auto-click or dispose it: accepting defaults can silently change a
+                # scientific result.  _await_groovy observes this fatal marker and
+                # terminates the disposable worker instead.
+                if self._unattended and _is_dialog_window(window):
+                    first_seen = self._pending_modals.setdefault(key, time.monotonic())
+                    if time.monotonic() - first_seen < self._modal_grace:
+                        continue
+                    text = _read_window_text(window)
+                    entry = f"[{title}]" if title else "[Modal dialog]"
+                    if text:
+                        entry += f"\n{text[:500]}"
+                    with self._lock:
+                        if self._fatal_dialog is None:
+                            self._fatal_dialog = entry
+                            self._errors.append(entry)
                     self._seen[key] = window
                     continue
 
@@ -461,8 +531,17 @@ class _WindowMonitor:
                         self._info.append(entry)
 
                 self._seen[key] = window
+
+            for key in list(self._pending_modals):
+                if key not in visible_keys:
+                    self._pending_modals.pop(key, None)
         except Exception:
             pass
+
+    @property
+    def fatal_dialog(self) -> Optional[str]:
+        with self._lock:
+            return self._fatal_dialog
 
     def stop(self) -> dict:
         self._stop.set()
@@ -722,6 +801,7 @@ def _abort_groovy(runner: "_GroovyRunner") -> bool:
 def _await_groovy(
     runner: "_GroovyRunner",
     handle: "run_control.RunHandle",
+    monitor: _WindowMonitor,
     live_sink=None,
     live_output=None,
 ) -> bool:
@@ -757,6 +837,20 @@ def _await_groovy(
     while True:
         runner.track_thread()
         _echo()
+        fatal_dialog = monitor.fatal_dialog
+        if fatal_dialog and not handle.terminated:
+            # Never dismiss a dialog in a disposable worker. Closing it can make
+            # the plugin accept defaults and let the script execute another write
+            # before cooperative cancellation lands. Return the error report now;
+            # groovy_worker flushes it and os._exit() kills the entire JVM.
+            if os.environ.get("IMAGENTJ_BATCH_WORKER") == "1":
+                return False
+            handle.terminate(
+                "Unexpected modal dialog in unattended execution: "
+                + fatal_dialog.replace("\n", " ")[:300],
+                by="watchdog",
+            )
+            return handle.terminate_succeeded is False
         if runner.done and not handle.terminated:
             _echo()
             return False
@@ -825,6 +919,50 @@ def _stopped_report(handle, out_stream, ij_log_before, monitor, detached: bool) 
     return "\n".join(parts)
 
 
+def _unexpected_dialog_report(
+    handle, out_stream, ij_log_before, monitor, detached: bool
+) -> str:
+    """Actionable failure for a modal dialog detected during unattended work."""
+    fatal = monitor.fatal_dialog or "[unknown modal dialog]"
+    monitor.stop()
+    try:
+        partial = str(out_stream.toString())[-1500:]
+    except Exception:
+        partial = ""
+    try:
+        ij_log = get_new_ij_log_entries(ij_log_before)[-800:]
+    except Exception:
+        ij_log = ""
+
+    parts = [
+        "SUMMARY: ERROR — unexpected modal dialog in unattended execution",
+        "STATUS: ERROR",
+        "LANGUAGE: Groovy",
+        "UNATTENDED DIALOG BLOCKED:",
+        fatal,
+        "The script was terminated because nobody can answer a modal dialog in "
+        "auto-pilot mode. Do not auto-click it or retry unchanged. Replace the "
+        "prompting plugin entry point with a programmatic/windowless API and pass "
+        "every required option explicitly.",
+    ]
+    if os.environ.get("IMAGENTJ_BATCH_WORKER") == "1":
+        parts.append(
+            "The isolated worker is exiting with the dialog still unanswered; no "
+            "post-dialog script statement is allowed to run."
+        )
+    if detached:
+        parts.append(
+            "The in-JVM script ignored cooperative abort. If this was an isolated "
+            "batch worker it will now exit; otherwise restart Fiji before running "
+            "another script."
+        )
+    if partial.strip():
+        parts.append(f"PARTIAL_STDOUT:\n{partial}")
+    if ij_log.strip():
+        parts.append(f"PARTIAL_IJ_LOG:\n{ij_log}")
+    return "\n".join(parts)
+
+
 def run_groovy_script(script: str, ij, purpose: str = "", live_sink=None) -> str:
     """
     Execute a Groovy script in ImageJ/Fiji, capturing all output channels
@@ -881,7 +1019,12 @@ def _run_groovy_script(script: str, ij, purpose: str = "", live_sink=None) -> st
     ))
 
     try:
-        detached = _await_groovy(runner, handle, live_sink, _live_output)
+        detached = _await_groovy(runner, handle, monitor, live_sink, _live_output)
+
+        if monitor.fatal_dialog:
+            return _unexpected_dialog_report(
+                handle, out_stream, ij_log_before, monitor, detached
+            )
 
         # Stopped runs report as stopped whether or not the abort landed — a
         # script that aborted cleanly must not come back looking like a normal
@@ -1596,7 +1739,10 @@ def _check_cellpose_model_name(code: str) -> Optional[str]:
     return None
 
 
-_IJ_OPEN_RE = re.compile(r"\bIJ\s*\.\s*open(?:Image)?\s*\(")
+_IJ_OPEN_CALL_RE = re.compile(
+    r"\bIJ\s*\.\s*open(?:Image)?\s*\(\s*([^,\n\)]+)",
+    re.MULTILINE,
+)
 # Formats HandleExtraFileTypes hands to Bio-Formats. `.ome.tif` is listed first
 # because its suffix is plain `.tif`, so an extension check alone misses it.
 _BIOFORMATS_EXT_RE = re.compile(
@@ -1613,28 +1759,30 @@ def _check_bioformats_dialog_open(code: str) -> Optional[str]:
     dialog. Under Xvfb it cannot be answered and dialog construction throws
     `no ComponentUI class for: javax.swing.JSeparator`; the import retries forever.
 
-    Only fires when the script BOTH calls IJ.open* AND mentions a Bio-Formats
-    extension in a string, so plain .tif/.png work stays untouched.
+    Only fires when an individual IJ.open* call's first argument can be resolved
+    statically to a Bio-Formats path. Merely mentioning an LSM elsewhere in a
+    script that uses IJ.openImage for prepared TIFFs must not trip this guard.
+    Unresolved expressions are left to the runtime dialog monitor.
     """
-    if not _IJ_OPEN_RE.search(code):
+    bad_path = None
+    ext = None
+    for call in _IJ_OPEN_CALL_RE.finditer(_without_groovy_comments(code)):
+        resolved = _resolve_string_value(call.group(1), code)
+        if resolved is None:
+            continue
+        match = _BIOFORMATS_EXT_RE.search(resolved)
+        if match:
+            bad_path = resolved
+            ext = match.group(0)
+            break
+    if bad_path is None or ext is None:
         return None
-    # Ignore lines that are writing a Bio-Formats-named file rather than opening
-    # one — a script may legitimately save "out.ome.tif" while opening a plain .tif,
-    # and blocking that would be a false positive.
-    readable = "\n".join(
-        line for line in code.splitlines()
-        if not re.search(r"\b(?:saveAs|save|write|export|Writer)\b", line, re.IGNORECASE)
-    )
-    m = _BIOFORMATS_EXT_RE.search(readable)
-    if not m:
-        return None
-    ext = m.group(0)
     return (
         f"SUMMARY: ERROR — '{ext}' must not be opened with IJ.open/IJ.openImage\n"
         "STATUS: ERROR\n"
         "LANGUAGE: Groovy\n"
         "PRE-FLIGHT CHECK FAILED (script never executed):\n"
-        f"`{ext}` is a Bio-Formats format. IJ.open/IJ.openImage dispatch it through "
+        f"`{bad_path}` is a Bio-Formats path. IJ.open/IJ.openImage dispatch it through "
         "HandleExtraFileTypes to Bio-Formats' PROMPTING importer, which builds a modal "
         "dialog. In an unattended run nobody can answer it, and under Xvfb the "
         "look-and-feel cannot supply UI delegates, so it throws `java.lang.Error: no "
@@ -1649,6 +1797,102 @@ def _check_bioformats_dialog_open(code: str) -> Optional[str]:
         "    def imp = BF.openImagePlus(opts)[0]\n"
         "Setting the `bioformats.windowless` IJ preference does NOT work (verified against "
         "bio-formats_plugins 8.5.0) — only setWindowless(true) does."
+    )
+
+
+_UNATTENDED_DIALOG_PATTERNS = (
+    (re.compile(r"\bnew\s+(?:ij\.gui\.)?(?:NonBlocking)?GenericDialog\s*\("),
+     "GenericDialog"),
+    (re.compile(r"\bnew\s+(?:ij\.gui\.)?WaitForUserDialog\s*\("),
+     "WaitForUserDialog"),
+    (re.compile(r"\b(?:javax\.swing\.)?JOptionPane\s*\."), "JOptionPane"),
+    (re.compile(r"\bnew\s+(?:java\.awt\.)?(?:Dialog|FileDialog)\s*\("),
+     "AWT Dialog"),
+    (re.compile(r"\bnew\s+(?:javax\.swing\.)?JDialog\s*\("), "JDialog"),
+    (re.compile(r"\bnew\s+(?:ij\.io\.)?(?:OpenDialog|SaveDialog|DirectoryChooser)\s*\("),
+     "file chooser dialog"),
+    (re.compile(r"\bIJ\s*\.\s*(?:error|showMessage(?:WithCancel)?|getString|getNumber)\s*\("),
+     "interactive IJ prompt"),
+    (re.compile(
+        r"\bIJ\s*\.\s*runPlugIn\s*\([^;\n]*[\"']ij\.plugin\.ZProjector[\"']",
+        re.IGNORECASE,
+    ), "prompting ZProjector plugin entry point"),
+)
+
+
+def _without_groovy_comments(code: str) -> str:
+    """Remove comments before conservative unattended-dialog preflight checks."""
+    without_blocks = re.sub(r"/\*.*?\*/", "", code, flags=re.DOTALL)
+    return "\n".join(line.split("//", 1)[0] for line in without_blocks.splitlines())
+
+
+def _check_unattended_dialog_usage(code: str) -> Optional[str]:
+    """Reject explicit prompting APIs before an unattended script reaches Fiji.
+
+    This intentionally complements, rather than replaces, _WindowMonitor: an
+    ``IJ.run`` command can create a dialog inside a plugin JAR even when the Groovy
+    source contains no dialog class at all.
+    """
+    readable = _without_groovy_comments(code)
+    hit = next(
+        ((pattern.search(readable), label) for pattern, label in _UNATTENDED_DIALOG_PATTERNS
+         if pattern.search(readable)),
+        None,
+    )
+    if hit is None:
+        return None
+    match, label = hit
+    snippet = match.group(0).strip().replace("\n", " ")[:160]
+    return (
+        f"SUMMARY: ERROR — {label} is not allowed in unattended execution\n"
+        "STATUS: ERROR\n"
+        "LANGUAGE: Groovy\n"
+        "PRE-FLIGHT CHECK FAILED (script never executed):\n"
+        f"Detected `{snippet}`. Auto-pilot runs have no human to answer dialogs, "
+        "and automatically accepting defaults can silently produce the wrong "
+        "scientific result. Use a direct programmatic/windowless API instead and "
+        "throw an exception for errors. For Z projection use "
+        "`ij.plugin.ZProjector.run(imp, 'max')`; do not use "
+        "`IJ.runPlugIn(..., 'ij.plugin.ZProjector', ...)`."
+    )
+
+
+def _check_bigstitcher_direct_loader_z(code: str) -> Optional[str]:
+    """Require a singleton-Z guard for BigStitcher's direct TIFF loader.
+
+    BigStitcher 3.0.8 can enter a repeated ``LazyDownsample2x`` exception loop
+    when phase correlation downsamples XY on direct/virtual multichannel TIFFs
+    that still contain several Z planes.  A static check cannot inspect the
+    files, so accept either explicit per-channel projection or an executable
+    ``getNSlices()`` validation before dataset definition.
+    """
+    readable = _without_groovy_comments(code)
+    is_direct_bigstitcher = (
+        "Define Multi-View Dataset" in readable
+        and "Load raw data directly (no resaving)" in readable
+        and "Calculate pairwise shifts" in readable
+    )
+    if not is_direct_bigstitcher:
+        return None
+    has_projection = bool(re.search(r"\bZProjector\s*\.\s*run\s*\(", readable))
+    has_singleton_guard = bool(
+        re.search(r"\bgetNSlices\s*\(\s*\)\s*(?:!=|>|==)\s*1\b", readable)
+    )
+    if has_projection or has_singleton_guard:
+        return None
+    return (
+        "SUMMARY: ERROR — BigStitcher direct loading requires singleton-Z prepared tiles\n"
+        "STATUS: ERROR\n"
+        "LANGUAGE: Groovy\n"
+        "PRE-FLIGHT CHECK FAILED (script never executed):\n"
+        "The script directly/virtually loads prepared TIFFs and performs phase-correlation "
+        "downsampling, but it neither projects Z nor verifies `getNSlices() == 1`. "
+        "BigStitcher 3.0.8 can otherwise repeat `LazyDownsample2x` / "
+        "`ArrayIndexOutOfBoundsException` indefinitely on 4C x multi-Z TIFFs.\n"
+        "FIX: before `Define Multi-View Dataset`, either split every channel and call "
+        "`ZProjector.run(channelImp, 'max')`, then merge/save one C x 1Z x 1T TIFF per "
+        "tile; or open and validate every already-projected tile with an executable "
+        "`if (imp.getNSlices() != 1) throw ...` guard. Keep `downsample_in_z=1`."
     )
 
 
@@ -1729,7 +1973,10 @@ def execute_script(directory: str, filename: str) -> str:
 
     if filename.endswith('.groovy'):
         preflight_error = (_check_cellpose_model_name(code_content)
-                           or _check_bioformats_dialog_open(code_content))
+                           or _check_bioformats_dialog_open(code_content)
+                           or _check_bigstitcher_direct_loader_z(code_content)
+                           or (_check_unattended_dialog_usage(code_content)
+                               if _is_unattended_mode() else None))
         if preflight_error:
             return preflight_error
 

@@ -9,6 +9,7 @@ from openai import OpenAIError
 from . import stop_signal
 from . import agent_watchdog
 from . import config
+from .safety_filter import BIO_REFUSAL_HINT, is_bio_refusal
 
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
@@ -49,7 +50,8 @@ from .tools import (
     check_plugin_installed, mkdir_copy, save_script, edit_script, copy_file, execute_script,
     get_script_info, load_script, get_script_history,
     setup_analysis_workspace, save_markdown,
-    NarrationReminderMiddleware, PhaseGuardMiddleware, VisionOptionMiddleware,
+    NarrationReminderMiddleware, PhaseGuardMiddleware, ToolOutputLimitMiddleware,
+    VisionOptionMiddleware, BioRefusalRetryMiddleware,
     update_state_ledger, read_state_ledger, set_ledger_metadata, get_ledger_context,
     check_environment,
     set_dialog_vision_llm,
@@ -344,7 +346,7 @@ def _seed_kwargs() -> dict:
     return {"seed": _LLM_SEED} if _LLM_SEED is not None else {}
 
 llm_supervisor = ChatOpenAI(
-    model=m(config.model_for("supervisor", "openai/gpt-5.6-luna")),
+    model=m(config.model_for("supervisor", "openai/gpt-5.4")),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
@@ -492,6 +494,7 @@ def _make_coder_agent(model, name, system_prompt):
         response_format=ProviderStrategy(schema=ScriptHandoff, strict=True),
         name=name,
         middleware=[
+            ToolOutputLimitMiddleware(),
             agent_watchdog.middleware(),
             FilesystemFileSearchMiddleware(
                 # Scoped to /app/skills/ — the workflow templates / SKILL.md the coder
@@ -513,6 +516,8 @@ def _make_coder_agent(model, name, system_prompt):
                     ),
                 ],
             ),
+            # Innermost — see BioRefusalRetryMiddleware. Must stay last.
+            BioRefusalRetryMiddleware(),
         ],
     )
 
@@ -565,6 +570,7 @@ _analyst_agent = create_agent(
     response_format=ProviderStrategy(schema=AnalystHandoff, strict=True),
     name="python_data_analyst",
     middleware=[
+        ToolOutputLimitMiddleware(),
         SkillsMiddleware(
             backend=_python_skills_backend,
             # /app/skills/napari/ is included so the analyst can read the micro_sam skill and
@@ -583,6 +589,9 @@ _analyst_agent = create_agent(
                 ),
             ],
         ),
+        # Innermost — see BioRefusalRetryMiddleware. Must stay last, i.e. after
+        # SkillsMiddleware, so a retry is not re-injected with the catalogue.
+        BioRefusalRetryMiddleware(),
     ],
 )
 
@@ -602,7 +611,7 @@ _qa_agent = create_agent(
     name="qa_reporter",
     # Feeds the agent watchdog its tool-call history — this is the agent whose
     # write→re-read loop went unbounded for 34 minutes.
-    middleware=[agent_watchdog.middleware()],
+    middleware=[ToolOutputLimitMiddleware(), agent_watchdog.middleware()],
 )
 
 # Plugin manager — gets SkillsMiddleware so it sees all plugin skill descriptions
@@ -646,6 +655,7 @@ _plugin_agent = create_agent(
     response_format=ProviderStrategy(schema=PluginRecommendation),
     name="plugin_manager",
     middleware=[
+        ToolOutputLimitMiddleware(),
         SkillsMiddleware(
             backend=_plugin_skills_backend,
             # Three skill families, so the manager can route each pipeline step to the
@@ -657,6 +667,11 @@ _plugin_agent = create_agent(
             # three sources stay cleanly separated and none shadows another.
             sources=["/app/skills/", "/app/skills/python/", "/app/skills/napari/"],
         ),
+        # Innermost — see BioRefusalRetryMiddleware. Must stay last, i.e. after
+        # SkillsMiddleware. This is the agent the benchmark evidence caught being
+        # refused: refused_debug.log's traceback lands one frame below
+        # deepagents' skills.py wrap_model_call inside plugin_manager.
+        BioRefusalRetryMiddleware(),
     ],
 )
 
@@ -677,6 +692,7 @@ librarian_agent = create_agent(
     system_prompt=librarian_prompt,
     name="librarian",
     middleware=[
+        ToolOutputLimitMiddleware(),
         SkillsMiddleware(
             backend=_librarian_skills_backend,
             sources=["/app/skills/learned_memory/"],  # only the Librarian's own skill
@@ -696,7 +712,7 @@ _vlm_agent = (
         system_prompt=vlm_judge_prompt,
         response_format=ToolStrategy(schema=VLMHandoff, handle_errors=True),
         name="vlm_judge",
-        middleware=[agent_watchdog.middleware()],
+        middleware=[ToolOutputLimitMiddleware(), agent_watchdog.middleware()],
     )
     if llm_vlm is not None
     else None
@@ -788,6 +804,33 @@ def _newest_script_since(directory: str, pre: dict) -> str:
     return newest
 
 
+# The failure handoffs do not share one prose field: ScriptHandoff/AnalystHandoff/
+# VLMHandoff carry `error_message`, PluginRecommendation carries
+# `relevance_reasoning` and no `error_message` at all. Writing to a field a model
+# does not declare raises in pydantic v2, so an unconditional
+# `setattr(handoff, "error_message", ...)` silently dropped the note on
+# plugin_manager — the one subagent the benchmark evidence shows being refused.
+_HANDOFF_NOTE_FIELDS = ("error_message", "relevance_reasoning", "reasoning")
+
+
+def _annotate_handoff(handoff, note: str):
+    """Append *note* to whichever prose field this handoff type declares."""
+    declared = getattr(type(handoff), "model_fields", {}) or {}
+    for field in _HANDOFF_NOTE_FIELDS:
+        if field not in declared:
+            continue
+        try:
+            existing = getattr(handoff, field, None) or ""
+            setattr(handoff, field, (existing + " " + note).strip())
+        except Exception:
+            log.warning("could not annotate %s.%s with the refusal note",
+                        type(handoff).__name__, field)
+        return handoff
+    log.warning("%s declares no field to carry the refusal note",
+                type(handoff).__name__)
+    return handoff
+
+
 def _run_capped(agent, payload, on_cap, name: str = "subagent"):
     """Run a stateless subagent under BOTH bounds, returning on_cap() if either trips.
 
@@ -812,6 +855,13 @@ def _run_capped(agent, payload, on_cap, name: str = "subagent"):
     """
     handle = agent_watchdog.register(name)
     try:
+        # No bio-refusal retry here on purpose. BioRefusalRetryMiddleware already
+        # reformulates and retries at the model boundary, where it can actually
+        # drop the injected skill catalogue the provider objected to. Retrying at
+        # this level would instead replay the whole subagent — every tool call
+        # again — around a payload whose only reformulation is a rewrite of the
+        # user's own wording. Reaching the handler below means the middleware
+        # exhausted its ladder, so all that is left is to degrade cleanly.
         result = stop_signal.SubagentRunner(
             agent.invoke,
             payload,
@@ -836,6 +886,34 @@ def _run_capped(agent, payload, on_cap, name: str = "subagent"):
         # because one call died in the socket.
         log.warning("%s failed at the transport layer (%s: %s) — degrading to a "
                     "failure handoff.", name, type(exc).__name__, exc)
+        return on_cap()
+    except Exception as exc:
+        if is_bio_refusal(exc):
+            # All reformulation attempts were refused. Hand the supervisor an
+            # explicit explanation — this is a different signal from a timeout
+            # or a watchdog abort, and the supervisor must not burn time
+            # re-running the same wording.
+            log.warning(
+                "%s refused by provider biological-risk filter after every "
+                "reformulation attempt — degrading to failure handoff.", name,
+            )
+            return _annotate_handoff(on_cap(), BIO_REFUSAL_HINT)
+        # Nested tool validation/runtime failures must stay local to the subagent.
+        # One observed example is a provider emitting a content-block list for a
+        # regex ``pattern`` argument; FilesystemFileSearchMiddleware then raises
+        # ``TypeError: expected string or bytes-like object, got 'list'``. Letting
+        # that escape aborts the entire supervisor and discards otherwise valid
+        # image deliverables. Return the same typed failure handoff used for a
+        # watchdog/transport failure so the supervisor can debug, retry, or choose
+        # another backend. BaseException subclasses (KeyboardInterrupt,
+        # SystemExit) deliberately remain uncaught.
+        log.exception(
+            "%s failed inside a nested model/tool call (%s: %s) — degrading "
+            "to a failure handoff so the pipeline continues.",
+            name,
+            type(exc).__name__,
+            exc,
+        )
         return on_cap()
     finally:
         agent_watchdog.release(handle)
@@ -1335,6 +1413,7 @@ def init_agent():
     no_vision_prompt = build_supervisor_prompt(enable_qa=True, enable_vision=False)
 
     supervisor_middleware = [
+        ToolOutputLimitMiddleware(),
         ContextEditingMiddleware(
             edits=[
                 ClearToolUsesEdit(
@@ -1361,6 +1440,12 @@ def init_agent():
             enabled_prompt=vision_prompt,
             disabled_prompt=no_vision_prompt,
         ),
+        # Last line before a provider biological-risk refusal unwinds the whole
+        # supervisor loop. create_deep_agent inserts user middleware after its
+        # own Skills/Filesystem/SubAgent stack, so this sees their injected
+        # system-message blocks and can drop them on retry 1; retry 2 also
+        # neutralises pathogen proper nouns. Must stay last in this list.
+        BioRefusalRetryMiddleware(),
     ]
 
     supervisor = create_deep_agent(
