@@ -75,6 +75,43 @@ operates on the shared XML project file.
    a broken output. Always run optimize → (ICP) → fuse in order.
 5. **ICP requires sufficient shared signal** — if tiles share little overlap
    content, affine ICP will diverge. Use translation model as fallback.
+6. **`org.janelia.saalfeldlab.n5.N5Exception: Can't make a dataset on existing dataset`
+   — a leftover output from a PREVIOUS attempt, not a bug in your parameters.**
+   BigStitcher's re-save writes N5/Zarr/HDF5, and those are **directories**, not
+   files. A retry that only cleans files leaves them behind, and the next run finds
+   an existing dataset where it expected clean ground. This bites hardest when the
+   stale output sits in the *input* folder that Define Dataset scans.
+
+   The naive cleanup is wrong — `isFile()` skips exactly the thing you need gone:
+   ```groovy
+   dir.listFiles()?.each { if (it.isFile()) it.delete() }          // WRONG: skips dataset.ome.zarr/
+   dir.listFiles()?.each { it.isDirectory() ? it.deleteDir() : it.delete() }   // RIGHT
+   ```
+   Observed for real: a run left a 681 MB `dataset.ome.zarr/` (30,210 files) in the
+   tile input folder; every retry rewrote the 64 tiles beside it and failed again
+   with the same N5Exception. If you hit this, delete the stale `*.zarr` / `*.n5` /
+   `*.h5` **directory** before re-running — re-running unchanged cannot succeed.
+   Keep the re-save target OUT of the input folder as well (see pitfall 3).
+7. **"Missing stage coordinates" on a Zeiss LSM mosaic — the positions ARE there,
+   you are reading the wrong place.** Bio-Formats leaves OME `StageLabel` null for
+   LSM, so `Image.getStageLabel()` returns null for every series and a script that
+   trusts it concludes the file has no tile positions. A real run then reported
+   `Missing stage coordinates for series 0` → `Positioned series count=0 (< 64)`,
+   fell back to inferring the lattice, and produced `Expected 8 axis groups, got 9`
+   — all for a file whose grid was perfectly regular.
+
+   The positions live in the vendor block. Get them from the metadata tool
+   (`extract_image_metadata` reports `dimensions.mosaic_grid`) or directly:
+   ```python
+   import tifffile, numpy as np
+   md = tifffile.TiffFile(path).lsm_metadata
+   tp = np.asarray(md['TilePositions'])          # (n_tiles, 3), METRES
+   ux, uy = np.unique(tp[:,0].round(9)), np.unique(tp[:,1].round(9))   # grid_x, grid_y
+   ```
+   **Round before uniquing** — float noise is what turns 8 rows into "9 axis groups".
+   For the reference dataset this yields 64 tiles, an exact 8x8 grid, 382.59 um step
+   against a 425.1 um tile = **10.0% overlap**, which you can hand straight to
+   `Move Tile to Grid` instead of asking BigStitcher to discover it.
 
 ---
 
