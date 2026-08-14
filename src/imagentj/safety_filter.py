@@ -316,7 +316,47 @@ def _is_reasoning_item(item: Any) -> bool:
     return False
 
 
-def _scrub_content_blocks(blocks: Any, neutralize: bool, stats: dict) -> Any:
+def _is_function_call_item(item: Any) -> bool:
+    """True for Responses-API tool-call items (the call or its output)."""
+    if not isinstance(item, dict):
+        return False
+    if item.get("type") in ("function_call", "function_call_output"):
+        return True
+    ident = item.get("id") or item.get("call_id")
+    return isinstance(ident, str) and ident.startswith(("fc_", "call_"))
+
+
+def _contains_function_call(messages: Iterable) -> bool:
+    """True if the payload carries any tool-call item, at any nesting level.
+
+    On the Responses API a ``function_call`` is only valid when the ``reasoning``
+    item that produced it travels with it. Dropping reasoning while keeping the
+    call is rejected outright:
+
+        Item 'fc_...' of type 'function_call' was provided without its required
+        'reasoning' item: 'rs_...'
+
+    which fails the whole retry — so the refusal mitigation would turn a
+    recoverable content refusal into a hard 400. When tool calls are present the
+    reasoning has to stay; rung 1 still drops the injected skill catalogue,
+    which is the part the evidence actually implicates.
+    """
+    for msg in messages:
+        if _is_function_call_item(msg):
+            return True
+        content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
+        if isinstance(content, list) and any(_is_function_call_item(b) for b in content):
+            return True
+        # LangChain surfaces tool calls off to the side of .content
+        if getattr(msg, "tool_calls", None):
+            return True
+        if isinstance(msg, dict) and msg.get("tool_calls"):
+            return True
+    return False
+
+
+def _scrub_content_blocks(blocks: Any, neutralize: bool, stats: dict,
+                          keep_reasoning: bool = False) -> Any:
     """Walk a LangChain/Responses content value, dropping reasoning blocks and
     optionally neutralising prose. Handles both str and list-of-blocks shapes."""
     if isinstance(blocks, str):
@@ -330,6 +370,9 @@ def _scrub_content_blocks(blocks: Any, neutralize: bool, stats: dict) -> Any:
     out: list = []
     for block in blocks:
         if _is_reasoning_item(block):
+            if keep_reasoning:
+                out.append(block)
+                continue
             stats["reasoning_dropped"] += 1
             continue
         if isinstance(block, dict):
@@ -362,15 +405,23 @@ def scrub_messages_report(messages: Iterable, neutralize: bool = False) -> Tuple
     """
     stats = {"reasoning_dropped": 0, "terms_replaced": 0}
     src = copy.deepcopy(list(messages))
+    # Reasoning may only be dropped when nothing depends on it (see
+    # _contains_function_call); otherwise the retry is rejected with a 400.
+    keep_reasoning = _contains_function_call(src)
+    stats["reasoning_kept_for_tool_calls"] = keep_reasoning
     out: list = []
     for msg in src:
         if _is_reasoning_item(msg):
+            if keep_reasoning:
+                out.append(msg)
+                continue
             stats["reasoning_dropped"] += 1
             continue
         if isinstance(msg, dict):
             new_msg = dict(msg)
             if "content" in new_msg:
-                new_msg["content"] = _scrub_content_blocks(new_msg["content"], neutralize, stats)
+                new_msg["content"] = _scrub_content_blocks(
+                    new_msg["content"], neutralize, stats, keep_reasoning)
             # Responses-style input items keep the prose at top level.
             if neutralize:
                 for key in ("text", "input_text"):
@@ -381,7 +432,8 @@ def scrub_messages_report(messages: Iterable, neutralize: bool = False) -> Tuple
             out.append(new_msg)
             continue
         # LangChain message object: operate on a copy, leave the original alone.
-        scrubbed = _scrub_content_blocks(getattr(msg, "content", None), neutralize, stats)
+        scrubbed = _scrub_content_blocks(
+            getattr(msg, "content", None), neutralize, stats, keep_reasoning)
         if hasattr(msg, "model_copy"):
             new_msg = msg.model_copy(update={"content": scrubbed})
         elif hasattr(msg, "copy"):
