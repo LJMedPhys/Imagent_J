@@ -320,11 +320,28 @@ def _load_task() -> tuple[str, list[Path]]:
 
 
 def _stage_images(images: list[Path]) -> list[Path]:
+    """Copy the task's input images into the container, keeping their layout.
+
+    ``_load_task`` collects images with ``rglob``, so ``images`` can hold
+    equally-named files from different sub-directories — several benchmark
+    tasks are laid out that way (one folder per condition, per channel or per
+    time series, with the same filenames inside each). Flattening them into a
+    single directory made those files overwrite each other silently: on a
+    120-image task with two sub-folders the agent saw 60 images and had no way
+    to know the rest existed. Mirroring the input hierarchy under ``dest``
+    keeps every file distinct.
+    """
+    root = _input_dir()
     dest = Path("/app/data/benchmark_images")
     dest.mkdir(parents=True, exist_ok=True)
     local = []
     for img in images:
-        dst = dest / img.name
+        try:
+            rel = img.relative_to(root)
+        except ValueError:
+            rel = Path(img.name)
+        dst = dest / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(str(img), str(dst))
         local.append(dst)
     return local
