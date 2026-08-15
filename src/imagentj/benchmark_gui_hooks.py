@@ -90,6 +90,46 @@ def is_autopilot() -> bool:
     )
 
 
+def _env_flag(name: str, default: str) -> bool:
+    return os.environ.get(name, default).strip().lower() in {"1", "true", "yes"}
+
+
+def enumerate_inputs() -> bool:
+    """Whether to hand the agent a ready-made listing of the input images.
+
+    Defaults to the historical behaviour (listing them). A benchmark whose task
+    instruction asks the agent to discover the input layout itself -- several
+    state this explicitly, because file discovery is part of what they measure
+    -- should set ``BENCHMARK_ENUMERATE_INPUTS=0``, otherwise this harness hands
+    ImagentJ a listing that agents without a comparable hook never receive.
+    """
+    return _env_flag("BENCHMARK_ENUMERATE_INPUTS", "1")
+
+
+def duplicate_outputs_to_project() -> bool:
+    """Whether to tell the agent to save deliverables twice.
+
+    Defaults to the historical behaviour: the prompt asks for outputs in the
+    benchmark output directory *and* in the project folder, and the finish hook
+    then copies the project folder out as well. Set
+    ``BENCHMARK_DUPLICATE_OUTPUTS=0`` to ask for one copy, in the output
+    directory the harness actually reads.
+    """
+    return _env_flag("BENCHMARK_DUPLICATE_OUTPUTS", "1")
+
+
+def workspace_subdir() -> str:
+    """Sub-directory of the output root to receive the copied project folder.
+
+    Empty (the default) reproduces the historical layout, in which the whole
+    workspace lands in the output root beside the deliverables. A harness that
+    resolves deliverables by globbing the output root should set
+    ``BENCHMARK_WORKSPACE_SUBDIR=supporting`` so intermediates -- probability
+    maps, per-step TIFFs, scratch CSVs -- cannot be mistaken for final results.
+    """
+    return os.environ.get("BENCHMARK_WORKSPACE_SUBDIR", "").strip().strip("/")
+
+
 def want_vlm() -> bool:
     """Vision (VLM) judge requested for this benchmark run.
 
@@ -485,7 +525,8 @@ def _collect_and_finish(gui, message: str = "", success: bool = True, error: str
                 for src in src_dir.rglob("*"):
                     if src.is_file():
                         rel = src.relative_to(proj_root)
-                        dst = out / rel
+                        sub = workspace_subdir()
+                        dst = out / sub / rel if sub else out / rel
                         dst.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copy2(str(src), str(dst))
     except Exception:
@@ -702,11 +743,15 @@ def _auto_send(gui) -> None:
     local_images = _stage_images(images) if images else []
     file_list = "\n".join(f"- {p}" for p in local_images)
 
+    where = (
+        f"{_output_dir().resolve()} as well as the project folder"
+        if duplicate_outputs_to_project()
+        else f"{_output_dir().resolve()}"
+    )
     prompt = (
         f"{instruction}\n\n"
-        f"[SYSTEM: Input images]:\n{file_list}\n\n"
-        f"[SYSTEM: This is a BENCHMARK run. Save ALL outputs to "
-        f"{_output_dir().resolve()} as well as the project folder.]\n"
+        + (f"[SYSTEM: Input images]:\n{file_list}\n\n" if enumerate_inputs() else "")
+        + f"[SYSTEM: This is a BENCHMARK run. Save ALL outputs to {where}.]\n"
     )
 
     # In auto-pilot mode, append the auto-approve directive
@@ -726,7 +771,7 @@ def _auto_send(gui) -> None:
     # list into the chat itself; there is no separate attachment widget to
     # refresh (no _update_attachment_ui on ImageJAgentGUI), so setting the list
     # is all that's needed.
-    gui.attached_files = [str(p) for p in local_images]
+    gui.attached_files = [str(p) for p in local_images] if enumerate_inputs() else []
     gui.input_line.setPlainText(prompt)
     gui.on_send()
 
