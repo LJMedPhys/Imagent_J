@@ -29,6 +29,34 @@ models:
   vlm:        "google/gemini-3.5-flash" # Vision judge (OpenRouter); on OpenAI-only
                                         # installs this falls back to gpt-5.6-luna
 
+# ── Thinking budget per role ────────────────────────────────────────────────
+# Mirrors `models:` above. The values below are the SHIPPED DEFAULTS — leaving
+# this block absent, or a key unset, reproduces previous behaviour exactly.
+#
+#   <effort>  "minimal" | "low" | "medium" | "high"  (endpoint-dependent)
+#   null      send no reasoning_effort at all for that role
+#
+# Precedence: this block  >  IMAGENTJ_REASONING_EFFORT (blanket env override)
+#             >  the shipped default. An explicit per-role value wins over the
+#             env var on purpose — otherwise declaring effort per role could be
+#             silently overridden by a stray environment setting.
+reasoning_effort:
+  supervisor: medium   # orchestrator / planner
+  worker:     medium   # imagej_coder + imagej_debugger
+  analyst:    medium   # python_data_analyst
+  nano:       null     # watchdog fast path — see note below
+  curator:    low      # background Librarian + deep recall
+  vlm:        high     # Vision judge
+#
+# Why nano and curator differ from the rest (previously hard-pinned in code):
+#   nano    — the watchdog verdict path. It must reach the SAME verdict on
+#             identical evidence every time; extra thinking makes it less
+#             predictable, not more correct.
+#   curator — background recall filtering. It is latency-sensitive (it runs off
+#             the hot path but a slow one delays the next turn) and makes no
+#             judgement calls that extra thinking would improve.
+# Both are now overridable here if you want to measure the effect.
+
 # Optional agents. These drive BENCHMARK (auto-pilot) runs, where there is no
 # human to click the on-screen toggles. In an interactive GUI session the
 # "Vision Judge" / "QA Agent" checkboxes remain the live control.

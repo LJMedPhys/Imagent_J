@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Optional
 
 _log = logging.getLogger("imagentj.config")
 
@@ -71,6 +71,43 @@ def model_for(role: str, default: str) -> str:
     models = _CFG.get("models") if isinstance(_CFG.get("models"), dict) else {}
     val = models.get(role)
     return val if isinstance(val, str) and val.strip() else default
+
+
+#: Sentinel distinguishing "key absent" from an explicit ``null``. A role set to
+#: null in YAML means "send no reasoning_effort at all", which is a real choice
+#: (the nano role ships that way) and not the same as falling back to a default.
+_UNSET = object()
+
+
+def reasoning_effort_for(role: str, default: Optional[str] = None) -> Optional[str]:
+    """Return the configured reasoning effort for ``role``, or ``default``.
+
+    Mirrors :func:`model_for`. Precedence, highest first:
+
+    1. ``reasoning_effort.<role>`` in imagentj_config.yaml — including an
+       explicit ``null``, which means "send nothing" and is preserved as None;
+    2. ``IMAGENTJ_REASONING_EFFORT`` — the pre-existing blanket env override,
+       kept as a fallback so current deployments behave identically;
+    3. ``default`` — this role's shipped value.
+
+    The env var deliberately does NOT win over an explicit per-role setting:
+    the point of the block is to declare effort per role, and a blanket env var
+    silently overriding one would defeat that.
+    """
+    block = _CFG.get("reasoning_effort")
+    if isinstance(block, dict) and role in block:
+        val = block[role]
+        if val is None:
+            return None
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+        # A non-string, non-null value is a config error; fall through rather
+        # than pass something the endpoint will reject.
+
+    env = os.environ.get("IMAGENTJ_REASONING_EFFORT", "").strip()
+    if env:
+        return env
+    return default
 
 
 def _agent_flag(name: str, default: bool = False) -> bool:
