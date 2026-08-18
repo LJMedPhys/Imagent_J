@@ -558,6 +558,19 @@ def _collect_and_finish(gui, message: str = "", success: bool = True, error: str
             metadata["usage_report"] = gui._tracker_cb.get_report()
         except Exception:
             pass
+        # Promote the per-model / per-role breakdown to a TOP-LEVEL metadata key.
+        # `usage_report.conversation.queries` is read from the conversation file
+        # and is empty whenever per-query records were dropped
+        # (ConversationLogger.append_query returns early on an unset thread id),
+        # which is why exported runs show a real `total_tokens` beside
+        # `"queries": []` and no input/output split. `session_totals` is built
+        # from the in-memory cumulative store instead, so it is populated for any
+        # run that called a model. Kept at the top level so a consumer does not
+        # have to reach through `usage_report` and does not depend on the file.
+        try:
+            metadata["session_totals"] = gui._tracker_cb.session_totals()
+        except Exception:
+            pass
 
     # Scientific plausibility — `success` must not mean merely "nothing threw".
     # The QA reporter measures the delivered files against the quantity the user

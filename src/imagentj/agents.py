@@ -351,7 +351,7 @@ llm_supervisor = ChatOpenAI(
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
-    **_agent_reasoning_kwargs(_REASONING_EFFORT),
+    **_agent_reasoning_kwargs(config.reasoning_effort_for("supervisor", _REASONING_EFFORT)),
     **_seed_kwargs(),
     timeout=_LLM_TIMEOUT_S,
     max_retries=_LLM_MAX_RETRIES,
@@ -364,7 +364,7 @@ llm_worker = ChatOpenAI(
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
-    **_agent_reasoning_kwargs(_REASONING_EFFORT),
+    **_agent_reasoning_kwargs(config.reasoning_effort_for("worker", _REASONING_EFFORT)),
     **_seed_kwargs(),
     timeout=_LLM_TIMEOUT_S,
     max_retries=_LLM_MAX_RETRIES,
@@ -377,7 +377,7 @@ llm_analyst = ChatOpenAI(
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
-    **_agent_reasoning_kwargs(_REASONING_EFFORT),
+    **_agent_reasoning_kwargs(config.reasoning_effort_for("analyst", _REASONING_EFFORT)),
     **_seed_kwargs(),
     timeout=_LLM_TIMEOUT_S,
     max_retries=_LLM_MAX_RETRIES,
@@ -394,7 +394,7 @@ llm_nano = ChatOpenAI(
     # deliberation directly delays hang detection. Seeded like the rest, though —
     # a watchdog that reaches a different verdict on identical evidence is worse
     # than one that is merely strict.
-    **_agent_reasoning_kwargs(),
+    **_agent_reasoning_kwargs(config.reasoning_effort_for("nano", None)),
     **_seed_kwargs(),
     # Shorter: this backs the watchdogs and the fast path, where a slow call is
     # worse than no call — a watchdog that hangs supervises nothing.
@@ -413,7 +413,7 @@ llm_curator = ChatOpenAI(
     temperature=0.,
     # Kept at "low": the curator is on a 30 s budget and does retrieval, not
     # judgement — extra thinking here buys nothing and risks the timeout.
-    **_agent_reasoning_kwargs("low"),
+    **_agent_reasoning_kwargs(config.reasoning_effort_for("curator", "low")),
     **_seed_kwargs(),
     timeout=30,          # never let a stalled call hang the curator thread or
     max_retries=1,       # the (gated) hot-path deep-recall fallback forever
@@ -448,7 +448,7 @@ elif openai_key:
         model=_vlm_openai,
         api_key=openai_key,
         temperature=0.,
-        **_agent_reasoning_kwargs("high"),
+        **_agent_reasoning_kwargs(config.reasoning_effort_for("vlm", "high")),
         timeout=90,
         max_retries=1,
         verbose=True,
