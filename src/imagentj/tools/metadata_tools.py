@@ -898,6 +898,17 @@ def extract_file_metadata(file_path: str) -> Dict[str, Any]:
                         if axis not in ('Y', 'X', 'S'):
                             n_planes *= int(size)
                     dims['n_planes'] = n_planes
+                    # bit_depth is MEASURED here, not left to the caller. Nothing in
+                    # this module set it before, so the ledger only ever carried a
+                    # value the supervisor typed in — which makes any downstream
+                    # decision keyed on it (e.g. the modality hint in state_ledger)
+                    # an LLM judgement wearing the costume of a measurement.
+                    try:
+                        dims['bit_depth'] = int(np.dtype(series.dtype).itemsize) * 8
+                        dims['dtype'] = str(series.dtype)
+                    except Exception:
+                        pass
+
                     itemsize = getattr(series.dtype, 'itemsize', 2)
                     total = 1
                     for size in series.shape:
@@ -1008,6 +1019,18 @@ def extract_file_metadata(file_path: str) -> Dict[str, Any]:
                     dims['height']   = img.height
                     dims['mode']     = img.mode          # e.g. 'L', 'RGB', 'RGBA'
                     dims['channels'] = len(img.getbands())
+                    # Per-CHANNEL depth, matching the TIFF branch: 'RGB' is 8 bits
+                    # per channel, not 24. PIL mode is the only depth signal here.
+                    _PIL_DEPTH = {'1': 1, 'L': 8, 'P': 8, 'RGB': 8, 'RGBA': 8, 'CMYK': 8,
+                                  'YCbCr': 8, 'LAB': 8, 'HSV': 8,
+                                  'I;16': 16, 'I;16B': 16, 'I;16L': 16,
+                                  'I': 32, 'F': 32}
+                    depth = _PIL_DEPTH.get(img.mode)
+                    if depth is not None:
+                        dims['bit_depth'] = depth
+                    # n_channels mirrors the TIFF branch's key so consumers do not
+                    # have to know which reader produced the metadata.
+                    dims['n_channels'] = dims['channels']
                     # DPI embedded in JPEG/PNG JFIF/Exif headers → physical pixel size
                     dpi = img.info.get('dpi')
                     if dpi and dpi[0] > 0 and not scales:
