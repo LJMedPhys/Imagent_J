@@ -119,8 +119,8 @@ _MODALITY_TOOL_PRIORITY: tuple[dict, ...] = (
         "dims": ("2d",),
         "target": ("nuclei",),
         "order": (
-            'StarDist "Versatile (fluorescent nuclei)" — the trained generalist for 2D nuclei',
             "Cellpose (BIOP) nucleitorch_0",
+            'StarDist "Versatile (fluorescent nuclei)" — the trained generalist for 2D nuclei',
             "classical: Auto Threshold -> Distance Transform Watershed (only if both fail)",
         ),
     },
