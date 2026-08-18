@@ -34,7 +34,21 @@
    3-channel 8-bit brightfield image cannot use a fluorescent-nuclei model, whatever
    the prose suggests.
 
-4b. ONLY NOW call the tool router, in its own turn:
+4b. DO NOT choose a tool in this phase. Tool routing now happens in PHASE 2, after the
+   pipeline STEPS have been designed and written to `pipeline_plan` — see
+   phase_2_planning.md. Deciding the tool here would pin the plan to a choice made
+   before the steps existed, and the recommendation is rendered as a binding
+   "USE THIS PLUGIN" line, so that pin is hard to undo.
+   Phase 1 ends with the FACTS recorded (metadata, files, user preferences); Phase 2
+   turns them into steps and only then asks which tool performs each.
+
+   (Historical note, kept because it is the reason for the split: `plugin_manager` used
+   to be issued in the step-4 parallel batch, concurrently with
+   `extract_image_metadata`. It therefore decided from the task PROSE alone — the
+   highest-variance input available — and the same H&E task scored 0.11 with one
+   supervisor backbone and 0.75 with another, diverging at that call.)
+
+   For reference, the call Phase 2 will make:
    - plugin_manager(task="<describe the scientific goal>", project_root=project_root)
      `plugin_manager` re-reads the ledger via PROJECT STATE, so the metadata recorded in
      4a is what it sees. Called in the step-4 batch instead, it would run CONCURRENTLY
