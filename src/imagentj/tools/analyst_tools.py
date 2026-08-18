@@ -429,7 +429,20 @@ def summarize_deliverables(
         produced = [m for m in measured if m["name"] not in in_names]
         per_image_kind = [m for m in produced if m.get("kind") == "image"]
         if n_in and len(produced) < n_in:
-            if per_image_kind:
+            if not produced:
+                # Nothing was produced AT ALL, yet files matched the pattern — so
+                # every measured file is one of the inputs. The aggregate-deliverable
+                # argument does not reach this case: it defends ONE summary distilled
+                # from many inputs, and there is no summary here. Kept ahead of the
+                # branches below because both test what the produced files ARE, and an
+                # empty list answers neither. (The "no files matched" FAIL earlier in
+                # this function does not cover it: files DID match, they are just all
+                # echoed inputs.)
+                findings.append((FAIL, f"NO produced files for {n_in} input image(s) — every "
+                                       f"measured file is one of the inputs. The run has not "
+                                       f"delivered anything; a missing deliverable is a failure, "
+                                       f"not a caveat."))
+            elif per_image_kind:
                 findings.append((FAIL, f"only {len(produced)} produced file(s) for {n_in} input "
                                        f"image(s), and they are per-image artefacts "
                                        f"({len(per_image_kind)} mask/image file(s)) — one is "
