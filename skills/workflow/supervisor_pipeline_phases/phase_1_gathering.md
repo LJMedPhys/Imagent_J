@@ -22,7 +22,30 @@
    - recall_concepts("<the scientific goal>")   ← ALWAYS pair this with rag_retrieve_docs. It
      returns expert WHEN/DO/WHY/AVOID strategy heuristics for the task (thresholding approach,
      splitting touching objects, denoise-vs-quantify, metric/stats choice, acquisition trade-offs).
+
+   NOTE: `plugin_manager` is deliberately NOT in this batch — see step 4b.
+
+4a. RECORD THE MEASURED FACTS BEFORE CHOOSING A TOOL. As soon as
+   `extract_image_metadata` returns, call:
+     set_ledger_metadata(project_root=project_root, image_metadata={...})
+   filling in AT LEAST: modality (fluorescence | brightfield | EM | …), n_channels,
+   bit_depth, pixel_size_um, n_z_slices, n_timepoints, dimensions.
+   These are the properties that mechanically ADMIT OR EXCLUDE a tool — an RGB
+   3-channel 8-bit brightfield image cannot use a fluorescent-nuclei model, whatever
+   the prose suggests.
+
+4b. ONLY NOW call the tool router, in its own turn:
    - plugin_manager(task="<describe the scientific goal>", project_root=project_root)
+     `plugin_manager` re-reads the ledger via PROJECT STATE, so the metadata recorded in
+     4a is what it sees. Called in the step-4 batch instead, it would run CONCURRENTLY
+     with `extract_image_metadata` and decide from the task PROSE ALONE — the highest-
+     variance input there is. That is not hypothetical: on an H&E nuclear-segmentation
+     task the same image scored 0.11 with one supervisor backbone and 0.75 with another,
+     and the runs diverged at this line, before any parameter was chosen. The measured
+     facts existed in the same turn and were never routed to the decision.
+     Do NOT "optimise" this back into the parallel batch: the extra round-trip costs
+     seconds against a multi-hour budget, and buys a tool choice grounded in the data
+     rather than in wording.
      MANDATORY — call it on EVERY new project, even when you think the task is
      "easy enough" for stock `IJ.run` commands (Find Maxima, Analyze Particles,
      auto-thresholding, etc.). The manager's response provenance — including

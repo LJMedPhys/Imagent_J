@@ -1345,8 +1345,21 @@ def plugin_manager(task: str, project_root: str = "") -> PluginRecommendation:
     Args:
         task:         Describe the scientific task (e.g., "segment touching nuclei in
                       fluorescence images") OR an install command ("INSTALL MorphoLibJ").
-        project_root: Absolute path to the project folder. Provides the plugin manager
-                      with image metadata and scientific goal for intelligent matching.
+        project_root: Absolute path to the project folder. The recommendation is read
+                      out of this project's ledger (PROJECT STATE), so CALL
+                      set_ledger_metadata(image_metadata=...) FIRST — see below.
+
+    CALL ORDER MATTERS. Record the measured image properties (modality, n_channels,
+    bit_depth, pixel size, dimensions) in the ledger BEFORE calling this. Those
+    properties mechanically admit or exclude a tool: an RGB 3-channel 8-bit brightfield
+    image cannot use a fluorescent-nuclei model no matter how the task is worded.
+    Called concurrently with extract_image_metadata — e.g. in one parallel tool batch —
+    this sees an empty PROJECT STATE and must decide from the task PROSE ALONE, which is
+    the highest-variance input available. Measured: an H&E segmentation task scored 0.11
+    with one supervisor backbone and 0.75 with another, diverging at this call, before
+    any parameter was chosen. The recommendation is then rendered as a binding
+    "USE THIS PLUGIN" instruction for the rest of the run, so a bad pick here is not
+    self-correcting.
 
     Returns a PluginRecommendation with the best plugin, its installation status,
     skill folder path (if docs exist), and reasoning.
