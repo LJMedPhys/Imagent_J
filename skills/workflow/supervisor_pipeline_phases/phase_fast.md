@@ -38,6 +38,15 @@ for the operations where it matters — the plugin recommendation (see step 3).
    `vlm_assessment`. That single record is enough — do NOT spread
    ledger writes across every action the way the full pipeline does.
 
+   Inside `image_metadata`, `modality` and `n_z_slices` are not bookkeeping — they
+   are what admits or excludes a tool, and the fast track skips the Phase 1/2 steps
+   that would otherwise record them. Fill in `modality` from what you and the Vision
+   Judge actually observed (`brightfield`, `phase-contrast`, `DIC`, `H&E`,
+   `confocal fluorescence`, `EM`, …). **If you genuinely cannot tell, leave the key
+   out** — a placeholder like `"unknown"` is read as no answer AND blocks the
+   fallback that would otherwise infer modality from the pixel layout, so it is
+   worse than omitting it.
+
 3. **Decide whether to consult `plugin_manager` — gate on the OPERATION, not on
    whether the coder later gets stuck.** A naive script often runs cleanly while
    producing a worse result, so "wait for the coder to fail" silently ships bad

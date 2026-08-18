@@ -186,6 +186,93 @@ def _derive_modality_hint(metadata: dict) -> str:
     return ""
 
 
+# Values that LOOK like a recorded modality but carry no information. Written as a
+# whole-string match, never a substring: "unspecified transmitted-light" does say
+# something ("transmitted-light") and must survive, whereas a bare "unknown" is a
+# placeholder that is strictly worse than an absent key — it is truthy, so it
+# suppresses the _derive_modality_hint fallback below and passes an uninformative
+# string to the rule loop. Observed on a live run: the supervisor recorded
+# modality="unknown" for a grayscale brightfield image.
+_PLACEHOLDER_MODALITY: frozenset = frozenset({
+    "unknown", "unspecified", "not specified", "not recorded", "undetermined",
+    "unclear", "n/a", "na", "none", "null", "tbd", "?", "-",
+})
+
+
+def _normalise_modality(metadata: dict) -> str:
+    """Recorded modality, or "" when nothing informative was recorded."""
+    modality = str(metadata.get("modality") or "").strip().lower()
+    return "" if modality in _PLACEHOLDER_MODALITY else modality
+
+
+# Axis-order strings are built from these letters and nothing else. Used to tell
+# an axis listing ("XYCZ") apart from free prose or a pixel-size string.
+_AXIS_LETTERS: frozenset = frozenset("xyczts")
+
+
+def _derive_dimensionality(metadata: dict) -> str:
+    """Return "3d", "2d", or "" — never the caller's raw `dimensions` string.
+
+    The rules in _MODALITY_TOOL_PRIORITY are keyed on the DIMENSION COUNT ("2d" /
+    "3d"), but `dimensions` is free text written by the supervisor, and the only
+    guidance it has (set_ledger_metadata's docstring) shows AXIS-ORDER notation —
+    "XYCZT", example "XYC". Those two vocabularies never intersect: an axis string
+    is all letters, so `"2d" in dims` cannot be true for any well-formed value.
+    Measured on 29 real ledgers: 0 contained "2d" or "3d", and 16 of them reached
+    the rule loop with a matching modality only to be rejected here.
+
+    So dimensionality is DERIVED rather than string-matched:
+      1. an explicit "2d"/"3d" token, if the supervisor happened to write one —
+         a deliberate statement outranks anything inferred;
+      2. otherwise the axis listing ('Z' present means a volume) and `n_z_slices`
+         (int in 17 of the 29 ledgers) both vote, and **"3d" wins any split**.
+    Time is NOT a spatial dimension: "XYT" is 2d, which is what the 2D rules mean
+    when they say "2D/2D+t". Anything else returns "" and the caller stays silent.
+
+    The split is broken toward 3d deliberately. The two signals disagree in real
+    ledgers ("XYCZ" recorded next to n_z_slices=1, or "XY" next to n_z_slices=12),
+    and the two errors are not symmetric: calling a volume 2d puts the Fiji StarDist
+    plugin — which the registry says outright cannot do volumes — at the top of the
+    list, which is failure mode 1 in the comment above _MODALITY_TOOL_PRIORITY.
+    Calling a plane 3d only costs a detour to micro_sam, which handles 2d fine.
+    """
+    if not isinstance(metadata, dict):
+        return ""
+    raw = str(metadata.get("dimensions") or metadata.get("spatial_dimensions") or "")
+    text = raw.strip().lower()
+
+    # 1. Explicit statement wins outright.
+    if "3d" in text:
+        return "3d"
+    if "2d" in text:
+        return "2d"
+
+    votes = set()
+
+    # 2a. Axis listing. Real values carry trailing prose ("XYCZ tiles") and stray
+    #     punctuation ("XYC?Z"), so read the first token and keep only letters.
+    #     Requiring the result to be ALL axis letters is what makes "1024x1024" and
+    #     "640x480x1" fall through instead of being misread as axes.
+    for candidate in (text, str(metadata.get("series_axes") or "").strip().lower()):
+        head = candidate.split()[0] if candidate.split() else ""
+        letters = "".join(ch for ch in head if ch.isalpha())
+        if letters and letters == "".join(ch for ch in head if ch.isalnum()) \
+                and set(letters) <= _AXIS_LETTERS:
+            votes.add("3d" if "z" in letters else "2d")
+
+    # 2b. Documented numeric key. Only a clean int counts — this field has also been
+    #     seen holding "156;127;157" and a filename note, which mean nothing here.
+    z = metadata.get("n_z_slices")
+    if not isinstance(z, bool) and isinstance(z, int):
+        votes.add("3d" if z > 1 else "2d")
+
+    if "3d" in votes:
+        return "3d"
+    if "2d" in votes:
+        return "2d"
+    return ""
+
+
 def priority_shortlist(metadata: dict, goal: str = "", primary_task: str = "",
                        sub_tasks: "tuple[str, ...] | list | str | None" = None) -> tuple[str, ...]:
     """Ordered first-choice SEGMENTATION tools, or () when we cannot justify one.
@@ -198,7 +285,7 @@ def priority_shortlist(metadata: dict, goal: str = "", primary_task: str = "",
     """
     if not isinstance(metadata, dict):
         return ()
-    modality = str(metadata.get("modality") or "").strip().lower()
+    modality = _normalise_modality(metadata)
     if not modality:
         # Fall back to a hint derived from MEASURED properties. `modality` is not
         # something extract_image_metadata can report — it is written by the
@@ -240,7 +327,7 @@ def priority_shortlist(metadata: dict, goal: str = "", primary_task: str = "",
     if (task or sub_lower) and not has_seg:
         return ()
 
-    dims = str(metadata.get("dimensions") or metadata.get("spatial_dimensions") or "").lower()
+    dims = _derive_dimensionality(metadata)
     hay = f"{goal} {metadata.get('biological_target') or ''}".lower()
 
     # Structures that are NOT blob-like objects need a different family of tools
@@ -707,6 +794,13 @@ def set_ledger_metadata(
                          Example: {"bit_depth": 16, "pixel_size_um": 0.325, "n_channels": 3,
                                    "n_images": 24, "dimensions": "XYC", "file_format": "czi",
                                    "modality": "fluorescence", "objective": "63x oil"}
+                         `modality` STEERS TOOL CHOICE — record what you actually
+                         observed ("brightfield", "phase-contrast", "H&E", "confocal
+                         fluorescence"). If you cannot tell, OMIT THE KEY. Do not write
+                         "unknown"/"unspecified": a placeholder is treated as no answer,
+                         and an omitted key lets the system infer one from pixel layout.
+                         `n_z_slices` also matters beyond bookkeeping — it is how
+                         2D-vs-3D is decided when `dimensions` is an axis listing.
                          For channel NAMES use the dedicated `channels` field below,
                          not image_metadata — channel names are queried verbatim by the coder.
         channels:        Ordered list of channel descriptors, ONE entry per channel,
