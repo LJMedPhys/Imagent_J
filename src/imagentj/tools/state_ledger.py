@@ -404,11 +404,23 @@ def _format_ledger(ledger: dict) -> str:
     # neither (as this call did originally) leaves the task gate inert: every
     # caller looks like "task unknown", the gate is skipped, and the shortlist can
     # fire on a spot-detection or tracking run it has no opinion about.
+    user_pick = str(ledger.get("user_specified_plugin") or "").strip()
+    if user_pick:
+        lines.append(
+            f"USER-SPECIFIED TOOL: {user_pick}  "
+            f"← the user asked for this BY NAME. This is the decision. Use it. "
+            f"Do not substitute a 'better' default, do not re-open the choice with "
+            f"plugin_manager, and do not argue the point — the modality default and "
+            f"the compatibility check are both suppressed here on purpose."
+        )
+
     plan = ledger.get("pipeline_plan") or []
     if isinstance(plan, str):
         plan = [plan]
     plan_steps = tuple(str(s).lower() for s in plan)
-    shortlist = priority_shortlist(
+    # A ranked default is only useful when nobody has decided. Rendering one
+    # next to an explicit user choice invites the agent to second-guess it.
+    shortlist = () if user_pick else priority_shortlist(
         meta,
         str(ledger.get("scientific_goal") or ""),
         primary_task="",           # not tracked separately at runtime
@@ -490,7 +502,10 @@ def _format_ledger(ledger: dict) -> str:
     # Recommended plugin (must be respected by coder)
     rec = ledger.get("recommended_plugin")
     if rec:
-        mismatch = ledger.get("recommended_plugin_mismatch")
+        # When the user named the tool themselves, the mismatch note is not
+        # surfaced at all. The gate exists to correct an AGENT's pick; the user's
+        # choice is the decision, not a proposal to be second-guessed.
+        mismatch = None if user_pick else ledger.get("recommended_plugin_mismatch")
         if mismatch:
             # The measured data contradicts the recommendation, so the usual
             # "do not substitute" lock is withdrawn for this case ONLY. That lock
@@ -657,6 +672,7 @@ def set_ledger_metadata(
     input_files: Optional[list] = None,
     relevant_skill: Optional[str] = None,
     recommended_plugin: Optional[str] = None,
+    user_specified_plugin: Optional[str] = None,
     rag_reference: Optional[dict] = None,
     vlm_assessment: Optional[dict] = None,
 ) -> str:
@@ -775,6 +791,14 @@ def set_ledger_metadata(
         ledger.setdefault("relevant_skills", [])
         if relevant_skill not in ledger["relevant_skills"]:
             ledger["relevant_skills"].append(relevant_skill)
+
+    if user_specified_plugin is not None:
+        # The USER asked for this tool by name. It outranks both the router's
+        # recommendation and the modality default: those exist to decide when
+        # nobody has, and someone has. Recorded separately from
+        # recommended_plugin so the two never overwrite each other and it stays
+        # obvious which came from whom.
+        ledger["user_specified_plugin"] = user_specified_plugin
 
     if recommended_plugin is not None:
         ledger["recommended_plugin"] = recommended_plugin
