@@ -186,13 +186,7 @@ def _derive_modality_hint(metadata: dict) -> str:
     return ""
 
 
-# Values that LOOK like a recorded modality but carry no information. Written as a
-# whole-string match, never a substring: "unspecified transmitted-light" does say
-# something ("transmitted-light") and must survive, whereas a bare "unknown" is a
-# placeholder that is strictly worse than an absent key — it is truthy, so it
-# suppresses the _derive_modality_hint fallback below and passes an uninformative
-# string to the rule loop. Observed on a live run: the supervisor recorded
-# modality="unknown" for a grayscale brightfield image.
+# Values that LOOK like a recorded modality but carry no information. 
 _PLACEHOLDER_MODALITY: frozenset = frozenset({
     "unknown", "unspecified", "not specified", "not recorded", "undetermined",
     "unclear", "n/a", "na", "none", "null", "tbd", "?", "-",
