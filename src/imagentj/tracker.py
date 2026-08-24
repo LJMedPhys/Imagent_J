@@ -67,7 +67,11 @@ PRICE_TABLE: dict[str, tuple[float, float, float]] = {
     # longest-first matching. Bare keys match both spellings and sort correctly.
     "gpt-5-nano":                (0.05,   0.40,  0.50),
     "gpt-5.2":                   (1.75,  14.00,  0.50),
-    "gpt-5.6-luna":              (1.00,   6.00,  0.10),
+    # Verified live against openrouter.ai/api/v1/models on 2026-08-10: prompt
+    # $0.10/Mtok, completion $0.60/Mtok, cache read $0.01/Mtok. The previous
+    # (1.00, 6.00) was 10x high on both, so every estimated cost for this model
+    # was inflated by an order of magnitude.
+    "gpt-5.6-luna":              (0.10,   0.60,  0.10),
     "gpt-5":                     (1.25,  10.00,  0.10),  # 5.x fallback (unknown 5.x)
     "default":                   (1.00,   3.00,  None),  # fallback, no cache discount
     "gemini-3-flash-preview":    (0.50,   3.00,  None),
@@ -497,6 +501,13 @@ class UsageTrackerCallback(BaseCallbackHandler):
 
         # ── new: per-query accumulators ───────────────────────────────────
         self._q_model_breakdown: dict[str, dict] = {}
+        # Session-cumulative per-model usage. Deliberately independent of the
+        # per-query records: those live in the conversation FILE and are dropped
+        # whenever ConversationLogger._thread_id is unset (append_query returns
+        # early), which is why exported reports can show real `total_tokens`
+        # beside `"queries": []`. This dict is in-memory and always populated,
+        # so the breakdown survives that path.
+        self._session_model_totals: dict[str, dict] = {}
         # {"model_name": {"input": int, "output": int, "cost": float}}
         self._q_tool_log: list[dict] = []
          # [{"tool": str, "status": "ok"|"error"|"soft_error", "detail": str|None, "code_preview": str|None}]
@@ -698,8 +709,70 @@ class UsageTrackerCallback(BaseCallbackHandler):
 
         threading.Thread(target=_poll, daemon=True).start()
 
+    def session_totals(self) -> dict:
+        """Session-wide usage, broken down per model and per configured role.
+
+        Answers the benchmark team's §4.1 request: input / output / cached per
+        model role, without per-query granularity. Built from the in-memory
+        cumulative store rather than the conversation file, so it is populated
+        even when per-query records were dropped (see _session_model_totals).
+
+        `by_role` maps each configured role to the model serving it, so several
+        roles sharing one model id (worker and analyst both on gpt-5.3-codex,
+        say) stay distinguishable instead of being silently merged. Where roles
+        share a model the SAME per-model figures appear under each: the tracker
+        observes model ids on the wire, not which role issued the call, so the
+        split between them is not measurable here and is not guessed at.
+        """
+        with self._m._lock:
+            by_model = {m: dict(v) for m, v in self._session_model_totals.items()}
+
+        totals = {
+            "input_tokens":        sum(v["input_tokens"] for v in by_model.values()),
+            "output_tokens":       sum(v["output_tokens"] for v in by_model.values()),
+            "cached_input_tokens": sum(v["cached_input_tokens"] for v in by_model.values()),
+        }
+        totals["total_tokens"] = totals["input_tokens"] + totals["output_tokens"]
+
+        by_role: dict[str, dict] = {}
+        try:
+            from . import config as _config
+            for role in ("supervisor", "worker", "analyst", "nano", "curator", "vlm"):
+                model_id = _config.model_for(role, "")
+                if not model_id:
+                    continue
+                short = model_id.split("/")[-1]
+                stats = by_model.get(model_id) or by_model.get(short)
+                by_role[role] = {
+                    "model": model_id,
+                    **(dict(stats) if stats else {
+                        "input_tokens": 0, "output_tokens": 0,
+                        "cached_input_tokens": 0, "cost_usd": 0.0}),
+                    "shares_model_with": [],
+                }
+            for role, info in by_role.items():
+                info["shares_model_with"] = sorted(
+                    r for r, o in by_role.items()
+                    if r != role and o["model"] == info["model"]
+                )
+        except Exception:
+            pass
+
+        return {
+            "totals": totals,
+            "by_model": by_model,
+            "by_role": by_role,
+            "cost_source": "openrouter_session" if self._or_fetcher else "estimated_per_model",
+        }
+
     def get_report(self) -> dict:
-        return self._logger.build_report()
+        report = self._logger.build_report()
+        # Always attach the live session totals. build_report() reads the
+        # conversation FILE, which is empty whenever per-query records were
+        # dropped; this key is derived from memory and is therefore never empty
+        # for a run that actually called a model.
+        report["session_totals"] = self.session_totals()
+        return report
     
     def set_user_feedback(self, text: str):
         """Store user-provided feedback text for inclusion in error reports."""
@@ -874,8 +947,23 @@ class UsageTrackerCallback(BaseCallbackHandler):
             )
             entry["input_tokens"]  += added_in
             entry["output_tokens"] += added_out
+
+            cume = self._session_model_totals.setdefault(
+                model,
+                {"input_tokens": 0, "output_tokens": 0,
+                 "cached_input_tokens": 0, "cost_usd": 0.0},
+            )
+            cume["input_tokens"]        += added_in
+            cume["output_tokens"]       += added_out
+            cume["cached_input_tokens"] += cached_in
             if not self._or_fetcher:
                 entry["cost_usd"] = round(entry["cost_usd"] + cost, 6)
+                cume["cost_usd"]  = round(cume["cost_usd"] + cost, 6)
+            # On the OpenRouter path per-model cost stays 0.0: OR bills per
+            # SESSION, so there is no per-model figure to attribute and inventing
+            # one by summing local estimates would disagree with the invoice.
+            # `cost_source` says which regime produced these numbers, so a
+            # consumer never has to guess why the per-model costs sum to zero.
 
             self._emit()
 

@@ -105,6 +105,12 @@ TOOLS AVAILABLE
 - inspect_csv_header(path): Read the column names, data types, and first 5 rows of any CSV file.
 - smart_file_reader(path): Read the content of any text-based file (e.g., logs, README).
 - save_markdown(content, path): Save a markdown file with the given content to the specified path.
+- summarize_deliverables(output_dir, pattern, expected_per_file, input_dir): MEASURE the
+  deliverables — per-file object/row counts, dtype, shape, and aggregate min/median/max.
+  This is the ONLY tool that tells you whether the RESULT is right rather than whether the
+  FORMAT is right. Pass input_dir (the folder the images were read FROM) whenever you know
+  it: it enables the checks for a batch that stopped early and for "deliverables" that are
+  really the input images copied through.
 
 ────────────────────────────────────────
 STEP 1 — PROJECT DISCOVERY
@@ -136,6 +142,42 @@ STEP 1 — PROJECT DISCOVERY
    - Annotation documentation (what annotations were added)
    - Image metadata preservation (calibration maintained?)
 
+
+────────────────────────────────────────
+STEP 1.5 — MEASURE THE DELIVERABLES (MANDATORY, DO THIS BEFORE SCORING)
+────────────────────────────────────────
+Everything else you check is about FORM: correct filenames, correct columns, correct
+file count. None of it can tell you the answer is WRONG. A folder of perfectly-named,
+perfectly-schema'd CSVs can hold a hundred times too few rows and pass every other item
+on this checklist.
+
+So before you score anything:
+
+1. Identify the deliverable the user actually asked for and the glob that matches it
+   (e.g. '*.csv', '*_seg.tif', '*nuclei*.tif'). Do NOT audit with '*'. The output folder
+   also holds the staged input images, scripts, logs and figures, and measuring those
+   produces a number that describes the input rather than the result.
+2. Re-read the ORIGINAL USER REQUEST for any stated quantity — "up to 2,000 cells per
+   image", "roughly 50 nuclei", "about 200 foci". Note the number.
+3. Call summarize_deliverables(output_dir, pattern, expected_per_file=<that number>,
+   input_dir=<the folder the images were read FROM>). Pass 0.0 only if the request truly
+   states no quantity; pass input_dir whenever you know it.
+4. Read its PLAUSIBILITY VERDICT and obey it. There are four:
+     FAIL       — the result is wrong. Report it and set success=false.
+     SUSPECT    — either the result or the MEASUREMENT is unsound. Most often it means
+                  your glob matched more than one kind of file. Fix the glob and measure
+                  again before you score anything; do not report SUSPECT as a pass.
+     INCOMPLETE — nothing structural was wrong, but nothing was checked against either.
+                  This is NOT a pass. If the request states a quantity, call again with
+                  it. If it genuinely states none, say plainly in the report that
+                  plausibility could not be verified.
+     PASS       — measured and within an order of magnitude, with no structural anomaly.
+
+DO NOT trust the state ledger's reported counts. The ledger records what a script
+REPORTED at the time it ran; a later corrective pass can change the files on disk
+without updating it. In one real run the ledger said 71,768 objects while the delivered
+files held 681 — a 105x discrepancy that no reader of the ledger could have seen.
+Only summarize_deliverables reads the actual bytes on disk. It is the ground truth.
 
 ────────────────────────────────────────
 STEP 2 — QA CHECKLIST AUDIT
@@ -192,6 +234,25 @@ MINIMAL:
 RECOMMENDED:
 [ ] All settings
 [ ] Public example
+
+═══════════════════════════════════════════════════════════
+CHECKLIST C: SCIENTIFIC PLAUSIBILITY  (score this FIRST — it outranks everything below)
+═══════════════════════════════════════════════════════════
+
+Based on the summarize_deliverables output from STEP 1.5:
+
+[ ] Deliverable exists and is non-empty
+    → FAIL if no file matched the glob, or if most files contain zero objects.
+[ ] Object counts are within an order of magnitude of what the user asked for
+    → FAIL if the tool's verdict says TOO FEW or TOO MANY. A 10x miss is not noise.
+[ ] No unexplained collapse or explosion between passes
+    → If a script was revised and the object count changed by more than 10x, the report
+      must say so explicitly and justify it. An unexplained 100x swing is a FAIL.
+[ ] Counts are consistent with the images themselves
+    → A dense field returning single-digit counts, or a sparse field returning thousands,
+      is a FAIL even when the file format is perfect.
+
+Any ❌ here is a CRITICAL FAILURE. It goes in critical_failures, and success MUST be false.
 
 ═══════════════════════════════════════════════════════════
 CHECKLIST B: IMAGE PUBLISHING STANDARDS
@@ -380,9 +441,47 @@ STEP 4 - SAVE Checklist
 
 Save QA_Checklist_Report.md to: [project_root]/QA_Checklist_Report.md
 
+Call save_markdown EXACTLY ONCE. It returns success + path + size — that return
+value IS your confirmation. Do NOT read the file back to check it; do NOT save it
+a second time. You wrote the content, so you already know what is in it.
+
+────────────────────────────────────────
+STEP 5 - FINISH (this is your last action)
+────────────────────────────────────────
+
+Immediately after save_markdown returns, emit your QAHandoff and STOP. Nothing
+follows this step — there is no verification pass and no second look.
+
+QAHandoff fields:
+  checklist_path          — the absolute path you just saved to
+  minimal_workflow_passed — how many MINIMAL workflow items you scored ✅ PASS
+  minimal_workflow_total  — how many MINIMAL workflow items you evaluated
+  critical_failures       — one short string per ❌ FAIL in either MINIMAL list,
+                            AND one per ❌ in CHECKLIST C (empty list if none)
+  plausibility_verdict    — copy the PLAUSIBILITY VERDICT line from
+                            summarize_deliverables verbatim ("PASS — …", "FAIL — …",
+                            "SUSPECT — …" or "INCOMPLETE — …"). Never leave this empty:
+                            if you did not measure, say "NOT MEASURED".
+  measured_median         — the median objects-per-file the tool reported (0.0 if none)
+  success                 — TRUE only if the deliverable exists, is non-empty, AND
+                            CHECKLIST C has no ❌.
+
+  `success` does NOT mean "I wrote the checklist". Writing the document is not the
+  achievement being reported — the correctness of the delivered result is. If the
+  measurement says the output is 85x too small, the honest handoff is success=false
+  with that stated in critical_failures, even though the report saved perfectly.
+  Reporting success on a result you measured as implausible is the single worst
+  failure available to you: it tells the user their analysis is done and correct
+  when it is neither.
+
 ────────────────────────────────────────
 STRICT RULES
 ────────────────────────────────────────
+- READ EACH FILE AT MOST ONCE. Project files do not change while you audit them.
+  Re-reading a file you have already read returns identical content and buys you
+  nothing. NEVER re-read a file you wrote yourself.
+- The audit is a single forward pass: discover → read → score → write → hand off.
+  You never revisit an earlier step.
 - DO NOT invent or hallucinate parameter values. If you cannot find a value, write [TO BE FILLED].
 - DO NOT interact with the user. This is an automated post-project step.
 - DO NOT generate or execute any code.
@@ -810,8 +909,29 @@ imagej_coder_prompt = """
    ────────────────────────────────────────
    - PREFER `IJ.run(imp, "Command...", "options")` for standard operations.
    - API VALIDATION: Use `inspect_java_class` if uncertain about a method signature.
-   - Use `WaitForUserDialog` instead of `GenericDialog` for simple pauses.
+   - In unattended/auto-pilot scripts, NEVER create `GenericDialog`,
+     `WaitForUserDialog`, `JOptionPane`, file choosers, or any other prompt. A
+     virtual display is present but no human can answer it. Use direct APIs with
+     explicit parameters; throw an exception instead of calling `IJ.error`.
    - Retrieve image via `#@ ImagePlus imp` or `IJ.openImage(path)
+   - NEVER open a Bio-Formats format with `IJ.open`/`IJ.openImage` — that includes
+     `.ome.tif`/`.ome.tiff` (the suffix is plain `.tif`, so it is easy to miss) and
+     `.lif .czi .nd2 .lsm .oib .ims .vsi .svs .ndpi .dv .zvi .stk .flex`.
+     Those dispatch to Bio-Formats' PROMPTING importer, which builds a modal dialog.
+     Nobody can answer it in an unattended run; dialog construction throws
+     `java.lang.Error: no ComponentUI class for: javax.swing.JSeparator` and the import
+     retries forever.
+     Use the windowless API instead:
+       ```groovy
+       import loci.plugins.BF
+       import loci.plugins.in.ImporterOptions
+       def opts = new ImporterOptions()
+       opts.setWindowless(true)          // REQUIRED — skips ImporterPrompter
+       opts.setId(path)
+       def imp = BF.openImagePlus(opts)[0]   // returns ImagePlus[]; [0] unless multi-series
+       ```
+     Setting the `bioformats.windowless` IJ preference does NOT work — only this setter does.
+     Plain `.tif/.png/.jpg` are unaffected; keep using `IJ.openImage` for those.
    - GROOVY PATTERNS — apply unconditionally:
      • Thresholding: never hardcode `" dark"`. Pick at runtime:
        `def s = imp.getStatistics(); IJ.setAutoThreshold(imp, "Otsu" + (s.median <= (s.min+s.max)/2 ? " dark" : ""))`.
@@ -1411,8 +1531,12 @@ rule out "not installed" as the cause and move on to code-level fixes. Never ask
 the user "is X installed?" — you have the tools to answer that yourself.
 
 Groovy:
-1. On failure, call update_state_ledger(step="<step>_failed", status="failed", details="<error summary>").
-2. Send path + error + project_root to imagej_debugger tool. The debugger calls
+1. On failure, FIRST send path + error + project_root to imagej_debugger tool.
+   Only after that call returns, call update_state_ledger(step="<step>_failed",
+   status="failed", details="<error summary>"). Do these SEQUENTIALLY, never in
+   the same parallel tool-call batch: a provider content-block shape in one
+   concurrent branch must not prevent the debugger branch from running.
+2. The debugger calls
    `recall` itself with the error symptom before patching, so you do NOT need to
    retrieve lessons yourself first.
 3. Execute the returned fixed script with execute_script. The lesson the
@@ -1444,7 +1568,20 @@ USER INTERACTION
 - The only mandatory user confirmation point is sample verification (Phase 4b).
 """
 
-_QA_TOOL_ENTRY = "- qa_reporter: Audits the completed project folder and generates QA_Checklist_Report.md. Called once at project end."
+_QA_TOOL_ENTRY = (
+    "- qa_reporter(project_root, user_request, deliverable_dir): Audits the completed project "
+    "and generates QA_Checklist_Report.md. Called once at project end. ALWAYS pass user_request "
+    "as the user's ORIGINAL wording, verbatim, including any stated quantity (\"up to 2,000 cells "
+    "per image\") — the reporter measures the delivered files against that number, and without it "
+    "the verdict comes back INCOMPLETE, which is not a pass. Quote the INPUT folder in the request "
+    "text too, so the reporter can check that a deliverable exists for every input image. "
+    "Pass deliverable_dir when the final files were written "
+    "somewhere other than project_root. If it returns success=false or a FAIL plausibility_verdict, "
+    "the RESULT is wrong, not merely undocumented: do NOT announce the work as complete. Send the "
+    "fix back to the agent that produced the deliverable, quoting the measured numbers, re-run it, "
+    "then call qa_reporter again to confirm — at most TWO correction rounds, then stop and tell the "
+    "user plainly what is still wrong. See phase_7_qa.md."
+)
 
 # Phase files now live as skill files read on demand by the supervisor — see
 # /app/skills/workflow/supervisor_pipeline_phases/. The PhaseGuardMiddleware
@@ -1513,5 +1650,3 @@ not featured). Never put plugin/environment-specific pitfalls in CORE.
 Mutate the wiki ONLY through the library_* tools — never write files directly. When
 there is nothing new and no duplicate to fix, do nothing and stop.
 """
-
-

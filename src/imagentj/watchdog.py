@@ -160,6 +160,25 @@ def _human_duration(seconds: float) -> str:
     return f"{seconds / 60:.1f} minutes"
 
 
+def _message_content_text(content) -> str:
+    """Normalize LangChain/OpenAI string or content-block responses."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and isinstance(block.get("text"), str):
+                parts.append(block["text"])
+            else:
+                text = getattr(block, "text", None)
+                if isinstance(text, str):
+                    parts.append(text)
+        return "".join(parts)
+    return str(content or "")
+
+
 def _ask_llm(handle: "run_control.RunHandle") -> tuple[bool, str]:
     """
     Ask the model whether to kill. Returns (should_kill, reason).
@@ -183,13 +202,12 @@ def _ask_llm(handle: "run_control.RunHandle") -> tuple[bool, str]:
     )
     try:
         reply = llm_nano.invoke(prompt)
-        text = (reply.content if hasattr(reply, "content") else str(reply)).strip()
+        content = reply.content if hasattr(reply, "content") else reply
+        text = _message_content_text(content).strip()
     except Exception as exc:
         log.warning("watchdog: verdict call failed (%s) — leaving run alone", exc)
         return False, ""
 
-    if isinstance(text, list):  # some providers return content blocks
-        text = " ".join(str(part) for part in text)
     first = text.strip().splitlines()[0] if text.strip() else ""
     if first.upper().startswith("KILL"):
         reason = first.split(":", 1)[1].strip() if ":" in first else "watchdog judged the run stuck"

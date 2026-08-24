@@ -25,12 +25,20 @@ TrackMate is bundled with Fiji (core detectors and trackers). Cellpose and StarD
 | `SCRIPT_API.md` | Complete Groovy scripting reference: detector/tracker settings keys, feature access, CSV/XML export, all imports |
 | `GROOVY_WORKFLOW_PARTICLE_TRACKING.groovy` | Ready-to-run script: LoG detection → filtering → LAP tracking → CSV + XML + overlay |
 | `CELLPOSE_DETECTOR_API.md` | Cellpose **detector** integration for timelapses: all detector settings keys, available models (cyto3, nucleitorch_0, etc.), backend setup, pitfalls C0–C9 |
-| `GROOVY_WORKFLOW_CELLPOSE_GENERIC.groovy` | Ready-to-run generic script: auto-detects Python/conda/micromamba backend → Cellpose segment → track → CSV + XML + label TIFF; works on any active image |
-| `GROOVY_WORKFLOW_CELLPOSE_GUI.groovy` | Ready-to-run project-specific script: opens a hardcoded file, GPU-enabled Cellpose → tracking → CSV + XML + label TIFF + HyperStack overlay + TrackScheme GUI |
+| `GROOVY_WORKFLOW_CELLPOSE_GENERIC.groovy` | Ready-to-run generic script: verifies the Cellpose backend, auto-selects a working CUDA device or CPU → segment → track → CSV + XML + label TIFF; works on any active image |
+| `GROOVY_WORKFLOW_CELLPOSE_GUI.groovy` | Ready-to-run project-specific script: opens a hardcoded file, verifies/auto-selects CUDA or CPU → tracking → CSV + XML + label TIFF + HyperStack overlay + TrackScheme GUI |
 | `UI_GUIDE.md` | GUI reference: every panel and control in the TrackMate wizard explained |
 | `UI_WORKFLOW_PARTICLE_TRACKING.md` | GUI walkthrough: step-by-step from open image to exported CSV |
 
 ## Critical pitfalls
+
+- **Never hardcode `USE_GPU=false` merely because GPU availability is unknown.**
+  Probe CUDA from the same Cellpose conda environment that TrackMate invokes,
+  including a CUDA tensor allocation and synchronization. Then pass the result
+  to `USE_GPU`. Use the tri-state `useGpuOverride` pattern in the canonical
+  Cellpose workflows: `null` auto-selects, `true` requires a usable GPU and fails
+  early otherwise, and `false` explicitly requests CPU. See
+  `CELLPOSE_DETECTOR_API.md` § GPU selection and preflight.
 
 - **`Image must be 2D over time, got an image with multiple Z.`** — the input
   was loaded with planes in Z instead of T (typical when an image sequence

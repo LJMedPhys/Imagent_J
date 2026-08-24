@@ -514,12 +514,12 @@ if command -v nvidia-smi &>/dev/null; then
 else
     echo "[entrypoint] No NVIDIA GPU device visible."
 fi
-if /opt/conda/envs/cellpose/bin/python -c "import torch,sys; sys.exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
+if /opt/conda/envs/cellpose/bin/python -c "import torch; assert torch.cuda.is_available(); x=torch.zeros(1, device='cuda'); torch.cuda.synchronize()" 2>/dev/null; then
     export IMAGENTJ_GPU=true
-    echo "[entrypoint] GPU acceleration ACTIVE — cellpose PyTorch sees CUDA (IMAGENTJ_GPU=true)"
+    echo "[entrypoint] GPU acceleration ACTIVE — cellpose PyTorch completed a CUDA tensor probe (IMAGENTJ_GPU=true)"
 else
     export IMAGENTJ_GPU=false
-    echo "[entrypoint] GPU acceleration INACTIVE — running on CPU (IMAGENTJ_GPU=false)"
+    echo "[entrypoint] GPU acceleration INACTIVE — cellpose CUDA tensor probe failed; running on CPU (IMAGENTJ_GPU=false)"
 fi
 
 # ── Launch the application ───────────────────────────────────────────────────

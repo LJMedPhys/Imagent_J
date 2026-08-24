@@ -28,6 +28,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # The parent process supervises this run; a watchdog in here would be a second
 # opinion with no way to report and would burn LLM calls.
 os.environ["IMAGENTJ_WATCHDOG"] = "0"
+# The dialog guard uses this to stop waiting immediately without dismissing the
+# dialog first.  main() writes the structured failure report and os._exit() then
+# kills the whole disposable JVM, so no post-dialog Groovy statement can run with
+# silently accepted defaults.
+os.environ["IMAGENTJ_BATCH_WORKER"] = "1"
 
 REPORT_BEGIN = "===IMAGENTJ_GROOVY_REPORT_BEGIN==="
 REPORT_END = "===IMAGENTJ_GROOVY_REPORT_END==="
