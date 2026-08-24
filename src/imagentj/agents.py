@@ -33,7 +33,9 @@ from .prompts import (
     vlm_judge_prompt,
 )
 from .tools import (
-    internet_search, inspect_all_ui_windows, capture_ui_window,
+    capture_ui_window,
+    internet_search, inspect_all_ui_windows, estimate_cellpose_diameter_manual, estimate_cellpose_diameter_auto,
+    merge_cellpose_diameter_runs,
     show_in_imagej_gui, close_imagej_windows,
     rag_retrieve_docs, recall_concepts, inspect_java_class,
     inspect_folder_tree,
@@ -1094,6 +1096,9 @@ def init_agent():
             internet_search,
             inspect_all_ui_windows,
             capture_ui_window,
+            estimate_cellpose_diameter_manual,
+            estimate_cellpose_diameter_auto,
+            merge_cellpose_diameter_runs,
             show_in_imagej_gui,
             close_imagej_windows,
             rag_retrieve_docs,

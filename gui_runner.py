@@ -1249,6 +1249,7 @@ class ImageJAgentGUI(QWidget):
         if hasattr(self, 'worker') and self.worker._stop_requested:
             return
         self._agent_had_error    = True
+        self._last_agent_error   = msg
         self.chat_scroll.add_message('error', f"Agent error:\n{msg}")
         self.status_label.setText("Error")
         self.status_label.setStyleSheet("color: red;")
