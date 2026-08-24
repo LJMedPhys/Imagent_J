@@ -9,8 +9,11 @@ description: >-
   Prefer StarDist/Cellpose for standard nuclei and cells (faster, often better) — micro_sam is the
   specialist for the hard, novel or interactive cases. Installed in the `napari-mcp` conda env. TWO
   backends: interactive in the live napari viewer (backend "napari"), or headless batch (backend
-  "python_data_analyst", first line `# imagentj-env: napari-mcp`). The model table, the annotator
-  commands and the batch API are in the files listed at the end.
+  "python_data_analyst", first line `# imagentj-env: napari-mcp`). ALSO route here for interactive
+  OBJECT CLASSIFICATION — sorting objects that are ALREADY segmented into classes (live/dead,
+  infected/uninfected, phenotype A/B): mark a few objects per class on the first image and a random
+  forest classifies the rest of the folder automatically. The model table, the annotator commands
+  and the batch API are in the files listed at the end.
 ---
 
 # micro_sam — Segment Anything for Microscopy
@@ -181,6 +184,56 @@ napari beginner: Compute Embeddings first (nothing works before it), click a poi
 (the only permanent layer), `Shift+S` to propagate through a 3D volume, plus shortcuts and embedding
 caching.
 
+### Pattern 3 — object classifier (learn classes on image 1, apply to the rest)
+
+Use when objects are **already segmented** and the user wants them sorted into classes —
+live/dead, infected/uninfected, phenotype A/B, debris vs real. Not for producing masks.
+
+Run **`WORKFLOW_OBJECT_CLASSIFIER.py`** via `python_data_analyst` (never over MCP — it blocks
+on `napari.run()` until the user closes the window, and the Qt-thread timeout would kill it).
+Point `IMAGE_DIR` at the images and `SEG_DIR` at the label masks from a prior segmentation step.
+
+The loop the user sees: paint a dot on a few objects of each class in the `annotations` layer →
+**"Train and predict"** → **`N`** → the next image comes up **already classified** → correct
+whatever is wrong and press "Train and predict" again to fold the corrections in. Accumulated
+features/labels and `rf.joblib` are written to the output folder, so the classifier is reusable.
+
+> **`WORKFLOW_OBJECT_CLASSIFIER.py` is required — do not call `image_series_object_classifier`
+> directly.** Stock micro_sam trains the forest and keeps it in `AnnotatorState().object_rf`, but
+> its `next_image()` never applies it: it ends with `_update_image()`, which zeroes the `prediction`
+> layer. Image 2 therefore comes up blank, and the following `N` *saves that blank* — images 2..N
+> land on disk as all-zero label TIFFs. (micro_sam flags the gap itself: `# TODO handle cases where
+> rf for the image was not trained` sits directly above `next_image`.) The workflow file patches
+> `ObjectClassifier._update_image` to re-run the retained forest on each new image. Verified on
+> micro_sam 1.8.2: without the patch image 2 is empty; with it, images 2 and 3 classify correctly
+> and non-empty masks are saved.
+
+**Going automatic after the first image** — the user annotates image 1 in the UI, then asks for the
+rest to run hands-off. That works: the interactive session exports `rf.joblib`, and
+**`WORKFLOW_OBJECT_CLASSIFIER_BATCH.py`** applies it to the remaining images headlessly via
+micro_sam's own `run_prediction_with_object_classifier`. No viewer, no further clicking. Verified:
+a forest trained on one image, reloaded in a fresh process, classified 12/12 objects correctly
+across two unseen images. The batch script skips images the interactive session already wrote, so
+hand-corrected results are never overwritten.
+
+> **Two things to get right before promising the user an automatic run:**
+> 1. **The classifier needs masks as INPUT — it never creates them.** "Segment the rest
+>    automatically" is two stages: `WORKFLOW_AUTOMATIC_SEGMENTATION.py` (or StarDist/Cellpose)
+>    produces the label masks, *then* the batch classifier assigns classes. If the user has no
+>    masks for images 2..N, the classifier has nothing to classify.
+> 2. **Use the SAME `model_type` that trained the forest.** Features are `area` + one mean per
+>    SAM embedding channel, and every backbone emits 256 channels — so a forest trained with
+>    `vit_t_lm` accepts `vit_b_lm` features with **no shape error** and silently predicts nonsense.
+>    `WORKFLOW_OBJECT_CLASSIFIER.py` records the backbone in `classifier_meta.json` and the batch
+>    script refuses a mismatch; do not bypass that check.
+
+> **SAM point prompts do NOT transfer — do not offer this for them.** Clicking a point in
+> `annotator_2d` and pressing `S` is inference-time conditioning for that ONE image: nothing is
+> learned, no weights change, so there is nothing to carry to image 2. If the user says "I prompted
+> the first image, now do the rest automatically", they need automatic instance segmentation
+> (`WORKFLOW_AUTOMATIC_SEGMENTATION.py`), which ignores image 1's prompts entirely. Only the object
+> **classifier** learns something reusable. Say so plainly rather than implying the clicks carried over.
+
 ## Model selection
 
 `model_type` = a SAM backbone (`vit_t` < `vit_b` < `vit_l` < `vit_h`, bigger = slower + more accurate)
@@ -218,7 +271,7 @@ per-function asymmetry, e.g. `image_series_annotator` has no `decoder_path`). Ac
 checkpoint (`micro_sam.training`) is a separate, GPU-hours, labeled-data workflow **out of scope for
 this skill** — only reach for it if no stock `*_lm`/`*_em`/`*_histopathology` model is remotely usable.
 
-> **A fine-tuned checkpoint never reaches "the rest of the folder" on its own — in either mode.**
+> **A fine-tuned SAM checkpoint never reaches "the rest of the folder" on its own.**
 > - **Automatic/batch** (`WORKFLOW_AUTOMATIC_SEGMENTATION.py`): the model is built ONCE, before the
 >   per-image loop, from whatever `CHECKPOINT_PATH`/`checkpoint=` was passed at that call. If you
 >   fine-tuned on image 1's corrected labels and want images 2..N segmented with the new weights,
@@ -227,16 +280,18 @@ this skill** — only reach for it if no stock `*_lm`/`*_em`/`*_histopathology` 
 >   `get_predictor_and_segmenter`'s source: it takes `checkpoint` once, at construction, full stop.
 > - **Interactive** (`image_series_annotator`, the "Next Image [N]" workflow): verified from
 >   `image_series_annotator.py` — the `predictor`/`decoder` are also built ONCE, before the image
->   loop starts, and `next_image()` closes over those exact same objects for every subsequent image;
->   there is also **no fine-tune/train control anywhere in the panel** (confirmed against the
->   installed widget source — fine-tuning is only ever the separate offline `micro_sam.training`
->   workflow above, never something triggered from inside the annotator). So there is **no way to
->   fine-tune mid-session and have it apply to the next image in the same run** — the only path is:
->   finish annotating/committing the current image (which is saved to `output_folder` immediately),
->   fine-tune offline, then **restart** `image_series_annotator(..., checkpoint_path=<new checkpoint>)`.
->   The default `skip_segmented=True` means the restart resumes at the first *un*-annotated image
->   rather than re-doing image 1 — you don't lose that work, but you do need to consciously restart
->   the tool, it will not pick up a new checkpoint by itself.
+>   loop starts, and `next_image()` closes over those exact same objects for every subsequent image.
+>   The SAM annotator panel has no train control, so there is no way to retrain SAM mid-session:
+>   finish annotating the current image (saved to `output_folder` immediately), fine-tune offline,
+>   then **restart** `image_series_annotator(..., checkpoint_path=<new checkpoint>)`. The default
+>   `skip_segmented=True` resumes at the first *un*-annotated image, so you don't lose that work.
+
+**"Learn from image 1, apply to the rest" IS supported — but by the object CLASSIFIER, not by SAM
+fine-tuning.** This is the right route whenever the user's goal is *categorising* already-segmented
+objects (live/dead, infected/uninfected, phenotype A/B) rather than producing new masks. It trains a
+random forest on SAM object features in seconds — no GPU hours, no `micro_sam.training`. See
+**Pattern 3** below and `WORKFLOW_OBJECT_CLASSIFIER.py`. Do not tell the user "micro_sam cannot
+learn from your annotations and apply them to the next images" — it can, this is the feature.
 
 **Before a heavy run, a free sanity check:** the `napari-mcp` env installs `micro_sam.info` as a CLI
 command — run it by **full path** (its `bin/` is not on PATH just from the `# imagentj-env` header) in
@@ -281,3 +336,5 @@ tag, and whether this process actually sees a GPU. Cheaper than finding out 60 s
 | `UI_GUIDE.md` | **Operating the interactive napari annotator**, written for someone who has never used napari: window/layer orientation, the micro_sam layers (`point_prompts`, `prompts`, `current_object`, `committed_objects`, `auto_segmentation`), the click→`S`→correct→`C` workflow, positive/negative prompts (`T`), 3D `Shift+S` propagation, tracking, keyboard shortcuts, embedding caching, saving results |
 | `SCRIPT_API.md` | Verified signatures (`get_predictor_and_segmenter`, `automatic_instance_segmentation`, `precompute_state`, all four annotator widgets incl. `checkpoint_path`/`decoder_path`), the full model-name list, mode semantics, the `micro_sam.info` CLI check, and CLI entry points |
 | `WORKFLOW_AUTOMATIC_SEGMENTATION.py` | Batch script (`# imagentj-env: napari-mcp`): folder → per-image label TIFF + object counts CSV, model built once, GPU/CPU auto-select |
+| `WORKFLOW_OBJECT_CLASSIFIER.py` | Interactive object classifier over an image series (`# imagentj-env: napari-mcp`): annotate classes on image 1, "Train and predict", then `N` classifies each subsequent image automatically. Patches the stock `next_image()`, which otherwise leaves images 2..N blank and saves them as all-zero masks. **Use this instead of calling `image_series_object_classifier` directly.** Exports `rf.joblib` + `classifier_meta.json` |
+| `WORKFLOW_OBJECT_CLASSIFIER_BATCH.py` | Headless counterpart: applies the `rf.joblib` from an interactive session to the rest of the folder with no viewer. Requires label masks as input (it classifies, never segments) and pins the backbone to the one that trained the forest — a mismatch misclassifies silently instead of erroring |

@@ -139,12 +139,28 @@ using the click workflow above. Good when there are many objects.
 **Image series (`image_series_annotator`)** — a folder, one image at a time:
 - Annotate + commit, then press **`N`** (*Next Image*) to advance. Masks are written to the
   output folder as you go.
-- **The model is loaded once, at the start, for the whole folder — it does not change between
-  images.** There is no fine-tune/train button anywhere in this panel. If you want a model
-  fine-tuned on image 1's corrections to apply to the rest of the folder, fine-tuning has to
-  happen *outside* napari (`micro_sam.training`, a separate offline step) and you then
-  **restart** the series annotator pointed at the new checkpoint — pressing `N` alone never
-  picks up a new model mid-session. See `SKILL.md`'s "Fine-tuned / custom weights" section.
+- **The SAM model is loaded once, at the start, for the whole folder — it does not change between
+  images**, and this panel has no train button. To apply *fine-tuned SAM weights* to the folder,
+  fine-tune outside napari (`micro_sam.training`) and **restart** the series annotator pointed at
+  the new checkpoint; pressing `N` alone never picks up a new model. See `SKILL.md`'s
+  "Fine-tuned / custom weights" section.
+- **If the goal is to label already-segmented objects by class and have that carry to the rest of
+  the folder, this is the wrong tool — use the object classifier below.**
+
+**Object classifier (`image_series_object_classifier`)** — *this* is the "learn on image 1, apply
+to the rest" workflow. Layers are `image`, `segmentation` (masks you already have), `annotations`
+(where you mark classes) and `prediction` (what the classifier says).
+- The `annotations` layer opens in **paint** mode with **brush size 3** — dab a small dot inside a
+  few objects of each class. Label 1 = first class, 2 = second, and so on. You are not tracing
+  outlines; one dot per object is enough, and only on a handful of objects.
+- Press **"Train and predict"** — a random forest trains on SAM's object features (seconds) and
+  fills the `prediction` layer for the current image.
+- Press **`N`** — the next image loads **already classified**. Fix anything wrong by dabbing the
+  correct label on it and pressing "Train and predict" again; corrections accumulate across images.
+- **"Export Classifier"** saves the forest for reuse; the output folder also gets `rf.joblib`,
+  `features.npy` and `labels.npy` automatically.
+- Launch it with `WORKFLOW_OBJECT_CLASSIFIER.py`. Launched any other way, images 2..N come up
+  blank and save as empty masks — a stock micro_sam bug the workflow file patches.
 
 ---
 
