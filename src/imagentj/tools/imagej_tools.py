@@ -518,18 +518,42 @@ def _is_non_dialog_window(title: str) -> bool:
     return False
 
 
-@tool
-def capture_plugin_dialog() -> str:
+def _describe_screenshot(b64: str, system_prompt: str, text_prompt: str) -> dict:
+    """Send one base64 PNG to the vision LLM and parse its JSON reply.
+
+    Shared by the Fiji-dialog and napari paths: both ask a vision model for a
+    structured description of what is on screen, and both have to cope with the
+    model wrapping its JSON in a ``` fence. Returns the parsed object, or a dict
+    with an "error" key if the call or the parse failed.
     """
-    Screenshot every visible plugin dialog window and return a structured
-    description of its fields (labels, types, current values, options, buttons).
+    try:
+        response = _get_vision_llm().invoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=[
+                {"type": "text", "text": text_prompt},
+                {"type": "image_url",
+                 "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "high"}},
+            ]),
+        ])
+        raw = _message_text(response.content).strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```(?:json)?\n?", "", raw).rstrip("` \n")
+        parsed = json.loads(raw)
+    except Exception as e:
+        return {"error": f"Vision analysis failed: {e}"}
+    # Callers index into the result, so never hand back a bare list/str even
+    # when the model ignores the requested object shape.
+    if not isinstance(parsed, dict):
+        return {"error": "Vision model did not return a JSON object", "raw": parsed}
+    return parsed
 
-    Call this after the user opens a plugin dialog so you know exactly what
-    parameters are on screen and can give precise, field-by-field guidance.
 
-    Returns a JSON array — one entry per dialog found — with:
-      dialog_title, fields (label/type/current_value/options/description), buttons, warnings.
-    Returns an empty array if no plugin dialogs are currently open.
+def _grab_fiji_dialogs() -> list[tuple[str, str]]:
+    """Screenshot every visible Fiji plugin dialog. Returns [(title, base64_png)].
+
+    Runs entirely in-process against the Fiji JVM's own AWT windows, so it is
+    cheap and has no side effects — which is why the merged tool always tries
+    this before reaching for napari.
     """
     from scyjava import jimport
     from PIL import Image as PILImage
@@ -541,7 +565,7 @@ def capture_plugin_dialog() -> str:
     try:
         robot = Robot()
     except Exception as e:
-        return json.dumps({"error": f"Could not create AWT Robot: {e}"})
+        raise RuntimeError(f"Could not create AWT Robot: {e}") from e
 
     # Collect all visible windows that look like plugin dialogs
     dialog_images: list[tuple[str, str]] = []  # (title, base64_png)
@@ -587,48 +611,36 @@ def capture_plugin_dialog() -> str:
             pil_img.save(buf, format="PNG")
             b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
             dialog_images.append((title, b64))
-            print(f"[capture_plugin_dialog] Captured: '{title}' ({width}x{height})")
+            print(f"[capture_ui_window] Captured Fiji dialog: '{title}' ({width}x{height})")
 
         except Exception as e:
-            print(f"[capture_plugin_dialog] Skipped window: {e}")
+            print(f"[capture_ui_window] Skipped window: {e}")
             continue
 
-    if not dialog_images:
-        return json.dumps([])
+    return dialog_images
 
+
+def _describe_fiji_dialogs(dialog_images: list[tuple[str, str]]) -> list[dict]:
+    """Describe each captured Fiji dialog, enriched with that plugin's UI docs."""
     results = []
-    llm = _get_vision_llm()
-
     for title, b64 in dialog_images:
-        try:
-            ui_docs = _find_ui_docs_for_dialog(title)
-            text_prompt = f"Analyze this plugin dialog screenshot (window title: '{title}')."
-            if ui_docs:
-                text_prompt += (
-                    "\n\nThe following documentation describes the parameters of this plugin. "
-                    "Use it to enrich the 'description' field of each parameter with accurate, "
-                    "specific guidance (recommended values, valid ranges, what it controls):\n\n"
-                    + ui_docs
-                )
-                print(f"[capture_plugin_dialog] Enriching '{title}' with UI docs ({len(ui_docs)} chars)")
+        ui_docs = _find_ui_docs_for_dialog(title)
+        text_prompt = f"Analyze this plugin dialog screenshot (window title: '{title}')."
+        if ui_docs:
+            text_prompt += (
+                "\n\nThe following documentation describes the parameters of this plugin. "
+                "Use it to enrich the 'description' field of each parameter with accurate, "
+                "specific guidance (recommended values, valid ranges, what it controls):\n\n"
+                + ui_docs
+            )
+            print(f"[capture_ui_window] Enriching '{title}' with UI docs ({len(ui_docs)} chars)")
 
-            response = llm.invoke([
-                SystemMessage(content=_DIALOG_VISION_SYSTEM),
-                HumanMessage(content=[
-                    {"type": "text", "text": text_prompt},
-                    {"type": "image_url",
-                     "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "high"}},
-                ]),
-            ])
-            raw = _message_text(response.content).strip()
-            if raw.startswith("```"):
-                raw = re.sub(r"^```(?:json)?\n?", "", raw).rstrip("` \n")
-            parsed = json.loads(raw)
-            results.append(parsed)
-        except Exception as e:
-            results.append({"dialog_title": title, "error": str(e)})
-
-    return json.dumps(results, indent=2)
+        parsed = _describe_screenshot(b64, _DIALOG_VISION_SYSTEM, text_prompt)
+        # Keep the window title even when the vision call failed, so the agent
+        # can still tell the user *which* dialog it could not read.
+        parsed.setdefault("dialog_title", title)
+        results.append(parsed)
+    return results
 
 
 _NAPARI_VISION_SYSTEM = """You are a napari expert analysing a screenshot of the napari viewer window.
@@ -693,52 +705,69 @@ def _extract_first_image_b64(mcp_content) -> str | None:
     return None
 
 
-@tool
-def capture_napari_window() -> str:
-    """
-    Screenshot the live napari window — canvas, layer list, AND any docked plugin panel
-    (e.g. the micro_sam "Segment Anything for Microscopy" panel) — and return a structured
-    description: open layers, every visible panel field (label/type/current value/options),
-    and buttons.
+_NAPARI_SERVER = "napari-mcp"
 
-    Call this when the user has napari open and asks about it — what a field means, which
-    layer is selected, why a button looks greyed out, what to click next — instead of asking
-    them to describe it or send a screenshot themselves. This is the napari equivalent of
-    capture_plugin_dialog for Fiji.
 
-    Returns a JSON object, or an object with an "error" key if napari isn't running or the
-    screenshot failed (e.g. no viewer open yet).
-    """
+def _napari_mcp_call(tool_name: str, arguments: dict, timeout: int) -> dict:
+    """Call one napari-mcp tool. Returns the host payload, or {"error": ...}."""
     from .mcp_host_tools import load_mcp_server_configs, _call_server_tool, _run_async, _with_timeout
 
     configs = load_mcp_server_configs()
-    server_name = "napari-mcp"
-    if server_name not in configs:
-        return json.dumps({"error": f"MCP server '{server_name}' is not configured."})
-
+    if _NAPARI_SERVER not in configs:
+        return {"error": f"MCP server '{_NAPARI_SERVER}' is not configured."}
     try:
-        call_result = _run_async(
+        return _run_async(
             _with_timeout(
-                _call_server_tool(server_name, configs[server_name], "screenshot",
-                                   {"canvas_only": False}),
-                90,
+                _call_server_tool(_NAPARI_SERVER, configs[_NAPARI_SERVER], tool_name, arguments),
+                timeout,
             )
         )
     except Exception as e:
-        return json.dumps({"error": f"Could not reach napari-mcp: {e}"})
+        return {"error": f"Could not reach napari-mcp: {e}"}
 
+
+def _napari_viewer_is_live() -> bool:
+    """True only if a napari viewer ALREADY exists — without creating one.
+
+    This probe is what makes target="auto" safe. napari-mcp's `screenshot` calls
+    ensure_viewer(), so asking it for a picture COLD-STARTS napari plus software
+    GL: a slow, very visible side effect for a user who was only ever asking
+    about a Fiji dialog. `session_information` takes the other branch — it
+    returns {"viewer": None, "message": "No viewer currently initialized..."}
+    when nothing is open — so it answers the question for free.
+
+    Any failure (server down, timeout, unexpected shape) is treated as "not
+    live": the cost of a false negative is a missed screenshot the agent can
+    retry with target="napari", while a false positive is a surprise cold start.
+    """
+    result = _napari_mcp_call("session_information", {}, 20)
+    if "error" in result or result.get("status") != "ok":
+        return False
+
+    info = result.get("result", {}).get("parsed_content")
+    if not isinstance(info, dict):
+        return False
+    # AUTO_DETECT mode reports an attached external viewer instead of `viewer`.
+    if info.get("viewer_type") == "external":
+        return True
+    return info.get("viewer") is not None
+
+
+def _describe_napari_window() -> dict:
+    """Screenshot the live napari window and describe it. Assumes a viewer exists."""
+    call_result = _napari_mcp_call("screenshot", {"canvas_only": False}, 90)
+    if "error" in call_result:
+        return call_result
     if call_result.get("status") != "ok":
-        return json.dumps({
+        return {
             "error": call_result.get("message") or "napari screenshot failed",
             "detail": call_result,
-        })
+        }
 
-    content = call_result.get("result", {}).get("content")
-    b64 = _extract_first_image_b64(content)
+    b64 = _extract_first_image_b64(call_result.get("result", {}).get("content"))
     if not b64:
-        return json.dumps({"error": "napari-mcp did not return an image", "detail": call_result})
+        return {"error": "napari-mcp did not return an image", "detail": call_result}
 
-    llm = _get_vision_llm()
     ui_docs = _napari_ui_docs()
     text_prompt = "Analyze this napari window screenshot."
     if ui_docs:
@@ -748,23 +777,66 @@ def capture_napari_window() -> str:
             "dock-widget field with accurate, specific guidance:\n\n" + ui_docs
         )
 
-    try:
-        response = llm.invoke([
-            SystemMessage(content=_NAPARI_VISION_SYSTEM),
-            HumanMessage(content=[
-                {"type": "text", "text": text_prompt},
-                {"type": "image_url",
-                 "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "high"}},
-            ]),
-        ])
-        raw = _message_text(response.content).strip()
-        if raw.startswith("```"):
-            raw = re.sub(r"^```(?:json)?\n?", "", raw).rstrip("` \n")
-        parsed = json.loads(raw)
-    except Exception as e:
-        return json.dumps({"error": f"Vision analysis failed: {e}"})
+    return _describe_screenshot(b64, _NAPARI_VISION_SYSTEM, text_prompt)
 
-    return json.dumps(parsed, indent=2)
+
+@tool
+def capture_ui_window(target: str = "auto") -> str:
+    """
+    Screenshot what is on screen and return a structured, field-by-field description
+    of it — Fiji plugin dialogs, the napari window, or whichever of the two is open.
+
+    Call this when the user is stuck, confused, or asks for help with something they
+    can see: what a parameter means, which layer is selected, why a button is greyed
+    out, what to click next. Never ask the user to take or send a screenshot instead.
+
+    Args:
+        target: "auto" (default) — look for Fiji plugin dialogs first, and fall back to
+                  napari only if no dialog is open AND a napari viewer is already running.
+                "fiji"   — only scan Fiji plugin dialogs.
+                "napari" — only capture the napari window. Use this when you know napari
+                  is the thing in question; unlike "auto" it will start the viewer if it
+                  is not already open.
+
+    Returns a JSON object:
+      { "fiji_dialogs": [ {dialog_title, fields, buttons, warnings}, ... ],
+        "napari_window": {window_title, layers, dock_widget, canvas_state, warnings} | null,
+        "notes": [ ... ] }
+    `fiji_dialogs` is an empty list and `napari_window` is null when nothing was found;
+    `notes` explains why (e.g. napari was skipped because no viewer is running).
+    """
+    target = (target or "auto").strip().lower()
+    if target not in {"auto", "fiji", "napari"}:
+        return json.dumps({"error": f"Unknown target '{target}'. Use 'auto', 'fiji', or 'napari'."})
+
+    out: dict = {"fiji_dialogs": [], "napari_window": None, "notes": []}
+
+    if target in {"auto", "fiji"}:
+        try:
+            dialogs = _grab_fiji_dialogs()
+        except Exception as e:
+            dialogs = []
+            out["notes"].append(f"Fiji dialog scan failed: {e}")
+        if dialogs:
+            out["fiji_dialogs"] = _describe_fiji_dialogs(dialogs)
+        elif target == "fiji":
+            out["notes"].append("No Fiji plugin dialogs are currently open.")
+
+    if target == "napari":
+        out["napari_window"] = _describe_napari_window()
+    elif target == "auto" and not out["fiji_dialogs"]:
+        # Nothing open in Fiji — try napari, but only if its viewer already exists,
+        # so "auto" never cold-starts napari as a side effect.
+        if _napari_viewer_is_live():
+            out["napari_window"] = _describe_napari_window()
+        else:
+            out["notes"].append(
+                "No Fiji plugin dialogs are open, and no napari viewer is running. "
+                "Nothing to capture — ask the user what they have on screen, or call "
+                "again with target='napari' to open the viewer."
+            )
+
+    return json.dumps(out, indent=2)
 
 
 @tool
