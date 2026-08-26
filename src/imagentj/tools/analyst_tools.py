@@ -421,12 +421,49 @@ def summarize_deliverables(
 
         # A batch that silently stopped early is a genuine failure, and comparing
         # produced files against input IMAGES (not every stray .txt) is the check.
+        #
+        # But it rests on a premise that is only sometimes true: that the deliverable is
+        # PER-IMAGE, one output per input. That holds for masks and per-image tables; it
+        # is simply false for an AGGREGATE deliverable — one summary CSV distilled from a
+        # whole dataset is the correct and complete answer to "measure colocalization
+        # across these movies", and counting it as "1 file for 244 images" failed runs
+        # that had produced exactly what was asked for. Per-image artefacts are the case
+        # this check was built for, so that is the case it now fires on; for tables the
+        # premise is unknowable from the files alone, so it asks instead of failing.
         n_in = len(in_images)
         produced = [m for m in measured if m["name"] not in in_names]
+        per_image_kind = [m for m in produced if m.get("kind") == "image"]
         if n_in and len(produced) < n_in:
-            findings.append((FAIL, f"only {len(produced)} produced file(s) for {n_in} input "
-                                   f"image(s). The batch stopped early or skipped images — a "
-                                   f"partial deliverable is a failure, not a caveat."))
+            if not produced:
+                # Nothing was produced AT ALL, yet files matched the pattern — so
+                # every measured file is one of the inputs. The aggregate-deliverable
+                # argument does not reach this case: it defends ONE summary distilled
+                # from many inputs, and there is no summary here. Kept ahead of the
+                # branches below because both test what the produced files ARE, and an
+                # empty list answers neither. (The "no files matched" FAIL earlier in
+                # this function does not cover it: files DID match, they are just all
+                # echoed inputs.)
+                findings.append((FAIL, f"NO produced files for {n_in} input image(s) — every "
+                                       f"measured file is one of the inputs. The run has not "
+                                       f"delivered anything; a missing deliverable is a failure, "
+                                       f"not a caveat."))
+            elif per_image_kind:
+                findings.append((FAIL, f"only {len(produced)} produced file(s) for {n_in} input "
+                                       f"image(s), and they are per-image artefacts "
+                                       f"({len(per_image_kind)} mask/image file(s)) — one is "
+                                       f"expected per input. The batch stopped early or skipped "
+                                       f"images; a partial deliverable is a failure, not a "
+                                       f"caveat."))
+            elif len(produced) > 1:
+                findings.append((SUSPECT, f"{len(produced)} produced table(s) for {n_in} input "
+                                          f"image(s). If these are per-image tables the batch "
+                                          f"stopped early and this is a FAIL; if they are "
+                                          f"aggregate summaries over the whole dataset it is "
+                                          f"correct. State which, from the requested "
+                                          f"deliverable, before judging."))
+            # A single aggregate table over many inputs is the normal shape of a summary
+            # deliverable — no finding. Its content is still checked by every other rule
+            # here (empties, expected_per_file, echoed inputs).
 
     quantity = None
     if expected_per_file and expected_per_file > 0:

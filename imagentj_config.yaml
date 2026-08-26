@@ -38,10 +38,12 @@ local_llm:
   api: responses
   model: "moonshotai/Kimi-K3"
 
-# Per-role thinking budget. Kimi K3 supports low/high/max as top-level
-# reasoning_effort values. Environment overrides remain available as
-# IMAGENTJ_<ROLE>_REASONING_EFFORT or IMAGENTJ_REASONING_EFFORT.
-reasoning:
+# ── Thinking budget per role ────────────────────────────────────────────────
+# Mirrors `models:` above. Values are endpoint-dependent; Kimi K3 supports
+# low/high/max as top-level reasoning_effort values. An explicit null sends no
+# reasoning_effort. Per-role values take precedence over the blanket
+# IMAGENTJ_REASONING_EFFORT environment override.
+reasoning_effort:
   supervisor: max
   worker:     max
   analyst:    high

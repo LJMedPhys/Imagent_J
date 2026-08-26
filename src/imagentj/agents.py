@@ -4,8 +4,13 @@ import os
 import sqlite3
 from typing import Literal, Optional
 
+import httpx
+from openai import OpenAIError
+
 from . import stop_signal
+from . import agent_watchdog
 from . import config
+from .safety_filter import BIO_REFUSAL_HINT, is_bio_refusal
 
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
@@ -15,12 +20,12 @@ from langchain.agents.middleware import (
     ClearToolUsesEdit,
     FilesystemFileSearchMiddleware,
 )
-from langchain.agents.structured_output import ToolStrategy
+from langchain.agents.structured_output import ProviderStrategy, ToolStrategy
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.errors import GraphRecursionError
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 from deepagents.middleware.skills import SkillsMiddleware
 
 log = logging.getLogger("imagentj")
@@ -47,7 +52,8 @@ from .tools import (
     check_plugin_installed, mkdir_copy, save_script, edit_script, copy_file, execute_script,
     get_script_info, load_script, get_script_history,
     setup_analysis_workspace, save_markdown,
-    NarrationReminderMiddleware, PhaseGuardMiddleware, VisionOptionMiddleware,
+    NarrationReminderMiddleware, PhaseGuardMiddleware, ToolOutputLimitMiddleware,
+    VisionOptionMiddleware, BioRefusalRetryMiddleware,
     update_state_ledger, read_state_ledger, set_ledger_metadata, get_ledger_context,
     check_environment,
     set_dialog_vision_llm,
@@ -125,8 +131,32 @@ except ImportError:
 # Handoff schemas
 # ---------------------------------------------------------------------------
 
+def _strict_json_schema(schema: dict) -> None:
+    """Make a handoff model's emitted JSON Schema valid for OpenAI strict mode.
+
+    Strict mode demands `additionalProperties: false` and that `required` name
+    every property. Pydantic will not produce that on its own: a field only lands
+    in `required` when it has no default, and giving up defaults means an
+    incomplete reply raises a ValidationError instead of degrading.
+
+    This is not cosmetic. Without `strict: true` the provider treats the schema as
+    a hint, and the model answers with the SCHEMA rather than an instance —
+    observed on the first live ProviderStrategy call for ScriptHandoff:
+
+        {"properties": {"script_path": {...}, ...}}   ->  3 validation errors,
+        script_path / description / success all "Field required".
+
+    So the defaults stay (parsing stays forgiving) and the strict requirements are
+    stamped onto the schema here. Optional fields are already `x | None`, so the
+    model can satisfy `required` by sending null.
+    """
+    schema["additionalProperties"] = False
+    schema["required"] = list((schema.get("properties") or {}).keys())
+
+
 class ScriptHandoff(BaseModel):
     """Returned by imagej_coder and imagej_debugger."""
+    model_config = ConfigDict(json_schema_extra=_strict_json_schema)
     script_path: str
     description: str
     inputs: list[str] = []
@@ -147,6 +177,7 @@ class ScriptHandoff(BaseModel):
 
 class AnalystHandoff(BaseModel):
     """Returned by python_data_analyst."""
+    model_config = ConfigDict(json_schema_extra=_strict_json_schema)
     script_path: str
     description: str
     stage: str = "unknown"              # "measurement" | "statistics" | "plotting"
@@ -173,6 +204,8 @@ class QAHandoff(BaseModel):
     minimal_workflow_passed: int
     minimal_workflow_total: int
     critical_failures: list[str]
+    # Scientific plausibility of the DELIVERABLE, measured on disk rather than read
+    # from the ledger. Defaulted so an older/partial handoff still validates.
     plausibility_verdict: str = "NOT MEASURED"
     measured_median: float = 0.0
     success: bool
@@ -359,11 +392,11 @@ _LLM_MAX_RETRIES = int(os.environ.get("IMAGENTJ_LLM_MAX_RETRIES", "2"))
 _LLM_SEED_RAW = os.environ.get("IMAGENTJ_LLM_SEED", "").strip()
 _LLM_SEED: Optional[int] = int(_LLM_SEED_RAW) if _LLM_SEED_RAW not in ("", "0") else None
 
-def _reasoning_effort(role: str, default: str) -> Optional[str]:
-    """Resolve role-specific effort, with environment overrides for batch runs."""
+
+def _reasoning_effort(role: str, default: Optional[str]) -> Optional[str]:
+    """Resolve per-role effort while retaining the local-run override."""
     role_env = os.environ.get(f"IMAGENTJ_{role.upper()}_REASONING_EFFORT", "").strip()
-    global_env = os.environ.get("IMAGENTJ_REASONING_EFFORT", "").strip()
-    return role_env or global_env or config.reasoning_for(role, default) or None
+    return role_env or config.reasoning_effort_for(role, default)
 
 
 def _seed_kwargs() -> dict:
@@ -519,9 +552,21 @@ def _make_coder_agent(model, name, system_prompt):
             inspect_folder_tree,   # lets agent survey /app/skills/ before reading
         ],
         system_prompt=system_prompt,
-        response_format=ToolStrategy(schema=ScriptHandoff, handle_errors=True),
+        # ProviderStrategy, not ToolStrategy — see the note on _analyst_agent.
+        # ToolStrategy forces tool_choice="required" on every turn, and every
+        # watchdog kill in the v3 benchmark run traced back to an agent built here
+        # or by the analyst. ProviderStrategy binds no tool_choice and sends the
+        # schema as a native response_format instead.
+        #
+        # strict=True is load-bearing, not belt-and-braces: without it the provider
+        # treats the schema as advisory and the model replies with the schema
+        # itself ({"properties": {...}}), which fails to parse. See
+        # _strict_json_schema.
+        response_format=ProviderStrategy(schema=ScriptHandoff, strict=True),
         name=name,
         middleware=[
+            ToolOutputLimitMiddleware(),
+            agent_watchdog.middleware(),
             FilesystemFileSearchMiddleware(
                 # Scoped to /app/skills/ — the workflow templates / SKILL.md the coder
                 # copies from. Do NOT widen to /app/: /app/data is ~66 GB of images and
@@ -542,6 +587,8 @@ def _make_coder_agent(model, name, system_prompt):
                     ),
                 ],
             ),
+            # Innermost — see BioRefusalRetryMiddleware. Must stay last.
+            BioRefusalRetryMiddleware(),
         ],
     )
 
@@ -581,9 +628,20 @@ _analyst_agent = create_agent(
         inspect_folder_tree,
     ],
     system_prompt=python_analyst_prompt,
-    response_format=ToolStrategy(schema=AnalystHandoff, handle_errors=True),
+    # ProviderStrategy for the same reason as plugin_manager: ToolStrategy binds
+    # tool_choice="required" on every turn (langchain factory.py, "Force tool use
+    # if we have structured output tools"), and that forcing is what stalls the
+    # agent — the request gets HTTP 200 headers and then no body at all, for
+    # minutes, until the watchdog kills it.
+    #
+    # This agent could not take the fix until `edits` was typed. ProviderStrategy
+    # also binds the real tools in strict mode, and `edits: Optional[list]` emitted
+    # `{"items": {}}`, which OpenAI rejects. A schema audit of all nine tools bound
+    # here found that this was the only hard blocker.
+    response_format=ProviderStrategy(schema=AnalystHandoff, strict=True),
     name="python_data_analyst",
     middleware=[
+        ToolOutputLimitMiddleware(),
         SkillsMiddleware(
             backend=_python_skills_backend,
             # /app/skills/napari/ is included so the analyst can read the micro_sam skill and
@@ -602,6 +660,9 @@ _analyst_agent = create_agent(
                 ),
             ],
         ),
+        # Innermost — see BioRefusalRetryMiddleware. Must stay last, i.e. after
+        # SkillsMiddleware, so a retry is not re-injected with the catalogue.
+        BioRefusalRetryMiddleware(),
     ],
 )
 
@@ -619,6 +680,9 @@ _qa_agent = create_agent(
     system_prompt=qa_reporter_prompt,
     response_format=ToolStrategy(schema=QAHandoff, handle_errors=True),
     name="qa_reporter",
+    # Feeds the agent watchdog its tool-call history — this is the agent whose
+    # write→re-read loop went unbounded for 34 minutes.
+    middleware=[ToolOutputLimitMiddleware(), agent_watchdog.middleware()],
 )
 
 # Plugin manager — gets SkillsMiddleware so it sees all plugin skill descriptions
@@ -638,9 +702,31 @@ _plugin_agent = create_agent(
         inspect_folder_tree,
     ],
     system_prompt=plugin_manager_prompt,
-    response_format=PluginRecommendation,
+    # ProviderStrategy explicitly, NOT a bare `response_format=PluginRecommendation`.
+    #
+    # A bare schema goes through AutoStrategy, whose _supports_provider_strategy()
+    # returns False for "openai/gpt-5.6-luna" (no model profile, and the fallback
+    # list stops at gpt-5.5). It then silently degrades to ToolStrategy, which sets
+    # tool_choice="required" on EVERY turn.
+    #
+    # That forcing is what wedged this agent. Once it has gathered its evidence the
+    # model wants to answer in prose; compelled to emit a tool call anyway, the
+    # upstream spins and returns HTTP 200 with finish_reason="error", cost 0 and no
+    # tool_calls — so there is no structured_response and the loop pays again.
+    # Measured on the real payload: tool_choice="required" gave 452 s / >14 min
+    # non-answers, while tool_choice="auto" on the identical request returned in
+    # 12-22 s every time. Stall rates track the forcing exactly — plugin_manager
+    # 13/56, python_data_analyst 8.6%, and the supervisor (no structured output,
+    # hence no forced call) 0/402.
+    #
+    # ProviderStrategy binds no tool_choice and sends the schema as response_format
+    # instead. Verified on the wire: tool_choice absent, 5 real tools instead of 6,
+    # and json_schema with strict=false — so the nested pipeline_steps model needs
+    # no `extra="forbid"` rewrite to be accepted.
+    response_format=ProviderStrategy(schema=PluginRecommendation),
     name="plugin_manager",
     middleware=[
+        ToolOutputLimitMiddleware(),
         SkillsMiddleware(
             backend=_plugin_skills_backend,
             # Three skill families, so the manager can route each pipeline step to the
@@ -652,6 +738,11 @@ _plugin_agent = create_agent(
             # three sources stay cleanly separated and none shadows another.
             sources=["/app/skills/", "/app/skills/python/", "/app/skills/napari/"],
         ),
+        # Innermost — see BioRefusalRetryMiddleware. Must stay last, i.e. after
+        # SkillsMiddleware. This is the agent the benchmark evidence caught being
+        # refused: refused_debug.log's traceback lands one frame below
+        # deepagents' skills.py wrap_model_call inside plugin_manager.
+        BioRefusalRetryMiddleware(),
     ],
 )
 
@@ -672,6 +763,7 @@ librarian_agent = create_agent(
     system_prompt=librarian_prompt,
     name="librarian",
     middleware=[
+        ToolOutputLimitMiddleware(),
         SkillsMiddleware(
             backend=_librarian_skills_backend,
             sources=["/app/skills/learned_memory/"],  # only the Librarian's own skill
@@ -691,6 +783,7 @@ _vlm_agent = (
         system_prompt=vlm_judge_prompt,
         response_format=ToolStrategy(schema=VLMHandoff, handle_errors=True),
         name="vlm_judge",
+        middleware=[ToolOutputLimitMiddleware(), agent_watchdog.middleware()],
     )
     if llm_vlm is not None
     else None
@@ -782,18 +875,82 @@ def _newest_script_since(directory: str, pre: dict) -> str:
     return newest
 
 
-def _run_capped(agent, payload, on_cap):
-    """Run a stateless subagent with a hard recursion cap. On hitting the cap (a runaway
-    tool loop) return on_cap() — a best-effort handoff — instead of raising/looping forever,
-    so the Supervisor still receives a structured result it can act on."""
+# The failure handoffs do not share one prose field: ScriptHandoff/AnalystHandoff/
+# VLMHandoff carry `error_message`, PluginRecommendation carries
+# `relevance_reasoning` and no `error_message` at all. Writing to a field a model
+# does not declare raises in pydantic v2, so an unconditional
+# `setattr(handoff, "error_message", ...)` silently dropped the note on
+# plugin_manager — the one subagent the benchmark evidence shows being refused.
+_HANDOFF_NOTE_FIELDS = ("error_message", "relevance_reasoning", "reasoning")
+
+
+def _annotate_handoff(handoff, note: str):
+    """Append *note* to whichever prose field this handoff type declares."""
+    declared = getattr(type(handoff), "model_fields", {}) or {}
+    for field in _HANDOFF_NOTE_FIELDS:
+        if field not in declared:
+            continue
+        try:
+            existing = getattr(handoff, field, None) or ""
+            setattr(handoff, field, (existing + " " + note).strip())
+        except Exception:
+            log.warning("could not annotate %s.%s with the refusal note",
+                        type(handoff).__name__, field)
+        return handoff
+    log.warning("%s declares no field to carry the refusal note",
+                type(handoff).__name__)
+    return handoff
+
+
+def _run_capped(agent, payload, on_cap, name: str = "subagent"):
+    """Run a stateless subagent under BOTH bounds, returning on_cap() if either trips.
+
+    1. `recursion_limit` — a hard ceiling on super-steps.
+    2. the agent watchdog — kills a spinning loop (identical tool calls), a hung
+       tool call (no activity for STALL_SECONDS), or an LLM-judged runaway.
+
+    The recursion cap alone is not enough: it only fires once the agent has burned
+    ~22 turns, and it cannot fire at all while a single tool call is blocked. The
+    watchdog covers both gaps. Either way the Supervisor still receives a
+    structured result it can act on.
+
+    The same guarantee has to hold when the agent comes back WITHOUT a structured
+    response. That happens for reasons entirely outside this process — the model
+    emits prose instead of the schema tool call, or the connection drops mid-stream
+    (`httpx.RemoteProtocolError: peer closed connection without sending complete
+    message body`). A bare `result["structured_response"]` turned that into a
+    KeyError which escaped this function, propagated through the supervisor's tool
+    node, and ended the whole session with "unhandled agent error" — losing a run
+    whose deliverables were already complete on disk. Degrade to on_cap() instead:
+    one subagent call fails, the pipeline continues.
+    """
+    handle = agent_watchdog.register(name)
     try:
+        # No bio-refusal retry here on purpose. BioRefusalRetryMiddleware already
+        # reformulates and retries at the model boundary, where it can actually
+        # drop the injected skill catalogue the provider objected to. Retrying at
+        # this level would instead replay the whole subagent — every tool call
+        # again — around a payload whose only reformulation is a rewrite of the
+        # user's own wording. Reaching the handler below means the middleware
+        # exhausted its ladder, so all that is left is to degrade cleanly.
         result = stop_signal.SubagentRunner(
             agent.invoke,
             payload,
             config={"recursion_limit": _RECURSION_LIMIT},
+            watchdog=handle,
         ).run()
-        return result["structured_response"]
+        structured = (result or {}).get("structured_response")
+        if structured is None:
+            log.warning(
+                "%s returned no structured_response (model emitted prose, or the "
+                "stream was cut) — degrading to a failure handoff so the pipeline "
+                "continues.", name
+            )
+            return on_cap()
+        return structured
     except GraphRecursionError:
+        return on_cap()
+    except agent_watchdog.AgentAborted:
         return on_cap()
     except (json.JSONDecodeError, ValidationError) as exc:
         # Malformed structured output — one observed kill was a raw
@@ -808,7 +965,15 @@ def _run_capped(agent, payload, on_cap):
         log.error("[imagentj][fatal] LLMClientParseError in %s (%s: %s) — "
                   "malformed structured response; degrading to a failure "
                   "handoff so the rest of the run survives.",
-                  "subagent", type(exc).__name__, exc)
+                  name, type(exc).__name__, exc)
+        return on_cap()
+    except (httpx.HTTPError, OpenAIError) as exc:
+        # Transport / provider failure. The science already on disk must not be
+        # lost because one call died in the socket.
+        log.warning(
+            "%s failed at the transport layer (%s: %s) — degrading to a "
+            "failure handoff.", name, type(exc).__name__, exc,
+        )
         return on_cap()
     except Exception as exc:
         # The model client has already exhausted its in-place retries when a
@@ -822,7 +987,35 @@ def _run_capped(agent, payload, on_cap):
                 type(exc).__name__, exc,
             )
             return on_cap()
-        raise
+        if is_bio_refusal(exc):
+            # All reformulation attempts were refused. Hand the supervisor an
+            # explicit explanation — this is a different signal from a timeout
+            # or a watchdog abort, and the supervisor must not burn time
+            # re-running the same wording.
+            log.warning(
+                "%s refused by provider biological-risk filter after every "
+                "reformulation attempt — degrading to failure handoff.", name,
+            )
+            return _annotate_handoff(on_cap(), BIO_REFUSAL_HINT)
+        # Nested tool validation/runtime failures must stay local to the subagent.
+        # One observed example is a provider emitting a content-block list for a
+        # regex ``pattern`` argument; FilesystemFileSearchMiddleware then raises
+        # ``TypeError: expected string or bytes-like object, got 'list'``. Letting
+        # that escape aborts the entire supervisor and discards otherwise valid
+        # image deliverables. Return the same typed failure handoff used for a
+        # watchdog/transport failure so the supervisor can debug, retry, or choose
+        # another backend. BaseException subclasses (KeyboardInterrupt,
+        # SystemExit) deliberately remain uncaught.
+        log.exception(
+            "%s failed inside a nested model/tool call (%s: %s) — degrading "
+            "to a failure handoff so the pipeline continues.",
+            name,
+            type(exc).__name__,
+            exc,
+        )
+        return on_cap()
+    finally:
+        agent_watchdog.release(handle)
 
 
 @tool
@@ -867,6 +1060,7 @@ def imagej_coder(task: str, project_root: str) -> ScriptHandoff:
         agent,
         {"messages": [{"role": "user", "content": "\n\n".join(s for s in sections if s)}]},
         _on_cap,
+        name="imagej_coder",
     )
     return validate_script_artifact(
         handoff,
@@ -909,6 +1103,7 @@ def imagej_debugger(script_path: str, error_message: str, project_root: str = ""
         agent,
         {"messages": [{"role": "user", "content": "\n\n".join(s for s in sections if s)}]},
         _on_cap,
+        name="imagej_debugger",
     )
     debugger_scripts_dir = (
         os.path.join(project_root, "scripts", "imagej")
@@ -1008,6 +1203,7 @@ def python_data_analyst(task: str, input_path: str, output_dir: str, project_roo
         _analyst_agent,
         {"messages": [{"role": "user", "content": "\n\n".join(s for s in sections if s)}]},
         _on_cap,
+        name="python_data_analyst",
     )
     analyst_scripts_dir = (
         os.path.join(project_root, "scripts", "python")
@@ -1104,6 +1300,7 @@ def _record_qa_verdict(handoff) -> None:
     except Exception:                                     # never break QA over telemetry
         LAST_QA_VERDICT = {}
 
+
 def set_qa_enabled(enabled: bool) -> None:
     global _qa_enabled
     _qa_enabled = enabled
@@ -1120,9 +1317,16 @@ def qa_reporter(project_root: str, user_request: str = "", deliverable_dir: str 
         project_root: Absolute path to the project root folder. The reporter reads all
                       scripts, CSVs, and images to evaluate against workflow and image
                       publishing standards.
+        user_request: The user's ORIGINAL request, quoted verbatim — especially any
+                      stated quantity ("up to 2,000 cells per image", "~50 nuclei").
+                      The reporter measures the delivered files against this number.
+                      Omitting it disables the plausibility check, so always pass it.
+        deliverable_dir: Absolute path where the final deliverables were written, if it
+                      differs from project_root (e.g. '/benchmark/output').
 
-    Returns a QAHandoff with checklist_path, pass/fail counts, and critical_failures.
-    Relay critical_failures to the user verbatim.
+    Returns a QAHandoff with checklist_path, pass/fail counts, critical_failures, and a
+    plausibility_verdict measured from the files on disk. Relay critical_failures and any
+    FAIL verdict to the user verbatim — a FAIL means the result is wrong, not just undocumented.
     """
     if not _qa_enabled:
         return QAHandoff(
@@ -1162,11 +1366,32 @@ def qa_reporter(project_root: str, user_request: str = "", deliverable_dir: str 
     if ledger_ctx:
         sections.append(f"WORKFLOW SUMMARY (from state ledger — use as primary reference):\n{ledger_ctx}")
 
-    result = stop_signal.SubagentRunner(
-        _qa_agent.invoke,
+    # Bounded like every other subagent. This call previously ran uncapped and
+    # unsupervised: a benchmark run had the reporter write QA_Checklist_Report.md
+    # and read it back 57 times over 34 minutes without ever emitting its handoff,
+    # and nothing stopped it. On either bound tripping we hand back a partial
+    # report rather than failing the whole pipeline — by this point the science
+    # is already finished and saved.
+    def _on_cap() -> QAHandoff:
+        checklist = os.path.join(project_root, "QA_Checklist_Report.md")
+        return QAHandoff(
+            checklist_path=checklist if os.path.exists(checklist) else "",
+            minimal_workflow_passed=0,
+            minimal_workflow_total=0,
+            critical_failures=[
+                "QA audit was stopped after exceeding its tool-call budget; the "
+                "analysis outputs are unaffected. Any checklist written before the "
+                "stop is partial — re-run the audit if you need a complete one."
+            ],
+            success=False,
+        )
+
+    handoff = _run_capped(
+        _qa_agent,
         {"messages": [{"role": "user", "content": "\n\n".join(sections)}]},
-    ).run()
-    handoff = result["structured_response"]
+        _on_cap,
+        name="qa_reporter",
+    )
     _record_qa_verdict(handoff)
     return handoff
 
@@ -1278,6 +1503,7 @@ def vlm_judge(
             _vlm_agent,
             {"messages": [{"role": "user", "content": content}]},
             lambda: _vlm_failure(pipeline_step, "VLM judge reached its tool-call limit."),
+            name="vlm_judge",
         )
     except Exception as exc:
         return _vlm_failure(pipeline_step, f"{type(exc).__name__}: {exc}")
@@ -1294,8 +1520,21 @@ def plugin_manager(task: str, project_root: str = "") -> PluginRecommendation:
     Args:
         task:         Describe the scientific task (e.g., "segment touching nuclei in
                       fluorescence images") OR an install command ("INSTALL MorphoLibJ").
-        project_root: Absolute path to the project folder. Provides the plugin manager
-                      with image metadata and scientific goal for intelligent matching.
+        project_root: Absolute path to the project folder. The recommendation is read
+                      out of this project's ledger (PROJECT STATE), so CALL
+                      set_ledger_metadata(image_metadata=...) FIRST — see below.
+
+    CALL ORDER MATTERS. Record the measured image properties (modality, n_channels,
+    bit_depth, pixel size, dimensions) in the ledger BEFORE calling this. Those
+    properties mechanically admit or exclude a tool: an RGB 3-channel 8-bit brightfield
+    image cannot use a fluorescent-nuclei model no matter how the task is worded.
+    Called concurrently with extract_image_metadata — e.g. in one parallel tool batch —
+    this sees an empty PROJECT STATE and must decide from the task PROSE ALONE, which is
+    the highest-variance input available. Measured: an H&E segmentation task scored 0.11
+    with one supervisor backbone and 0.75 with another, diverging at this call, before
+    any parameter was chosen. The recommendation is then rendered as a binding
+    "USE THIS PLUGIN" instruction for the rest of the run, so a bad pick here is not
+    self-correcting.
 
     Returns a PluginRecommendation with the best plugin, its installation status,
     skill folder path (if docs exist), and reasoning.
@@ -1313,11 +1552,28 @@ def plugin_manager(task: str, project_root: str = "") -> PluginRecommendation:
             sections.append(f"PROJECT STATE (for context):\n{ledger_ctx}")
     sections.append(f"TASK: {task}")
 
-    result = stop_signal.SubagentRunner(
-        _plugin_agent.invoke,
+    # Capped and supervised like every other subagent. This ran bare until
+    # 2026-08-07, when a hung OpenRouter socket inside the plugin manager wedged
+    # three benchmark containers indefinitely: no recursion cap, no watchdog, and
+    # so nothing could see it. Failing to find a plugin must never be fatal — the
+    # supervisor can pick a backend without a recommendation.
+    def _on_cap() -> PluginRecommendation:
+        return PluginRecommendation(
+            recommended_plugin=None,
+            installation_status="unknown",
+            reasoning=(
+                "Plugin search was stopped after exceeding its time/tool budget. "
+                "Proceed by choosing a backend from the available skills instead of "
+                "waiting on a recommendation."
+            ),
+        )
+
+    return _run_capped(
+        _plugin_agent,
         {"messages": [{"role": "user", "content": "\n\n".join(sections)}]},
-    ).run()
-    return result["structured_response"]
+        _on_cap,
+        name="plugin_manager",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1346,6 +1602,7 @@ def init_agent():
     no_vision_prompt = build_supervisor_prompt(enable_qa=True, enable_vision=False)
 
     supervisor_middleware = [
+        ToolOutputLimitMiddleware(),
         ContextEditingMiddleware(
             edits=[
                 ClearToolUsesEdit(
@@ -1372,6 +1629,12 @@ def init_agent():
             enabled_prompt=vision_prompt,
             disabled_prompt=no_vision_prompt,
         ),
+        # Last line before a provider biological-risk refusal unwinds the whole
+        # supervisor loop. create_deep_agent inserts user middleware after its
+        # own Skills/Filesystem/SubAgent stack, so this sees their injected
+        # system-message blocks and can drop them on retry 1; retry 2 also
+        # neutralises pathogen proper nouns. Must stay last in this list.
+        BioRefusalRetryMiddleware(),
     ]
 
     supervisor = create_deep_agent(

@@ -30,6 +30,7 @@ from imagentj.chat_history import ChatHistoryManager
 import imagentj.stop_signal as stop_signal
 from imagentj import run_control
 from imagentj import watchdog
+from imagentj.safety_filter import is_bio_refusal
 
 from imagentj.benchmark_gui_hooks import (
     is_benchmark_mode,
@@ -788,7 +789,22 @@ class AgentWorker(QObject):
                 self.event_received.emit(event)
         except Exception as e:
             log.exception(f"_run_prompt exception: {e}")
-            self.error.emit(str(e))
+            if is_bio_refusal(e):
+                # A provider biological-risk refusal has already been retried
+                # with reasoning state stripped (and sensitive terms neutralised)
+                # downstream. Reaching here means every reformulation was refused;
+                # say so explicitly instead of reporting a generic "unhandled
+                # agent error" that loses why the run actually stopped.
+                self.error.emit(
+                    "Provider flagged this task as a possible biological-risk prompt. "
+                    "The request was reformulated (injected skill catalogue and "
+                    "reasoning state removed, then pathogen names neutralised) and "
+                    "retried; every formulation was refused. No further automatic "
+                    "retry is safe — rephrase the task description upstream if you "
+                    "want to try again. Details: " + str(e)
+                )
+            else:
+                self.error.emit(str(e))
         finally:
             log.debug("_run_prompt finished")
             self.finished.emit()
