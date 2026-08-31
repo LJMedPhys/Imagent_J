@@ -385,9 +385,14 @@ def summarize_deliverables(
                                   f"measurement is not what the user asked for."))
 
     if input_dir and os.path.isdir(input_dir):
-        _IMG = (".tif", ".tiff", ".png", ".jpg", ".jpeg", ".nd2", ".czi", ".lif")
-        in_paths = [p for p in _glob.glob(os.path.join(input_dir, "**", "*"), recursive=True)
-                    if os.path.isfile(p)]
+        _IMG = {
+            ".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp",
+            ".nd2", ".czi", ".lif", ".lsm", ".svs", ".ics", ".ids",
+        }
+        in_paths = []
+        for root, _dirs, files in os.walk(input_dir):
+            for fn in files:
+                in_paths.append(os.path.join(root, fn))
         in_names = {os.path.basename(p) for p in in_paths}
         in_images = [p for p in in_paths if os.path.splitext(p)[1].lower() in _IMG]
 

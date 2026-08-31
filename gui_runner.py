@@ -32,7 +32,11 @@ from imagentj import run_control
 from imagentj import watchdog
 from imagentj.safety_filter import is_bio_refusal
 
-from imagentj.benchmark_gui_hooks import is_benchmark_mode, setup_benchmark_gui
+from imagentj.benchmark_gui_hooks import (
+    is_benchmark_mode,
+    record_benchmark_failure,
+    setup_benchmark_gui,
+)
 
 logging.basicConfig(
     filename="/app/data/agentic-j_debug.log",
@@ -431,6 +435,26 @@ class MetricsPanelWidget(QWidget):
         agent_box = QGroupBox("Agent Options")
         agent_layout = QVBoxLayout(agent_box)
         agent_layout.setSpacing(4)
+
+        # Put Vision first: on short/HiDPI desktops the bottom of this group can
+        # be clipped by Qt's layout compression. Vision is the interactive
+        # per-step control and must remain visible even in that degraded layout.
+        self._vision_checkbox = QCheckBox("Vision Judge")
+        self._vision_checkbox.setChecked(False)
+        self._vision_checkbox.stateChanged.connect(
+            lambda _: self.vision_toggled.emit(self._vision_checkbox.isChecked())
+        )
+        agent_layout.addWidget(self._vision_checkbox)
+
+        vision_desc = QLabel(
+            "Reviews a representative input and every image-producing step.<br>"
+            "<span style='color:#c0392b;'>Adds inference time.</span>"
+        )
+        vision_desc.setTextFormat(Qt.RichText)
+        vision_desc.setWordWrap(True)
+        vision_desc.setStyleSheet("color:#555; font-size:10px; padding-left:18px;")
+        agent_layout.addWidget(vision_desc)
+
         self._qa_checkbox = QCheckBox("QA Agent")
         self._qa_checkbox.setChecked(False)
         self._qa_checkbox.stateChanged.connect(
@@ -448,22 +472,6 @@ class MetricsPanelWidget(QWidget):
         qa_desc.setWordWrap(True)
         qa_desc.setStyleSheet("color:#555; font-size:10px; padding-left:18px;")
         agent_layout.addWidget(qa_desc)
-
-        self._vision_checkbox = QCheckBox("Vision Judge")
-        self._vision_checkbox.setChecked(False)
-        self._vision_checkbox.stateChanged.connect(
-            lambda _: self.vision_toggled.emit(self._vision_checkbox.isChecked())
-        )
-        agent_layout.addWidget(self._vision_checkbox)
-
-        vision_desc = QLabel(
-            "Reviews a representative input and every image-producing step.<br>"
-            "<span style='color:#c0392b;'>Adds API calls and token cost.</span>"
-        )
-        vision_desc.setTextFormat(Qt.RichText)
-        vision_desc.setWordWrap(True)
-        vision_desc.setStyleSheet("color:#555; font-size:10px; padding-left:18px;")
-        agent_layout.addWidget(vision_desc)
         root.addWidget(agent_box)
 
         root.addStretch()
@@ -493,9 +501,14 @@ class MetricsPanelWidget(QWidget):
         t_str = f"{int(secs//60)}m {int(secs%60)}s" if secs >= 60 else f"{secs:.1f}s"
         self._lbl_time.setText(  f("Think time", t_str,    "#16a085"))
 
-        cost     = data["cost_usd"]
-        cost_str = f"${cost:.4f}" if cost >= 0.0001 else "-"
-        self._lbl_cost.setText(  f("Est. cost",  cost_str, "#c0392b", bold=True))
+        if os.environ.get("LOCAL_LLM_BASE_URL"):
+            self._lbl_cost.setText(
+                f("API cost", "Local — no charge", "#16a085", bold=True)
+            )
+        else:
+            cost = data["cost_usd"]
+            cost_str = f"${cost:.4f}" if cost >= 0.0001 else "-"
+            self._lbl_cost.setText(f("Est. cost", cost_str, "#c0392b", bold=True))
 
         self._lbl_calls.setText( f("Total",       str(data["tool_calls"]),            "#2c3e50"))
         self._lbl_failed.setText(f("Hard errors", str(data["failed_tool_calls"]),     "#e74c3c"))
@@ -1266,6 +1279,12 @@ class ImageJAgentGUI(QWidget):
             return
         self._agent_had_error    = True
         self._last_agent_error   = msg
+        # In benchmark mode a mid-run agent crash (e.g. an LLMClientParseError
+        # inside the supervisor graph) must leave evidence: the adapter polls
+        # for result.json and otherwise reads "container exited, no sentinel"
+        # as a confused finish. Belt-and-braces — the auto-finish hook is still
+        # the primary path; record_benchmark_failure never clobbers its file.
+        record_benchmark_failure(msg)
         self.chat_scroll.add_message('error', f"Agent error:\n{msg}")
         self.status_label.setText("Error")
         self.status_label.setStyleSheet("color: red;")

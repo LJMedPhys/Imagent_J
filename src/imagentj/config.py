@@ -79,30 +79,87 @@ def model_for(role: str, default: str) -> str:
 _UNSET = object()
 
 
+def local_model_for(role: str, default: str = "moonshotai/Kimi-K3") -> str:
+    """Return the model id exposed by the local OpenAI-compatible server.
+
+    ``local_llm.models.<role>`` can override individual roles; otherwise all
+    roles share ``local_llm.model``.  This is deliberately separate from the
+    cloud ``models`` mapping so enabling/disabling the local endpoint never
+    requires rewriting the user's OpenAI/OpenRouter choices.
+    """
+    local = _CFG.get("local_llm") if isinstance(_CFG.get("local_llm"), dict) else {}
+    models = local.get("models") if isinstance(local.get("models"), dict) else {}
+    role_val = models.get(role)
+    if isinstance(role_val, str) and role_val.strip():
+        return role_val.strip()
+    common = local.get("model")
+    if isinstance(common, str) and common.strip():
+        return common.strip()
+    return default
+
+
+def local_api(default: str = "responses") -> str:
+    """Return the protocol shared by every role on the local endpoint."""
+    local = _CFG.get("local_llm") if isinstance(_CFG.get("local_llm"), dict) else {}
+    val = local.get("api")
+    return val.strip().lower() if isinstance(val, str) and val.strip() else default
+
+
+def _effort_from_block(block, role: str):
+    """Read one role out of a reasoning-effort block.
+
+    Returns ``_UNSET`` when the role is absent, so the caller falls through to
+    the next source; returns ``None`` when the role is explicitly ``null``,
+    which means "send no reasoning_effort at all" and must not fall through.
+    """
+    if not isinstance(block, dict) or role not in block:
+        return _UNSET
+    val = block[role]
+    if val is None:
+        return None
+    if isinstance(val, str) and val.strip():
+        return val.strip()
+    # A non-string, non-null value is a config error; fall through rather
+    # than pass something the endpoint will reject.
+    return _UNSET
+
+
 def reasoning_effort_for(role: str, default: Optional[str] = None) -> Optional[str]:
     """Return the configured reasoning effort for ``role``, or ``default``.
 
     Mirrors :func:`model_for`. Precedence, highest first:
 
-    1. ``reasoning_effort.<role>`` in imagentj_config.yaml — including an
+    1. ``IMAGENTJ_<ROLE>_REASONING_EFFORT`` — one role, for A/B runs;
+    2. ``local_llm.reasoning_effort.<role>``, consulted only while
+       ``LOCAL_LLM_BASE_URL`` is set. A local model's ladder need not match the
+       cloud one — Kimi K3 takes low/high/max where the cloud roles ship
+       "medium" — so the local profile carries its own block rather than having
+       one vocabulary forced onto both;
+    3. ``reasoning_effort.<role>`` in imagentj_config.yaml — including an
        explicit ``null``, which means "send nothing" and is preserved as None;
-    2. ``IMAGENTJ_REASONING_EFFORT`` — the pre-existing blanket env override,
+    4. ``IMAGENTJ_REASONING_EFFORT`` — the pre-existing blanket env override,
        kept as a fallback so current deployments behave identically;
-    3. ``default`` — this role's shipped value.
+    5. ``default`` — this role's shipped value.
 
-    The env var deliberately does NOT win over an explicit per-role setting:
-    the point of the block is to declare effort per role, and a blanket env var
-    silently overriding one would defeat that.
+    The blanket env var deliberately does NOT win over an explicit per-role
+    setting: the point of the block is to declare effort per role, and a
+    blanket env var silently overriding one would defeat that. The per-role
+    env var does win, because it names the same role — there is nothing it
+    could silently override.
     """
-    block = _CFG.get("reasoning_effort")
-    if isinstance(block, dict) and role in block:
-        val = block[role]
-        if val is None:
-            return None
-        if isinstance(val, str) and val.strip():
-            return val.strip()
-        # A non-string, non-null value is a config error; fall through rather
-        # than pass something the endpoint will reject.
+    role_env = os.environ.get(f"IMAGENTJ_{role.upper()}_REASONING_EFFORT", "").strip()
+    if role_env:
+        return role_env
+
+    if os.environ.get("LOCAL_LLM_BASE_URL", "").strip():
+        local = _CFG.get("local_llm") if isinstance(_CFG.get("local_llm"), dict) else {}
+        val = _effort_from_block(local.get("reasoning_effort"), role)
+        if val is not _UNSET:
+            return val
+
+    val = _effort_from_block(_CFG.get("reasoning_effort"), role)
+    if val is not _UNSET:
+        return val
 
     env = os.environ.get("IMAGENTJ_REASONING_EFFORT", "").strip()
     if env:

@@ -39,7 +39,7 @@ To copy text out of Fiji, select it in the virtual desktop, then open the clipbo
 
 ## Agent architecture
 
-Agentic-J uses a **supervisor + specialist** model. The supervisor receives your request, orchestrates the pipeline, and calls specialists as tools. You never address specialists directly.
+Agentic-J uses a **supervisor + specialist** model. The supervisor receives your request, orchestrates the pipeline, and calls specialists as tools. You never address specialists directly. When `LOCAL_LLM_BASE_URL` is configured, every role below—including vision—uses the local Kimi K3 model instead of its cloud model.
 
 | Agent | Model | Role |
 |-------|-------|------|

@@ -4,7 +4,7 @@
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or Docker Engine + Compose on Linux)
 - At least 8 GB RAM and 30 GB free disk space
-- An API key — either OpenAI or OpenRouter (see below)
+- An OpenAI/OpenRouter API key, or a local OpenAI-compatible LLM endpoint
 
 ---
 
@@ -30,6 +30,28 @@ GMAIL_APP_PASSWORD=sntt iusy rddg mtoi
 |----------|----------|-------|
 | **OpenAI** | `OPENAI_API_KEY` | Direct access to GPT models. OpenAI-only setups use `gpt-5.6-luna` through the Responses API with high reasoning for the VLM Judge. |
 | **OpenRouter** | `OPEN_ROUTER_API_KEY` | Proxy that routes to many providers. The VLM Judge uses `google/gemini-3.5-flash`; this route takes priority when both keys are present. |
+| **Local Kimi K3** | `LOCAL_LLM_BASE_URL` | OpenAI-compatible vLLM/SGLang URL including `/v1`; takes priority over cloud keys and needs no real API key. |
+
+For a Kimi server running on the Docker host:
+
+```env
+LOCAL_LLM_BASE_URL=http://127.0.0.1:18000/v1
+LOCAL_LLM_API_KEY=EMPTY
+LOCAL_LLM_MODEL=moonshotai/Kimi-K3
+LOCAL_LLM_API=responses
+```
+
+All local roles use `local_llm.model` from `imagentj_config.yaml`. The default
+reasoning budget, set under `local_llm.reasoning_effort` in the same file, is
+`max` for the supervisor and script-producing worker roles (ImageJ
+coder/debugger and Python data analyst), and `high` for every other role. It is
+read only while `LOCAL_LLM_BASE_URL` is set; the cloud roles keep the separate
+top-level `reasoning_effort:` block.
+When the server listens only on `127.0.0.1`, start Agentic-J with:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local-kimi.yml up
+```
 
 If neither key is set in the `.env` when the container starts, a **setup wizard** will appear in the browser before Fiji launches. You can insert the key there.
 

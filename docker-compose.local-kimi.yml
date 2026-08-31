@@ -1,0 +1,15 @@
+# Use this override when the local Kimi server listens only on 127.0.0.1.
+# Host networking lets Agentic-J reach that loopback endpoint without exposing
+# the inference server on 0.0.0.0. The app's VNC/noVNC processes continue to
+# listen on their normal host ports; Compose port publishing is unnecessary.
+services:
+  imagentj:
+    network_mode: host
+    networks: !reset []
+    ports: !reset []
+    environment:
+      - LOCAL_LLM_BASE_URL=http://127.0.0.1:18000/v1
+      - LOCAL_LLM_API_KEY=EMPTY
+      - LOCAL_LLM_MODEL=moonshotai/Kimi-K3
+      - LOCAL_LLM_API=responses
+      - NOVNC_PORT=6081

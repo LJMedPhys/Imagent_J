@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import sqlite3
@@ -24,7 +25,7 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.errors import GraphRecursionError
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 from deepagents.middleware.skills import SkillsMiddleware
 
 log = logging.getLogger("imagentj")
@@ -66,6 +67,8 @@ from .tools.learned_memory import (
     library_add_pitfall, library_add_recipe, library_remove, library_set_core,
 )
 from imagentj.tracker import UsageMetrics, MetricsSignalBridge, UsageTrackerCallback
+from imagentj.kimi_chat import KimiChatOpenAI
+from imagentj.artifact_validation import validate_script_artifact
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +81,31 @@ shared_tracker = UsageTrackerCallback(shared_metrics, shared_bridge)
 
 open_router_key = os.getenv("OPEN_ROUTER_API_KEY")
 openai_key = os.getenv("OPENAI_API_KEY")
+local_llm_base_url = os.getenv("LOCAL_LLM_BASE_URL", "").strip().rstrip("/")
+local_llm_api_key = os.getenv("LOCAL_LLM_API_KEY", "").strip() or "local"
+_LOCAL_API_ALIASES = {
+    "responses": "responses",
+    "openai_responses": "responses",
+    "chat": "chat_completions",
+    "chat_completions": "chat_completions",
+    "openai_chat_completions": "chat_completions",
+}
+
+
+def _normalise_local_api(value: str, variable: str) -> str:
+    if value not in _LOCAL_API_ALIASES:
+        raise ValueError(
+            f"{variable} must be 'responses' or 'chat_completions' "
+            f"(got {value!r})."
+        )
+    return _LOCAL_API_ALIASES[value]
+
+
+local_llm_api = _normalise_local_api(
+    os.getenv("LOCAL_LLM_API", "").strip().lower()
+    or config.local_api("responses"),
+    "LOCAL_LLM_API",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -246,18 +274,31 @@ class VLMHandoff(BaseModel):
 # Models
 # ---------------------------------------------------------------------------
 
-if open_router_key:
+if local_llm_base_url:
+    api_key = local_llm_api_key
+    base_url = local_llm_base_url
+    use_local = True
+    use_openrouter = False
+elif open_router_key:
     api_key = open_router_key
     base_url = "https://openrouter.ai/api/v1"
+    use_local = False
     use_openrouter = True
 elif openai_key:
     api_key = openai_key
     base_url = None
+    use_local = False
     use_openrouter = False
 else:
-    raise RuntimeError("No API key found. Set OPEN_ROUTER_API_KEY or OPENAI_API_KEY.")
+    raise RuntimeError(
+        "No LLM provider found. Set LOCAL_LLM_BASE_URL, OPEN_ROUTER_API_KEY, "
+        "or OPENAI_API_KEY."
+    )
 
-def m(name: str) -> str:
+def m(name: str, role: str) -> str:
+    if use_local:
+        env_model = os.getenv("LOCAL_LLM_MODEL", "").strip()
+        return env_model or config.local_model_for(role, "moonshotai/Kimi-K3")
     if use_openrouter:
         return name
     if name.startswith("openai/"):
@@ -265,7 +306,10 @@ def m(name: str) -> str:
     raise ValueError(f"Model {name} not available on OpenAI direct; needs OpenRouter.")
 
 
-def _agent_reasoning_kwargs(reasoning_effort: Optional[str] = None) -> dict:
+def _agent_reasoning_kwargs(
+    reasoning_effort: Optional[str] = None,
+    local_api: Optional[str] = None,
+) -> dict:
     """Return endpoint-compatible options for tool-using text agents.
 
     OpenRouter currently serves these models through Chat Completions, while in OpenAI api endpoint,
@@ -274,6 +318,16 @@ def _agent_reasoning_kwargs(reasoning_effort: Optional[str] = None) -> dict:
     Refer to: https://community.openai.com/t/gpt-5-6-chat-completion-reasoning-effort-bug-behavior-change/1386454/2
     """
     options = {}
+    if use_local:
+        effective_local_api = local_api or local_llm_api
+        if effective_local_api == "responses":
+            options["use_responses_api"] = True
+            if reasoning_effort is not None:
+                options["reasoning"] = {"effort": reasoning_effort}
+        elif reasoning_effort is not None:
+            options["reasoning_effort"] = reasoning_effort
+        return options
+
     if use_openrouter:
         if reasoning_effort is not None:
             options["reasoning_effort"] = reasoning_effort
@@ -339,6 +393,9 @@ _LLM_SEED: Optional[int] = int(_LLM_SEED_RAW) if _LLM_SEED_RAW not in ("", "0") 
 
 # Effort for the roles that plan, judge and write code. The nano fast-path stays
 # unset (it backs the watchdog verdict, where latency delays hang detection).
+# Per-role values, the per-role env override and the local endpoint's own ladder
+# are all resolved by config.reasoning_effort_for(); this is only the floor it
+# falls back to.
 _REASONING_EFFORT = os.environ.get("IMAGENTJ_REASONING_EFFORT", "medium").strip() or None
 
 
@@ -346,8 +403,17 @@ def _seed_kwargs() -> dict:
     """`seed` only when explicitly opted into; otherwise send nothing."""
     return {"seed": _LLM_SEED} if _LLM_SEED is not None else {}
 
-llm_supervisor = ChatOpenAI(
-    model=m(config.model_for("supervisor", "openai/gpt-5.4")),
+# Kimi K3 served over Chat Completions needs its reasoning_content echoed back on
+# the next tool-call turn, which plain ChatOpenAI drops — see kimi_chat. On the
+# Responses API, and on both cloud providers, ChatOpenAI is unchanged.
+_chat_model_class = (
+    KimiChatOpenAI
+    if use_local and local_llm_api == "chat_completions"
+    else ChatOpenAI
+)
+
+llm_supervisor = _chat_model_class(
+    model=m(config.model_for("supervisor", "openai/gpt-5.4"), "supervisor"),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
@@ -359,8 +425,8 @@ llm_supervisor = ChatOpenAI(
     callbacks=[shared_tracker],
 )
 
-llm_worker = ChatOpenAI(
-    model=m(config.model_for("worker", "openai/gpt-5.3-codex")),
+llm_worker = _chat_model_class(
+    model=m(config.model_for("worker", "openai/gpt-5.3-codex"), "worker"),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
@@ -372,8 +438,8 @@ llm_worker = ChatOpenAI(
     callbacks=[shared_tracker],
 )
 
-llm_analyst = ChatOpenAI(
-    model=m(config.model_for("analyst", "openai/gpt-5.3-codex")),
+llm_analyst = _chat_model_class(
+    model=m(config.model_for("analyst", "openai/gpt-5.3-codex"), "analyst"),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
@@ -385,8 +451,8 @@ llm_analyst = ChatOpenAI(
     callbacks=[shared_tracker],
 )
 
-llm_nano = ChatOpenAI(
-    model=m(config.model_for("nano", "openai/gpt-5.4-nano")),
+llm_nano = _chat_model_class(
+    model=m(config.model_for("nano", "openai/gpt-5.4-nano"), "nano"),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
@@ -406,8 +472,8 @@ llm_nano = ChatOpenAI(
 
 # Model behind the background Librarian agent (curates the learned-memory wiki off
 # the hot path) and the gated recall() deep-search fallback. Kept small/cheap.
-llm_curator = ChatOpenAI(
-    model=m(config.model_for("curator", "openai/gpt-5.4-mini")),
+llm_curator = _chat_model_class(
+    model=m(config.model_for("curator", "openai/gpt-5.4-mini"), "curator"),
     api_key=api_key,
     base_url=base_url,
     temperature=0.,
@@ -425,12 +491,30 @@ llm_curator = ChatOpenAI(
 # OpenAI-only installation, GPT-5.6 reasoning plus function tools belongs on
 # the Responses API; keeping this explicit avoids Chat Completions'
 # reasoning/tool compatibility limit.
-if open_router_key:
+if use_local:
+    llm_vlm = _chat_model_class(
+        model=m(config.model_for("vlm", "google/gemini-3.5-flash"), "vlm"),
+        api_key=api_key,
+        base_url=base_url,
+        temperature=0.,
+        **_agent_reasoning_kwargs(config.reasoning_effort_for("vlm", "high")),
+        timeout=90,
+        max_retries=1,
+        verbose=True,
+        callbacks=[shared_tracker],
+    )
+elif open_router_key:
     llm_vlm = ChatOpenAI(
         model=config.model_for("vlm", "google/gemini-3.5-flash"),
         api_key=open_router_key,
         base_url="https://openrouter.ai/api/v1",
         temperature=0.,
+        # No reasoning kwargs, matching main: the OpenRouter VLM has never been
+        # sent one. `reasoning_effort: vlm: high` in the config reaches the
+        # OpenAI-direct and local clients below/above, not this one. Add
+        # `**_agent_reasoning_kwargs(config.reasoning_effort_for("vlm", "high"))`
+        # here if you want the Gemini judge to think harder too — it is a live
+        # cost/latency change on the default cloud setup, so it is not made here.
         timeout=90,
         max_retries=1,
         verbose=True,
@@ -466,6 +550,33 @@ _watchdog.install()
 # Subagent instances — created once at module level, stateless invocation
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Structured output: ProviderStrategy on the cloud, ToolStrategy on a local
+# endpoint.
+#
+# Each side keeps what it was actually verified against. The cloud roles moved to
+# ProviderStrategy because ToolStrategy binds tool_choice="required" on every
+# turn, and that forcing is what stalled the coder, the analyst and the plugin
+# manager for minutes at a time — the long notes on _analyst_agent and
+# plugin_manager have the measurements.
+#
+# None of that reasoning transfers to a local server. ProviderStrategy sends the
+# schema as a native `response_format: json_schema` (with strict=true), and a
+# vLLM/SGLang deployment is not guaranteed to accept one — where the cloud
+# failure mode was a slow turn, this one is a 400 on every single call. The local
+# profile therefore stays on ToolStrategy, which is what it was built and tested
+# with. Flip it with IMAGENTJ_LOCAL_STRUCTURED=provider once your endpoint is
+# known to serve strict json_schema.
+_LOCAL_STRUCTURED = os.environ.get("IMAGENTJ_LOCAL_STRUCTURED", "tool").strip().lower()
+
+
+def _structured(schema, *, strict: bool = True):
+    """Return the structured-output strategy for `schema` on the active provider."""
+    if use_local and _LOCAL_STRUCTURED != "provider":
+        return ToolStrategy(schema=schema, handle_errors=True)
+    return ProviderStrategy(schema=schema, strict=strict)
+
+
 def _make_coder_agent(model, name, system_prompt):
     return create_agent(
         model,
@@ -492,7 +603,7 @@ def _make_coder_agent(model, name, system_prompt):
         # treats the schema as advisory and the model replies with the schema
         # itself ({"properties": {...}}), which fails to parse. See
         # _strict_json_schema.
-        response_format=ProviderStrategy(schema=ScriptHandoff, strict=True),
+        response_format=_structured(ScriptHandoff),
         name=name,
         middleware=[
             ToolOutputLimitMiddleware(),
@@ -568,7 +679,7 @@ _analyst_agent = create_agent(
     # also binds the real tools in strict mode, and `edits: Optional[list]` emitted
     # `{"items": {}}`, which OpenAI rejects. A schema audit of all nine tools bound
     # here found that this was the only hard blocker.
-    response_format=ProviderStrategy(schema=AnalystHandoff, strict=True),
+    response_format=_structured(AnalystHandoff),
     name="python_data_analyst",
     middleware=[
         ToolOutputLimitMiddleware(),
@@ -653,7 +764,7 @@ _plugin_agent = create_agent(
     # instead. Verified on the wire: tool_choice absent, 5 real tools instead of 6,
     # and json_schema with strict=false — so the nested pipeline_steps model needs
     # no `extra="forbid"` rewrite to be accepted.
-    response_format=ProviderStrategy(schema=PluginRecommendation),
+    response_format=_structured(PluginRecommendation, strict=False),
     name="plugin_manager",
     middleware=[
         ToolOutputLimitMiddleware(),
@@ -888,6 +999,18 @@ def _run_capped(agent, payload, on_cap, name: str = "subagent"):
         log.warning("%s failed at the transport layer (%s: %s) — degrading to a "
                     "failure handoff.", name, type(exc).__name__, exc)
         return on_cap()
+    except (json.JSONDecodeError, ValidationError) as exc:
+        # Malformed structured output. Caught ahead of the generic handler below
+        # only so the log says which: one observed kill was a raw JSONDecodeError
+        # ("Expecting ',' delimiter: line 1 column 377767") raised while parsing a
+        # ~380 KB ToolStrategy `edits` payload, which escaped through the
+        # supervisor's tool node and ended the whole run with "unhandled agent
+        # error". This is corrupt content, not a dead socket.
+        log.error("[imagentj][fatal] LLMClientParseError in %s (%s: %s) — "
+                  "malformed structured response; degrading to a failure "
+                  "handoff so the rest of the run survives.",
+                  name, type(exc).__name__, exc)
+        return on_cap()
     except Exception as exc:
         if is_bio_refusal(exc):
             # All reformulation attempts were refused. Hand the supervisor an
@@ -958,11 +1081,17 @@ def imagej_coder(task: str, project_root: str) -> ScriptHandoff:
         path = _newest_script_since(scripts_dir, pre_scripts)
         return _salvage_or_fail_script(path, "The coder")
 
-    return _run_capped(
+    handoff = _run_capped(
         agent,
         {"messages": [{"role": "user", "content": "\n\n".join(s for s in sections if s)}]},
         _on_cap,
         name="imagej_coder",
+    )
+    return validate_script_artifact(
+        handoff,
+        allowed_directory=scripts_dir,
+        expected_suffix=".groovy",
+        producer="imagej_coder",
     )
 
 
@@ -1001,6 +1130,17 @@ def imagej_debugger(script_path: str, error_message: str, project_root: str = ""
         _on_cap,
         name="imagej_debugger",
     )
+    debugger_scripts_dir = (
+        os.path.join(project_root, "scripts", "imagej")
+        if project_root
+        else os.path.dirname(os.path.abspath(script_path))
+    )
+    handoff = validate_script_artifact(
+        handoff,
+        allowed_directory=debugger_scripts_dir,
+        expected_suffix=".groovy",
+        producer="imagej_debugger",
+    )
 
     # Buffer the lesson for deterministic capture. The debugger CANNOT verify its
     # own fix; execute_script persists this automatically once the supervisor
@@ -1008,7 +1148,7 @@ def imagej_debugger(script_path: str, error_message: str, project_root: str = ""
     # On a recursion-cap salvage the handoff carries no lesson/working_code, so
     # nothing is recorded — a run that never self-confirmed must not teach.
     try:
-        if handoff.lesson and handoff.working_code:
+        if handoff.success and handoff.lesson and handoff.working_code:
             register_pending_lesson(
                 handoff.script_path,
                 language="Groovy",
@@ -1090,13 +1230,24 @@ def python_data_analyst(task: str, input_path: str, output_dir: str, project_roo
         _on_cap,
         name="python_data_analyst",
     )
+    analyst_scripts_dir = (
+        os.path.join(project_root, "scripts", "python")
+        if project_root
+        else output_dir
+    )
+    handoff = validate_script_artifact(
+        handoff,
+        allowed_directory=analyst_scripts_dir,
+        expected_suffix=".py",
+        producer="python_data_analyst",
+    )
 
     # Deterministic lesson capture for the Python flow, mirroring imagej_debugger.
     # Populated only when this run fixed a failing script; execute_script commits
     # it once the rerun is green. A recursion-cap salvage carries no lesson, so a
     # run that never self-confirmed records nothing.
     try:
-        if handoff.lesson and handoff.working_code:
+        if handoff.success and handoff.lesson and handoff.working_code:
             register_pending_lesson(
                 handoff.script_path,
                 language="Python",
@@ -1124,6 +1275,42 @@ _qa_enabled: bool = False
 # QA agent had just measured as 65x too small: the verdict existed, but stayed trapped
 # inside the handoff and never reached the file an evaluator reads.
 LAST_QA_VERDICT: dict = {}
+
+
+# Ground-truth counting for the QA plausibility check. Which folder the input
+# images read FROM is a fact the harness already knows (BENCHMARK_INPUT_DIR in
+# benchmark runs) — leaving it to the reporter to discover produced "324 input
+# image(s)" verdicts for 10-image tasks, because the agent measured whatever
+# shared data directory it stumbled upon UNDER benchmark input instead.
+_QA_IMAGE_EXT = {
+    ".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp",
+    ".nd2", ".czi", ".lif", ".lsm", ".svs", ".ics", ".ids",
+}
+
+
+def _count_input_images(input_dir: str) -> int:
+    """Count image files under `input_dir` recursively. 0 on any error or when
+    the dir is missing, so a bad path degrades the coverage check instead of
+    manufacturing a wrong-but-confident number."""
+    try:
+        n = 0
+        for root, _dirs, files in os.walk(input_dir):
+            for fn in files:
+                if os.path.splitext(fn)[1].lower() in _QA_IMAGE_EXT:
+                    n += 1
+        return n
+    except Exception:
+        return 0
+
+
+def _qa_input_ground_truth() -> tuple[str, int]:
+    """(path, image_count) of the benchmark input mount, or ("", 0) outside a
+    benchmark run — the reporter then passes no input_dir and the coverage
+    check is skipped rather than pointed at a guessed folder."""
+    root = os.environ.get("BENCHMARK_INPUT_DIR", "").strip()
+    if not root or not os.path.isdir(root):
+        return "", 0
+    return root, _count_input_images(root)
 
 
 def _record_qa_verdict(handoff) -> None:
@@ -1178,6 +1365,18 @@ def qa_reporter(project_root: str, user_request: str = "", deliverable_dir: str 
     sections = [f"PROJECT ROOT: {project_root}"]
     if deliverable_dir:
         sections.append(f"DELIVERABLE DIRECTORY (measure this one): {deliverable_dir}")
+    # Deterministic ground truth, not negotiable. The reporter used to pass an
+    # input_dir it had guessed itself, and on benchmark runs it kept pointing the
+    # coverage check at whatever shared data folder it found UNDER the input
+    # mount — 324 files for a 10-image task — turning a complete deliverable into
+    # a spurious "batch stopped early" FAIL.
+    input_gt, input_gt_count = _qa_input_ground_truth()
+    if input_gt:
+        sections.append(
+            "INPUT IMAGES (ground truth, counted by the harness — pass this to "
+            f"summarize_deliverables as input_dir, do NOT substitute another folder): "
+            f"{input_gt} ({input_gt_count} input image files)"
+        )
     if user_request:
         # The stated quantities live here and nowhere else — the ledger's
         # scientific_goal is a paraphrase that drops the numbers.
@@ -1268,7 +1467,8 @@ def vlm_judge(
     if _vlm_agent is None:
         return _vlm_failure(
             pipeline_step,
-            "VLM judge requires OPENAI_API_KEY or OPEN_ROUTER_API_KEY.",
+            "VLM judge requires LOCAL_LLM_BASE_URL, OPENAI_API_KEY, or "
+            "OPEN_ROUTER_API_KEY.",
         )
 
     sources = list(image_source) if isinstance(image_source, list) else [image_source]

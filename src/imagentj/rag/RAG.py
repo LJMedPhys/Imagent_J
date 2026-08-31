@@ -60,6 +60,7 @@ from config.rag_config import (
 
 openrouter_key = os.getenv("OPEN_ROUTER_API_KEY")
 openai_key = os.getenv("OPENAI_API_KEY")
+local_llm_base_url = os.getenv("LOCAL_LLM_BASE_URL", "").strip()
 
 # ---------------------------------------------------------------------------
 # Hybrid Search Configuration
@@ -123,6 +124,11 @@ def get_embeddings_models():
 
     sparse_embeddings = FastEmbedSparse(model_name=SPARSE_MODEL_NAME)
     return dense_embeddings, sparse_embeddings
+
+
+def get_sparse_embeddings_model():
+    """Return the local BM25 encoder used by cloud-free retrieval."""
+    return FastEmbedSparse(model_name=SPARSE_MODEL_NAME)
 
 # ---------------------------------------------------------------------------
 # Vector Store Initialization
@@ -268,13 +274,15 @@ def hybrid_search_with_rrf(
     """
     if client is None:
         client = get_qdrant_client(path=QDRANT_DATA_PATH)
-    if dense_emb is None or sparse_emb is None:
-        d_default, s_default = get_embeddings_models()
-        dense_emb = dense_emb or d_default
-        sparse_emb = sparse_emb or s_default
+    # A configured local provider owns the complete inference path even if old
+    # cloud keys remain in .env; do not make a surprise cloud embedding call.
+    cloud_dense_available = not local_llm_base_url and bool(openrouter_key or openai_key)
+    if sparse_emb is None:
+        sparse_emb = get_sparse_embeddings_model()
+    if dense_emb is None and cloud_dense_available:
+        dense_emb, _ = get_embeddings_models()
 
     # Generate vectors for the query
-    dense_vector = dense_emb.embed_query(query_text)
     sparse_vector = sparse_emb.embed_query(query_text)
 
     # Convert LangChain sparse format to Qdrant native format
@@ -283,6 +291,22 @@ def hybrid_search_with_rrf(
         values=sparse_vector.values
     )
 
+    if dense_emb is None:
+        # A local Kimi endpoint provides chat/vision generation, not the
+        # text-embedding-3-large vectors used to build this collection.  The
+        # precomputed BM25 index is fully local and remains scientifically
+        # preferable to mixing incompatible dense embedding spaces.
+        print(f"Executing sparse BM25 Search for: '{query_text}'")
+        results = client.query_points(
+            collection_name=collection_name,
+            query=qdrant_sparse_vector,
+            using=SPARSE_VECTOR_NAME,
+            query_filter=query_filter,
+            limit=limit,
+        )
+        return results.points
+
+    dense_vector = dense_emb.embed_query(query_text)
     print(f"Executing RRF Hybrid Search for: '{query_text}'")
 
     results = client.query_points(

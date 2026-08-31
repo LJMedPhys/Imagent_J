@@ -513,9 +513,13 @@ class UsageTrackerCallback(BaseCallbackHandler):
          # [{"tool": str, "status": "ok"|"error"|"soft_error", "detail": str|None, "code_preview": str|None}]
 
         self._user_feedback: str = ""
+        self._is_local_provider = bool(os.environ.get("LOCAL_LLM_BASE_URL"))
 
         # ── OpenRouter session-level cost tracking (only when key is set) ──
-        or_key = os.environ.get("OPEN_ROUTER_API_KEY", "")
+        or_key = (
+            "" if os.environ.get("LOCAL_LLM_BASE_URL")
+            else os.environ.get("OPEN_ROUTER_API_KEY", "")
+        )
         self._or_fetcher: _OpenRouterCostFetcher | None = (
             _OpenRouterCostFetcher(or_key) if or_key else None
         )
@@ -525,7 +529,10 @@ class UsageTrackerCallback(BaseCallbackHandler):
         self._or_lock = threading.Lock()
 
         # ── OpenRouter session-level cost tracking (only when key is set) ──
-        or_key = os.environ.get("OPEN_ROUTER_API_KEY", "")
+        or_key = (
+            "" if os.environ.get("LOCAL_LLM_BASE_URL")
+            else os.environ.get("OPEN_ROUTER_API_KEY", "")
+        )
         self._or_fetcher: _OpenRouterCostFetcher | None = (
             _OpenRouterCostFetcher(or_key) if or_key else None
         )
@@ -762,7 +769,9 @@ class UsageTrackerCallback(BaseCallbackHandler):
             "totals": totals,
             "by_model": by_model,
             "by_role": by_role,
-            "cost_source": "openrouter_session" if self._or_fetcher else "estimated_per_model",
+            "cost_source": ("local_no_charge" if self._is_local_provider else
+                            "openrouter_session" if self._or_fetcher else
+                            "estimated_per_model"),
         }
 
     def get_report(self) -> dict:
@@ -931,7 +940,7 @@ class UsageTrackerCallback(BaseCallbackHandler):
             with self._m._lock:
                 self._m.input_tokens  += added_in
                 self._m.output_tokens += added_out
-                if not self._or_fetcher:
+                if not self._or_fetcher and not self._is_local_provider:
                     # Estimated cost — only applied when OR key is not set
                     p_in, p_out, cache_factor = _price_for_model(model)
                     non_cached = added_in - cached_in
@@ -956,7 +965,7 @@ class UsageTrackerCallback(BaseCallbackHandler):
             cume["input_tokens"]        += added_in
             cume["output_tokens"]       += added_out
             cume["cached_input_tokens"] += cached_in
-            if not self._or_fetcher:
+            if not self._or_fetcher and not self._is_local_provider:
                 entry["cost_usd"] = round(entry["cost_usd"] + cost, 6)
                 cume["cost_usd"]  = round(cume["cost_usd"] + cost, 6)
             # On the OpenRouter path per-model cost stays 0.0: OR bills per

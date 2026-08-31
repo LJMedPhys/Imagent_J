@@ -445,15 +445,19 @@ def _normalise_mosaic_contract(out: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def _collect_and_finish(gui, message: str = "", success: bool = True, error: str = "") -> None:
+    """Collect outputs and write result.json. `gui` may be None — the fatal-error
+    path (record_benchmark_failure) runs after the GUI is unusable, and the
+    sentinel still goes out; project copying and usage metrics are just skipped.
+    """
     out = _output_dir()
     out.mkdir(parents=True, exist_ok=True)
 
     # Only copy project folder(s) created during this session
     proj_root = Path("/app/data/projects")
-    before = getattr(gui, "_bench_projects_before", set())
+    before = getattr(gui, "_bench_projects_before", set()) if gui is not None else set()
 
     try:
-        if proj_root.exists():
+        if gui is not None and proj_root.exists():
             current = {d.name for d in proj_root.iterdir() if d.is_dir()}
             new_folders = current - before
 
@@ -601,8 +605,37 @@ def _do_finish_in_background(gui, message: str = "", shutdown: bool = False,
 
 
 # ---------------------------------------------------------------------------
-# Manual Finish button (interactive mode)
+# Fatal-error path: leave evidence when the agent dies mid-run
 # ---------------------------------------------------------------------------
+
+def record_benchmark_failure(error: str) -> None:
+    """Write a failure result.json for an agent error the auto-finish path could
+    miss. Safe to call from any thread, from more than once (won't clobber an
+    existing sentinel), and outside benchmark mode (a no-op there).
+
+    The bench adapter polls for result.json and reads "no sentinel + container
+    exited" as a confused finish — an agent thread that dies from an uncaught
+    exception (e.g. an LLMClientParseError on malformed structured output) used
+    to surface exactly that way. A failed-with-evidence record is what turns it
+    back into an honest benchmark failure."""
+    if not is_benchmark_mode():
+        return
+    try:
+        sentinel = _output_dir() / "result.json"
+        if sentinel.exists():
+            return  # a normal finish already wrote it — never clobber
+        _log.error("[imagentj][fatal] %s", error)
+        _collect_and_finish(
+            gui=None,
+            message="Benchmark run ended with an unhandled agent error.",
+            success=False,
+            error=error,
+        )
+    except Exception:
+        _log.exception("record_benchmark_failure: could not write failure result.json")
+
+
+
 
 def _on_finish_clicked(gui) -> None:
     reply = QMessageBox.question(

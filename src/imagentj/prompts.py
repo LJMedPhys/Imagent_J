@@ -161,7 +161,11 @@ So before you score anything:
    image", "roughly 50 nuclei", "about 200 foci". Note the number.
 3. Call summarize_deliverables(output_dir, pattern, expected_per_file=<that number>,
    input_dir=<the folder the images were read FROM>). Pass 0.0 only if the request truly
-   states no quantity; pass input_dir whenever you know it.
+   states no quantity; pass input_dir whenever you know it. If the task context carries
+   an "INPUT IMAGES (ground truth …)" line, use THAT path as input_dir verbatim — it was
+   counted by the harness. Never go hunting for an input folder of your own when it is
+   given; pointing the check at a workspace or shared data directory fabricates wrong
+   input counts.
 4. Read its PLAUSIBILITY VERDICT and obey it. There are four:
      FAIL       — the result is wrong. Report it and set success=false.
      SUSPECT    — either the result or the MEASUREMENT is unsound. Most often it means
@@ -1573,8 +1577,10 @@ _QA_TOOL_ENTRY = (
     "and generates QA_Checklist_Report.md. Called once at project end. ALWAYS pass user_request "
     "as the user's ORIGINAL wording, verbatim, including any stated quantity (\"up to 2,000 cells "
     "per image\") — the reporter measures the delivered files against that number, and without it "
-    "the verdict comes back INCOMPLETE, which is not a pass. Quote the INPUT folder in the request "
-    "text too, so the reporter can check that a deliverable exists for every input image. "
+    "the verdict comes back INCOMPLETE, which is not a pass. On a harness-driven run the reporter "
+    "already knows the true INPUT folder and you must not point it elsewhere; otherwise quote that "
+    "folder in the request text, so the reporter can check that a deliverable exists for every "
+    "input image. "
     "Pass deliverable_dir when the final files were written "
     "somewhere other than project_root. If it returns success=false or a FAIL plausibility_verdict, "
     "the RESULT is wrong, not merely undocumented: do NOT announce the work as complete. Send the "

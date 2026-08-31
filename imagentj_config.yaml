@@ -22,12 +22,41 @@
 #     non-openai/ model is rejected.
 models:
   supervisor: "openai/gpt-5.4"          # orchestrator / planner
-  worker:     "openai/gpt-5.3-codex"    # imagej_coder + imagej_debugger
-  analyst:    "openai/gpt-5.3-codex"    # python_data_analyst
+  worker:     "openai/gpt-5.3-codex"    # imagej_coder + imagej_debugger + python_data_analyst
+  analyst:    "openai/gpt-5.3-codex"    # QA reporter + plugin manager
   nano:       "openai/gpt-5.4-nano"     # fast-path / lightweight calls
   curator:    "openai/gpt-5.4-mini"     # background Librarian + deep recall
   vlm:        "google/gemini-3.5-flash" # Vision judge (OpenRouter); on OpenAI-only
                                         # installs this falls back to gpt-5.6-luna
+
+# ── Local OpenAI-compatible endpoint (e.g. Kimi K3 on vLLM/SGLang) ──────────
+# Setting LOCAL_LLM_BASE_URL activates this profile and gives it priority over
+# OPEN_ROUTER_API_KEY / OPENAI_API_KEY. Kept separate from `models:` above so
+# switching the local endpoint on and off never rewrites your cloud choices.
+#
+#   api    protocol shared by every local role, the VLM included. Leave at
+#          `responses`; set `chat_completions` only for a conventional
+#          vLLM/SGLang Chat Completions endpoint (that path additionally uses
+#          the KimiChatOpenAI adapter, which round-trips Kimi's
+#          reasoning_content so a second tool call does not 400).
+#   model  the id the server advertises; `models:` below it can override
+#          individual roles when one endpoint serves several models.
+local_llm:
+  api: responses
+  model: "moonshotai/Kimi-K3"
+  # models:
+  #   vlm: "moonshotai/Kimi-K3"
+  #
+  # Kimi K3's ladder is low/high/max, not the cloud roles' medium — hence its
+  # own block. Consulted only while LOCAL_LLM_BASE_URL is set, and it wins over
+  # the `reasoning_effort:` block below.
+  reasoning_effort:
+    supervisor: max
+    worker:     max
+    analyst:    high
+    nano:       high
+    curator:    high
+    vlm:        high
 
 # ── Thinking budget per role ────────────────────────────────────────────────
 # Mirrors `models:` above. The values below are the SHIPPED DEFAULTS — leaving
@@ -36,14 +65,17 @@ models:
 #   <effort>  "minimal" | "low" | "medium" | "high"  (endpoint-dependent)
 #   null      send no reasoning_effort at all for that role
 #
-# Precedence: this block  >  IMAGENTJ_REASONING_EFFORT (blanket env override)
+# Precedence: IMAGENTJ_<ROLE>_REASONING_EFFORT (one role, for A/B runs)
+#             >  local_llm.reasoning_effort (only while LOCAL_LLM_BASE_URL is set)
+#             >  this block
+#             >  IMAGENTJ_REASONING_EFFORT (blanket env override)
 #             >  the shipped default. An explicit per-role value wins over the
-#             env var on purpose — otherwise declaring effort per role could be
-#             silently overridden by a stray environment setting.
+#             blanket env var on purpose — otherwise declaring effort per role
+#             could be silently overridden by a stray environment setting.
 reasoning_effort:
   supervisor: medium   # orchestrator / planner
-  worker:     medium   # imagej_coder + imagej_debugger
-  analyst:    medium   # python_data_analyst
+  worker:     medium   # imagej_coder + imagej_debugger + python_data_analyst
+  analyst:    medium   # QA reporter + plugin manager
   nano:       null     # watchdog fast path — see note below
   curator:    low      # background Librarian + deep recall
   vlm:        high     # Vision judge
