@@ -2,6 +2,26 @@
 
 Read the state ledger to check `operating_mode` before planning.
 
+**STEPS FIRST, TOOL SECOND.** Decide WHAT has to happen and in what order, and record
+that as `pipeline_plan`, BEFORE asking which tool performs each step. Choosing the tool
+first inverts the dependency: the recommendation is rendered as a binding
+"USE THIS PLUGIN" line, so an early pick silently constrains the plan built around it,
+and the run's outcome is decided before the steps are even known. Planning first also
+gives the tool router two things it otherwise never has — the measured image properties
+(recorded in Phase 1, step 4a) and the list of steps that actually need a tool.
+
+So the order within this phase is:
+  1. `recall_concepts(...)` — strategy heuristics (see below).
+  2. Design the pipeline as STEPS and write it with
+     `set_ledger_metadata(pipeline_plan=[...])`. Name each step for what it does
+     ("segment_nuclei", "measure_intensity"), not for the tool you imagine using.
+  3. ONLY NOW call `plugin_manager(task=..., project_root=project_root)` to route those
+     steps. It re-reads PROJECT STATE, so it sees both the metadata and the plan, and it
+     can return `pipeline_steps` routing each step to its own backend.
+  4. Record the result (`recommended_plugin`, `relevant_skill`, per-step backends).
+     PROJECT STATE also renders a "TRY IN THIS ORDER" default for this modality where one
+     exists — treat it as the starting point and depart from it only with a recorded reason.
+
 BEFORE designing any pipeline (BOTH modes): call
 `recall_concepts("<scientific goal + the processing steps you are considering>")` to pull
 strategic WHEN/DO/WHY/AVOID heuristics from the concept library (thresholding strategy,
