@@ -1352,10 +1352,15 @@ def plugin_manager(task: str, project_root: str = "") -> PluginRecommendation:
                       out of this project's ledger (PROJECT STATE), so CALL
                       set_ledger_metadata(image_metadata=...) FIRST — see below.
 
-    CALL ORDER MATTERS. Record the measured image properties (modality, n_channels,
-    bit_depth, pixel size, dimensions) in the ledger BEFORE calling this. Those
-    properties mechanically admit or exclude a tool: an RGB 3-channel 8-bit brightfield
-    image cannot use a fluorescent-nuclei model no matter how the task is worded.
+    CALL ORDER MATTERS. Record the image properties (modality, n_channels, bit_depth,
+    pixel size, dimensions) in the ledger BEFORE calling this. Those properties
+    mechanically admit or exclude a tool: a brightfield H&E image cannot use a
+    fluorescent-nuclei model no matter how the task is worded. `modality` is the one
+    of those that extract_image_metadata does NOT measure — establish it from the
+    user, the acquisition metadata, or the Vision Judge, and ASK THE USER when those
+    do not settle it. Never infer it from bit depth or channel count (8-bit RGB is
+    not evidence of brightfield), and never record "unknown" — nothing downstream
+    fills it in for you.
     Called concurrently with extract_image_metadata — e.g. in one parallel tool batch —
     this sees an empty PROJECT STATE and must decide from the task PROSE ALONE, which is
     the highest-variance input available. Measured: an H&E segmentation task scored 0.11
