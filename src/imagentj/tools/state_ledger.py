@@ -153,40 +153,7 @@ _MODALITY_TOOL_PRIORITY: tuple[dict, ...] = (
 )
 
 
-def _derive_modality_hint(metadata: dict) -> str:
-    """Guess modality from MEASURED properties. "" when not confident.
-
-    Used ONLY when no modality has been recorded — a value the supervisor wrote,
-    or one the user stated, always takes precedence, because this is inference
-    from pixel layout and they may know something the file does not show.
-
-    The two signals below are strong and cheap:
-      * interleaved RGB 8-bit (axes carry 'S', or 3 channels at 8-bit) is how
-        brightfield/histology is stored and is essentially never how a
-        fluorescence channel stack is stored;
-      * a single 16-bit channel is the fluorescence convention.
-    Anything else returns "" rather than guessing: a wrong modality here would
-    feed the ranking rules a false premise, which is worse than no ranking.
-    """
-    if not isinstance(metadata, dict):
-        return ""
-    axes = str(metadata.get("series_axes") or "").upper()
-    n_ch = metadata.get("n_channels")
-    depth = metadata.get("bit_depth")
-    try:
-        n_ch = int(n_ch) if n_ch is not None else None
-        depth = int(depth) if depth is not None else None
-    except (TypeError, ValueError):
-        return ""
-
-    if "S" in axes or (n_ch == 3 and depth == 8):
-        return "brightfield (inferred from RGB 8-bit layout — not recorded)"
-    if (n_ch in (None, 1)) and depth is not None and depth >= 16 and "S" not in axes:
-        return "fluorescence (inferred from single-channel 16-bit — not recorded)"
-    return ""
-
-
-# Values that LOOK like a recorded modality but carry no information. 
+# Values that LOOK like a recorded modality but carry no information.
 _PLACEHOLDER_MODALITY: frozenset = frozenset({
     "unknown", "unspecified", "not specified", "not recorded", "undetermined",
     "unclear", "n/a", "na", "none", "null", "tbd", "?", "-",
@@ -279,14 +246,12 @@ def priority_shortlist(metadata: dict, goal: str = "", primary_task: str = "",
     """
     if not isinstance(metadata, dict):
         return ()
+    # Only a RECORDED modality counts. It is not something extract_image_metadata
+    # can report — it is a judgement the supervisor writes or the user states — and
+    # it is deliberately not inferred from pixel layout: see the note above
+    # _PLACEHOLDER_MODALITY for the measurement that ruled that out. Unrecorded
+    # means silence, which is what this function's docstring promises.
     modality = _normalise_modality(metadata)
-    if not modality:
-        # Fall back to a hint derived from MEASURED properties. `modality` is not
-        # something extract_image_metadata can report — it is written by the
-        # supervisor (or stated by the user), so it is absent until someone
-        # records it, and it is itself a judgement rather than a measurement.
-        # The recorded value therefore always wins; this only fills the gap.
-        modality = _derive_modality_hint(metadata)
     if not modality:
         return ()
 
@@ -788,11 +753,14 @@ def set_ledger_metadata(
                          Example: {"bit_depth": 16, "pixel_size_um": 0.325, "n_channels": 3,
                                    "n_images": 24, "dimensions": "XYC", "file_format": "czi",
                                    "modality": "fluorescence", "objective": "63x oil"}
-                         `modality` STEERS TOOL CHOICE — record what you actually
-                         observed ("brightfield", "phase-contrast", "H&E", "confocal
-                         fluorescence"). If you cannot tell, OMIT THE KEY. Do not write
-                         "unknown"/"unspecified": a placeholder is treated as no answer,
-                         and an omitted key lets the system infer one from pixel layout.
+                         `modality` STEERS TOOL CHOICE — record the CONTRAST MECHANISM
+                         you actually established ("brightfield", "phase-contrast",
+                         "DIC", "H&E", "confocal fluorescence", "EM", "microCT").
+                         So do not guess and do not write "unknown"/"unspecified" —
+                         a placeholder is treated as no answer. If the file and the
+                         user's description do not settle it, ASK THE USER: it is one
+                         short question, they always know, and it is far cheaper than
+                         a segmentation run aimed at the wrong contrast mechanism.
                          `n_z_slices` also matters beyond bookkeeping — it is how
                          2D-vs-3D is decided when `dimensions` is an axis listing.
                          For channel NAMES use the dedicated `channels` field below,
