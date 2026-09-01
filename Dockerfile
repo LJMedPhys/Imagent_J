@@ -561,8 +561,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && fc-cache -f -v
 
 # ── Non-root user ─────────────────────────────────────────────────────────────
-RUN groupadd -g 1000 imagentj \
-    && useradd -u 1000 -g imagentj -m -d /home/imagentj -s /bin/bash imagentj
+# HOST_UID/HOST_GID exist because /app/data, /app/qdrant_data and /app/skills are
+# BIND MOUNTS. The `chown -R imagentj:imagentj /app` further down runs at build
+# time and is then completely hidden at runtime: a bind mount replaces the
+# directory with the host's, carrying the host's ownership. So the container user
+# must match the host user that owns the checkout, not the other way round.
+#
+# Hardcoded 1000 works only where the host user happens to be uid 1000. Anywhere
+# else (many DGX/HPC accounts, any second user on a shared box) the first symptom
+# is ChatHistoryManager.__init__ doing os.makedirs("/app/data/chats") — the dir is
+# gitignored so it never exists in a fresh clone — and dying with
+# "permission denied: /app/data/chats" before the GUI ever appears.
+#
+# Build with:  --build-arg HOST_UID=$(id -u) --build-arg HOST_GID=$(id -g)
+# The default keeps the previous behaviour for existing 1000-based deployments.
+ARG HOST_UID=1000
+ARG HOST_GID=1000
+# A gid can already be taken in the base image; rename that group rather than
+# failing, so `chown imagentj:imagentj` downstream keeps resolving.
+RUN if getent group ${HOST_GID} >/dev/null; then \
+        groupmod -n imagentj "$(getent group ${HOST_GID} | cut -d: -f1)"; \
+    else \
+        groupadd -g ${HOST_GID} imagentj; \
+    fi \
+    && useradd -u ${HOST_UID} -g imagentj -m -d /home/imagentj -s /bin/bash imagentj
     
 # ── Application code ─────────────────────────────────────────────────────────
 WORKDIR /app

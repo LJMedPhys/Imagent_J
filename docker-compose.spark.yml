@@ -37,6 +37,14 @@ services:
         # for this pair, and it matches the torch already shipped in the main env.
         TORCH_VERSION: ${TORCH_VERSION:-2.13.0}
         TORCHVISION_VERSION: ${TORCHVISION_VERSION:-0.28.0}
+        # Match the container user to whoever owns the checkout, or the bind
+        # mounts (/app/data, /app/qdrant_data) are read-only to the container and
+        # startup dies on "permission denied: /app/data/chats". Compose cannot
+        # call id(1) itself, so export these before building:
+        #   echo "HOST_UID=$(id -u)" >> .env
+        #   echo "HOST_GID=$(id -g)" >> .env
+        HOST_UID: ${HOST_UID:-1000}
+        HOST_GID: ${HOST_GID:-1000}
 
     # Plain OCI runtime + CDI injection, as in docker-compose.gpu.yml: portable to
     # hosts with no named 'nvidia' runtime, and no double-injection where the
