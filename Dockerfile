@@ -378,6 +378,19 @@ ENV LIBGL_ALWAYS_SOFTWARE=1
 # wrapper feeds cellpose an ImageJ-written TIFF, so without the bump cellpose
 # crashes on read. Done as a separate pip call so the resolver doesn't fight
 # aicsimageio's stale <2023.3.15 pin (aicsimageio is not on the cellpose read path).
+#
+# networkit is pinned because omnipose requires it UNPINNED, which resolves to
+# 11.2.1 — and 11.2.1 publishes Linux wheels for x86_64 ONLY. On arm64 pip then
+# falls back to networkit-11.2.1.tar.gz and compiles a large C++/CMake tree; that
+# is the "failed to build networkit" that kills a DGX Spark build. 11.2 is the
+# newest release carrying a cp310 manylinux **aarch64** wheel, and it still has
+# the x86_64 one, so one pin keeps both arches on the same version.
+# (Verified against the PyPI simple index and `pip install --dry-run
+# --only-binary=:all: --platform manylinux_2_28_aarch64`, 2026-09-01.)
+# omnipose's other compiled dep, mahotas, has NO aarch64 wheel at any version, so
+# it is still built from source on arm64 — it is small and the build-essential /
+# cmake / ninja toolchain installed above covers it. Run
+# scripts/check_arch_wheels.sh before building to re-check both.
 # USE_GPU is tested BEFORE arm64: with the arm64 test first, an arm64 GPU build
 # silently fell through to the default PyPI index and installed a CPU wheel. The
 # CUDA index is multi-platform, so one branch now serves both arches; the assert
@@ -400,6 +413,7 @@ RUN /opt/conda/bin/conda create -n cellpose python=3.10 -y \
     && /opt/conda/envs/cellpose/bin/pip install --no-cache-dir \
         'cellpose[gui]==3.1.1.2' \
         'omnipose==1.1.4' \
+        'networkit==11.2' \
         'langchain-core==1.2.16' \
         'langgraph-checkpoint-sqlite==3.0.3' \
         'pydantic==2.12.5' \
