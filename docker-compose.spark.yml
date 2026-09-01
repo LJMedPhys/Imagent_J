@@ -24,7 +24,7 @@
 
 services:
   imagentj:
-    image: ${IMAGENTJ_IMAGE:-agenticj:gpu-spark}
+    image: ${IMAGENTJ_IMAGE:-agenticj:gpu-local}
     build:
       args:
         USE_GPU: "true"
