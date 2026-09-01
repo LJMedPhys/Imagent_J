@@ -1,0 +1,75 @@
+# NVIDIA DGX Spark override for Agentic-J (arm64 / GB10 Grace-Blackwell).
+#
+# The Spark is arm64 with a Blackwell GPU (sm_121) and 128 GB of memory that the
+# CPU and the GPU SHARE. Both facts need settings that docker-compose.gpu.yml
+# does not carry, so use this file INSTEAD of it — not on top of it.
+#
+# Build:  docker compose -f docker-compose.yml -f docker-compose.spark.yml build
+# Run:    docker compose -f docker-compose.yml -f docker-compose.spark.yml up -d
+# Then open http://localhost:6080/vnc.html on the Spark itself.
+#
+# Verify the GPU actually reached the workers (this is the check that matters —
+# a wrong wheel produces no error, just CPU-speed segmentation):
+#   docker compose -f docker-compose.yml -f docker-compose.spark.yml exec imagentj \
+#     /opt/conda/envs/cellpose/bin/python -c \
+#     "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
+#   expected: 2.13.0+cu130 13.0 True
+#
+# Host prerequisites — same CDI path as docker-compose.gpu.yml:
+#   docker info | grep -iA2 'CDI spec'     # must list the CDI spec directories
+#   nvidia-ctk cdi list                    # must enumerate nvidia.com/gpu=all
+# If empty:
+#   sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+#   add  "features": { "cdi": true }  to /etc/docker/daemon.json, restart docker.
+
+services:
+  imagentj:
+    image: ${IMAGENTJ_IMAGE:-agenticj:gpu-spark}
+    build:
+      args:
+        USE_GPU: "true"
+        # cu130 is not a preference, it is the only choice: whl/cu126 and
+        # whl/cu128 publish x86_64 wheels only. whl/cu130 carries
+        # manylinux_2_28_aarch64 for torch 2.10-2.13 / torchvision 0.24-0.28
+        # (verified 2026-09-01), and CUDA 13 is what Blackwell sm_121 needs.
+        CUDA_TAG: ${CUDA_TAG:-cu130}
+        # cp310 (cellpose) and cp311 (cellpose4, napari-mcp) wheels both exist
+        # for this pair, and it matches the torch already shipped in the main env.
+        TORCH_VERSION: ${TORCH_VERSION:-2.13.0}
+        TORCHVISION_VERSION: ${TORCHVISION_VERSION:-0.28.0}
+
+    # Plain OCI runtime + CDI injection, as in docker-compose.gpu.yml: portable to
+    # hosts with no named 'nvidia' runtime, and no double-injection where the
+    # default runtime already is 'nvidia'.
+    runtime: runc
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: cdi
+              device_ids:
+                - nvidia.com/gpu=all
+              capabilities: [gpu]
+        limits:
+          # 20 cores (10 X925 + 10 A725). Left at 16 so Xvfb, the JVMs and the
+          # host desktop are not competing with a saturated torch thread pool.
+          cpus: '16'
+          # NOT the full 128 GB. This limit is what the JVM heaps derive from
+          # (imagej_context._default_heap_gb takes half, script_tools._batch_env a
+          # quarter), and on unified memory every byte of Java heap is a byte the
+          # GPU cannot allocate. 48G would still give a 24 g + 12 g pair, so the
+          # heaps are pinned explicitly below rather than derived.
+          memory: 48G
+        # (reservations.memory is inherited from docker-compose.yml)
+
+    environment:
+      # Pin both heaps instead of letting them scale with the limit above. Fiji
+      # work here is comfortable in 12 g; the rest of the 48 G stays available to
+      # torch, napari and the GPU. Raise only if a stitch/3D job actually OOMs the
+      # JVM — an OutOfMemoryError fails one script, an over-large heap starves
+      # every GPU allocation in the container.
+      - IMAGENTJ_JVM_HEAP=${IMAGENTJ_JVM_HEAP:-12g}
+      - IMAGENTJ_BATCH_HEAP=${IMAGENTJ_BATCH_HEAP:-6g}
+
+    # 2gb (the base default) is tight once torch has real worker processes to feed.
+    shm_size: '8gb'

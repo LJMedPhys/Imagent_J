@@ -2,18 +2,41 @@ FROM continuumio/miniconda3:latest AS base-cpu
 ENV DEBIAN_FRONTEND=noninteractive
 FROM base-cpu AS cpu
 ARG TARGETARCH
-# Set USE_GPU=true at build time to install CUDA-enabled PyTorch / TensorFlow (amd64 only).
+# Set USE_GPU=true at build time to install CUDA-enabled PyTorch. Works on BOTH
+# amd64 and arm64 — see the arm64 note below.
 # CUDA_TAG selects the PyTorch wheel index. torch==2.11.0 wheels are published ONLY for
 # cu126 and cu128 — older tags (cu118/cu121/cu124) top out at torch 2.6.0 and fail the
 # build with "No matching distribution found for torch==2.11.0". Default cu126 needs
 # driver 560+.
 # tensorflow[and-cuda]==2.15.1 bundles its own CUDA 12.2 libs (driver 535+); the
 # effective driver minimum is therefore set by the torch CUDA tag.
-# Valid overrides (must have a torch 2.11.0 build):
+# Valid overrides (must have a torch build for the tag AND the target arch):
 #   cu126 → driver 560+  (default; widest driver compatibility for torch 2.11.0)
-#   cu128 → driver 570+  (newest CUDA; RTX 50xx / freshest drivers)
+#   cu128 → driver 570+  (newer CUDA; RTX 50xx / freshest drivers)
+#   cu130 → CUDA 13; the ONLY tag that publishes linux aarch64 wheels — see below
+#
+# ── arm64 / NVIDIA Grace-Blackwell (DGX Spark, GH200, Jetson-class sbsa) ──────
+# The GPU branches below used to be `USE_GPU=true && TARGETARCH != arm64`, which
+# meant an arm64 GPU build took the CPU branch, produced a `+cpu` torch, and ran
+# every model on the CPU with no error anywhere — the failure is silent, because
+# torch.cuda.is_available() simply returns False. arm64 now takes the SAME CUDA
+# branch as amd64: download.pytorch.org/whl/<tag> is a multi-platform index and
+# pip resolves the right wheel from the platform tag.
+# Verified against the live index (2026-09-01): whl/cu130 carries
+# manylinux_2_28_aarch64 wheels for torch 2.10.0-2.13.0 and torchvision
+# 0.24.0-0.28.0, with cp310 + cp311 tags — which is what the cellpose (py3.10),
+# cellpose4 (py3.11) and napari-mcp (py3.11) envs need. cu126/cu128 publish
+# x86_64 only, so on arm64 CUDA_TAG MUST be cu130.
+# TORCH_VERSION/TORCHVISION_VERSION are build args because the arm64 CUDA-13
+# line needs a newer pair than the amd64 cu126 default, and because Blackwell
+# (sm_121) is not covered by the older CUDA 12.6 runtime at all. For a DGX Spark:
+#   --build-arg USE_GPU=true --build-arg CUDA_TAG=cu130 \
+#   --build-arg TORCH_VERSION=2.13.0 --build-arg TORCHVISION_VERSION=0.28.0
+# (or just use docker-compose.spark.yml, which sets all four.)
 ARG USE_GPU=false
 ARG CUDA_TAG=cu126
+ARG TORCH_VERSION=2.11.0
+ARG TORCHVISION_VERSION=0.26.0
 
 # ── Core system dependencies (rarely change) ─────────────────────────────────
 # Split from fonts to preserve cache when adding new fonts
@@ -64,7 +87,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #
 # pocl.icd is deliberately kept as the fallback (and is the only vendor on CPU
 # builds); CLIJ picks the best available device.
-RUN if [ "$USE_GPU" = "true" ] && [ "$TARGETARCH" != "arm64" ]; then \
+#
+# Not arch-gated: CDI mounts libnvidia-opencl.so.1 on arm64 exactly as it does on
+# amd64, so an arm64 GPU build needs this registration for the same reason. With
+# the guard in place a DGX Spark enumerated only pocl and every CLIJ2 call ran on
+# the CPU.
+RUN if [ "$USE_GPU" = "true" ]; then \
         mkdir -p /etc/OpenCL/vendors \
         && echo "libnvidia-opencl.so.1" > /etc/OpenCL/vendors/nvidia.icd; \
     fi
@@ -297,21 +325,24 @@ RUN /opt/conda/envs/napari-mcp/bin/python /tmp/patch_qt_helpers.py && rm /tmp/pa
 #
 # GPU: conda-forge's micro_sam pulls a CPU-ONLY torch, so on a GPU build we swap it
 # for the CUDA wheels (same torch/torchvision pin + CUDA_TAG as the cellpose envs) so
-# micro_sam uses the GPU. On a CPU build (USE_GPU=false, the default) or arm64 the
-# working conda CPU torch is left untouched — micro_sam still runs, just on CPU
-# (device auto-selects via torch.cuda.is_available()). The swap pulls torch's
-# nvidia-*-cu12 CUDA runtime wheels as dependencies — do NOT pass --no-deps or torch
-# fails to import with "libcudart.so.12: cannot open shared object file". --force-
-# reinstall is needed so BOTH torch and torchvision move off the conda CPU build. The
-# build-time check asserts it is a CUDA *build*, not that a GPU is present (the build
-# host may have none). Validated: torch 2.11.0+cu126 + torchvision 0.26.0+cu126 import
-# cleanly and micro_sam still imports afterwards.
+# micro_sam uses the GPU. On a CPU build (USE_GPU=false, the default) the working
+# conda CPU torch is left untouched — micro_sam still runs, just on CPU (device
+# auto-selects via torch.cuda.is_available()). The swap pulls torch's nvidia-*-cu12
+# CUDA runtime wheels as dependencies — do NOT pass --no-deps or torch fails to
+# import with "libcudart.so.12: cannot open shared object file". --force-reinstall is
+# needed so BOTH torch and torchvision move off the conda CPU build. The build-time
+# check asserts it is a CUDA *build*, not that a GPU is present (the build host may
+# have none). Validated: torch 2.11.0+cu126 + torchvision 0.26.0+cu126 import cleanly
+# and micro_sam still imports afterwards.
+# arm64 is NOT excluded any more — this env is python 3.11 and whl/cu130 publishes
+# cp311 aarch64 wheels, so the same swap works on a DGX Spark. See the arm64 note at
+# the top of this file.
 RUN CONDA_SOLVER=libmamba /opt/conda/bin/conda install -n napari-mcp -c conda-forge micro_sam -y \
     && /opt/conda/envs/napari-mcp/bin/pip install --no-cache-dir \
         "git+https://github.com/ChaoningZhang/MobileSAM.git" \
-    && if [ "$USE_GPU" = "true" ] && [ "$TARGETARCH" != "arm64" ]; then \
+    && if [ "$USE_GPU" = "true" ]; then \
            /opt/conda/envs/napari-mcp/bin/pip install --no-cache-dir --force-reinstall \
-               'torch==2.11.0' 'torchvision==0.26.0' \
+               "torch==${TORCH_VERSION}" "torchvision==${TORCHVISION_VERSION}" \
                --index-url https://download.pytorch.org/whl/${CUDA_TAG} \
            && /opt/conda/envs/napari-mcp/bin/python -c \
                "import torch; assert torch.version.cuda, 'expected a CUDA torch build in the GPU image'"; \
@@ -347,17 +378,23 @@ ENV LIBGL_ALWAYS_SOFTWARE=1
 # wrapper feeds cellpose an ImageJ-written TIFF, so without the bump cellpose
 # crashes on read. Done as a separate pip call so the resolver doesn't fight
 # aicsimageio's stale <2023.3.15 pin (aicsimageio is not on the cellpose read path).
+# USE_GPU is tested BEFORE arm64: with the arm64 test first, an arm64 GPU build
+# silently fell through to the default PyPI index and installed a CPU wheel. The
+# CUDA index is multi-platform, so one branch now serves both arches; the assert
+# turns a wrong-wheel resolution into a build failure instead of a slow runtime.
 RUN /opt/conda/bin/conda create -n cellpose python=3.10 -y \
-    && if [ "$TARGETARCH" = "arm64" ]; then \
+    && if [ "$USE_GPU" = "true" ]; then \
         /opt/conda/envs/cellpose/bin/pip install --no-cache-dir \
-            'torch==2.11.0' 'torchvision==0.26.0'; \
-    elif [ "$USE_GPU" = "true" ]; then \
+            "torch==${TORCH_VERSION}" "torchvision==${TORCHVISION_VERSION}" \
+            --index-url https://download.pytorch.org/whl/${CUDA_TAG} \
+        && /opt/conda/envs/cellpose/bin/python -c \
+            "import torch; assert torch.version.cuda, 'expected a CUDA torch build in the GPU image'"; \
+    elif [ "$TARGETARCH" = "arm64" ]; then \
         /opt/conda/envs/cellpose/bin/pip install --no-cache-dir \
-            'torch==2.11.0' 'torchvision==0.26.0' \
-            --index-url https://download.pytorch.org/whl/${CUDA_TAG}; \
+            "torch==${TORCH_VERSION}" "torchvision==${TORCHVISION_VERSION}"; \
     else \
         /opt/conda/envs/cellpose/bin/pip install --no-cache-dir \
-            'torch==2.11.0' 'torchvision==0.26.0' \
+            "torch==${TORCH_VERSION}" "torchvision==${TORCHVISION_VERSION}" \
             --index-url https://download.pytorch.org/whl/cpu; \
     fi \
     && /opt/conda/envs/cellpose/bin/pip install --no-cache-dir \
@@ -378,17 +415,20 @@ RUN /opt/conda/bin/conda create -n cellpose python=3.10 -y \
 # selects 'cellpose4' in the Cellpose-SAM detector panel.
 # The micromamba shim routes '-n cellpose4' → /opt/conda/envs/cellpose4.
 # Snapshot (2026-04-30): Python 3.11.15, cellpose 4.1.1, segment-anything 1.0, torch 2.11.0+cpu|cu124
+# Branch order and assert as in the cellpose env above.
 RUN /opt/conda/bin/conda create -n cellpose4 python=3.11 -y \
-    && if [ "$TARGETARCH" = "arm64" ]; then \
+    && if [ "$USE_GPU" = "true" ]; then \
         /opt/conda/envs/cellpose4/bin/pip install --no-cache-dir \
-            'torch==2.11.0' 'torchvision==0.26.0'; \
-    elif [ "$USE_GPU" = "true" ]; then \
+            "torch==${TORCH_VERSION}" "torchvision==${TORCHVISION_VERSION}" \
+            --index-url https://download.pytorch.org/whl/${CUDA_TAG} \
+        && /opt/conda/envs/cellpose4/bin/python -c \
+            "import torch; assert torch.version.cuda, 'expected a CUDA torch build in the GPU image'"; \
+    elif [ "$TARGETARCH" = "arm64" ]; then \
         /opt/conda/envs/cellpose4/bin/pip install --no-cache-dir \
-            'torch==2.11.0' 'torchvision==0.26.0' \
-            --index-url https://download.pytorch.org/whl/${CUDA_TAG}; \
+            "torch==${TORCH_VERSION}" "torchvision==${TORCHVISION_VERSION}"; \
     else \
         /opt/conda/envs/cellpose4/bin/pip install --no-cache-dir \
-            'torch==2.11.0' 'torchvision==0.26.0' \
+            "torch==${TORCH_VERSION}" "torchvision==${TORCHVISION_VERSION}" \
             --index-url https://download.pytorch.org/whl/cpu; \
     fi \
     && /opt/conda/envs/cellpose4/bin/pip install --no-cache-dir \
@@ -410,6 +450,15 @@ RUN /opt/conda/bin/conda create -n cellpose4 python=3.11 -y \
 # is not published under the tensorflow-cpu name.
 # GPU (amd64 only): tensorflow[and-cuda] bundles the CUDA 12.2 runtime libraries
 # so no system CUDA install is needed in the container.
+#
+# The `arm64` test DELIBERATELY stays first here, unlike the torch envs above.
+# tensorflow[and-cuda] resolves its CUDA through the nvidia-*-cu12 wheels, which
+# TensorFlow publishes for x86_64 only — there is no aarch64 GPU TF wheel on PyPI
+# for 2.15.1. So on arm64, StarDist runs on the CPU even in a GPU build. That is a
+# real limitation, not an oversight: Cellpose, Omnipose, Cellpose-SAM and micro_sam
+# all get the GPU on arm64, StarDist does not. Moving StarDist onto the GPU there
+# would mean an NVIDIA-built TF container image or a source build, neither of which
+# fits this layer.
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
         TF_PACKAGE='tensorflow==2.15.1'; \
     elif [ "$USE_GPU" = "true" ]; then \
