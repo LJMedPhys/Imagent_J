@@ -9,7 +9,7 @@ from .learned_memory import (
     library_add_pitfall, library_add_recipe, library_remove, library_set_core,
 )
 from .script_tools import run_script_safe, save_script, edit_script, copy_file, execute_script, get_script_info, load_script, get_script_history
-from .imagej_tools import ask_user, load_image_ij, inspect_all_ui_windows, extract_image_metadata, capture_plugin_dialog, estimate_cellpose_diameter_manual, estimate_cellpose_diameter_auto, merge_cellpose_diameter_runs, set_dialog_vision_llm, show_in_imagej_gui, close_imagej_windows
+from .imagej_tools import ask_user, load_image_ij, inspect_all_ui_windows, extract_image_metadata, capture_ui_window, estimate_cellpose_diameter_manual, estimate_cellpose_diameter_auto, merge_cellpose_diameter_runs, set_dialog_vision_llm, show_in_imagej_gui, close_imagej_windows
 from .general_tools import internet_search, inspect_java_class
 from .analyst_tools import run_python_code, inspect_csv_header, summarize_deliverables
 from .plugin_tools import search_fiji_plugins, install_fiji_plugin, check_plugin_installed
@@ -20,6 +20,7 @@ from .middleware import (
     PhaseGuardMiddleware,
     ToolOutputLimitMiddleware,
     VisionOptionMiddleware,
+    NapariComputeGuardMiddleware,
     BioRefusalRetryMiddleware,
 )
 from .vision_tools import (
@@ -47,10 +48,11 @@ __all__ = [
     'rag_retrieve_docs', 'recall_concepts', 'recall', 'core_pitfalls', 'core_recipes',
     'on_success', 'register_pending_lesson',
     'library_add_pitfall', 'library_add_recipe', 'library_remove', 'library_set_core',
-    'run_script_safe', 'ask_user', 'load_image_ij', 'show_in_imagej_gui', 'inspect_all_ui_windows', 'extract_image_metadata', 'capture_plugin_dialog', 'estimate_cellpose_diameter_manual', 'estimate_cellpose_diameter_auto', 'merge_cellpose_diameter_runs', 'close_imagej_windows',
+    'run_script_safe', 'ask_user', 'load_image_ij', 'show_in_imagej_gui', 'inspect_all_ui_windows', 'extract_image_metadata', 'capture_ui_window', 'estimate_cellpose_diameter_manual', 'estimate_cellpose_diameter_auto', 'merge_cellpose_diameter_runs', 'close_imagej_windows',
     'internet_search', 'inspect_java_class',
     'search_fiji_plugins', 'install_fiji_plugin', 'check_plugin_installed',
-    'SafeToolLoggerMiddleware', 'TodoDisplayMiddleware', 'NarrationReminderMiddleware', 'PhaseGuardMiddleware', 'ToolOutputLimitMiddleware', 'VisionOptionMiddleware',
+    'SafeToolLoggerMiddleware', 'TodoDisplayMiddleware', 'NarrationReminderMiddleware', 'PhaseGuardMiddleware', 'VisionOptionMiddleware',
+    'NapariComputeGuardMiddleware', 'ToolOutputLimitMiddleware',
     'get_vec_store_docs', 'is_rag_available', 'is_plugin_db_available',
     'set_dialog_vision_llm',
     'run_python_code', 'inspect_csv_header', 'summarize_deliverables', 'mkdir_copy','save_script', 'edit_script', 'copy_file', 'execute_script', 'get_script_info', 'load_script', 'get_script_history',

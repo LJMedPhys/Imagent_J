@@ -41,7 +41,8 @@ from .prompts import (
     vlm_judge_prompt,
 )
 from .tools import (
-    internet_search, inspect_all_ui_windows, capture_plugin_dialog, estimate_cellpose_diameter_manual, estimate_cellpose_diameter_auto,
+    capture_ui_window,
+    internet_search, inspect_all_ui_windows, estimate_cellpose_diameter_manual, estimate_cellpose_diameter_auto,
     merge_cellpose_diameter_runs,
     show_in_imagej_gui, close_imagej_windows,
     rag_retrieve_docs, recall_concepts, inspect_java_class,
@@ -51,8 +52,10 @@ from .tools import (
     check_plugin_installed, mkdir_copy, save_script, edit_script, copy_file, execute_script,
     get_script_info, load_script, get_script_history,
     setup_analysis_workspace, save_markdown,
+    VisionOptionMiddleware,
+    NapariComputeGuardMiddleware,
     NarrationReminderMiddleware, PhaseGuardMiddleware, ToolOutputLimitMiddleware,
-    VisionOptionMiddleware, BioRefusalRetryMiddleware,
+    BioRefusalRetryMiddleware,
     update_state_ledger, read_state_ledger, set_ledger_metadata, get_ledger_context,
     check_environment,
     set_dialog_vision_llm,
@@ -1454,6 +1457,10 @@ def init_agent():
         ),
         NarrationReminderMiddleware(),
         PhaseGuardMiddleware(),
+        # Blocks heavy micro_sam compute from reaching napari's execute_code, which
+        # runs on the Qt thread under a 90 s cap — the combination that freezes the
+        # viewer AND times out. Redirects the model to the supervised analyst path.
+        NapariComputeGuardMiddleware(),
         # Innermost user middleware: per-chat final say on Vision prompt + tool exposure.
         VisionOptionMiddleware(
             enabled_prompt=vision_prompt,
@@ -1476,7 +1483,7 @@ def init_agent():
             # ── supervisor's own tools ───────────────────────────────────────
             internet_search,
             inspect_all_ui_windows,
-            capture_plugin_dialog,
+            capture_ui_window,
             estimate_cellpose_diameter_manual,
             estimate_cellpose_diameter_auto,
             merge_cellpose_diameter_runs,
