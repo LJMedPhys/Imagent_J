@@ -123,9 +123,53 @@ Pass a local checkpoint instead of (or alongside) a built-in `model_type` name:
   **no** `decoder_path`.
 - **`precompute_state`**: `checkpoint_path=` only (same asymmetry as the batch path).
 
-If a lab has its own fine-tuned SAM weights (via `micro_sam.training`, not covered by this skill — that
-is a separate, GPU-hours-scale workflow requiring labeled training data, out of scope for routine
-segmentation tasks), this is how you point micro_sam at them instead of a stock `*_lm`/`*_em` model.
+This is how you point micro_sam at custom weights instead of a stock `*_lm`/`*_em` model. To
+**produce** those weights from the user's own annotations, see `FINETUNING.md` and the four
+`WORKFLOW_FINETUNE_*.py` scripts — the training API itself is:
+
+```python
+micro_sam.training.default_sam_loader(
+    raw_paths: str,                # a FOLDER
+    raw_key: str,                  # a glob, e.g. "*.tif"
+    label_paths: str, label_key: str,
+    patch_shape: tuple[int, int],
+    with_segmentation_decoder: bool,
+    batch_size: int = 1,
+    is_seg_dataset: bool = ...,    # pass False: forces torch_em's ImageCollectionDataset, the
+                                   # only one that handles a folder of separate 2D images
+    raw_transform=...,             # micro_sam.training.identity for data already in [0,255];
+                                   # the default require_8bit only rescales when max<1, so
+                                   # uint16 sails past it and fails the [0,255] loader check
+    min_size: int = 25, is_train: bool = True, shuffle: bool = ...,
+) -> DataLoader
+
+micro_sam.training.train_sam(
+    name: str, model_type: str,                    # e.g. "vit_b_lm" — the starting point
+    train_loader, val_loader,
+    n_epochs: int = 100,                           # 1 epoch = 100 sampled patches by default
+    early_stopping: int | None = 10,               # None with few val tiles: the curve is noisy
+    n_objects_per_batch: int | None = 25,          # VRAM knob; 25 on a 40 GB A100, 5-10 smaller
+    checkpoint_path=None,                          # continue from an EXISTING finetuned .pt
+    with_segmentation_decoder: bool = True,        # required for AIS / hands-off batch use
+    device=None, lr: float = 1e-5, save_root=None,
+) -> None                                          # writes <save_root>/checkpoints/<name>/best.pt
+
+micro_sam.util.export_custom_sam_model(
+    checkpoint_path,                               # the best.pt above
+    model_type: str,                               # the BACKBONE: "vit_b", not "vit_b_lm"
+    save_path,
+    with_segmentation_decoder: bool = False,       # True or the export has no AIS decoder
+) -> None
+
+micro_sam.training.train_instance_segmentation(...)   # AIS decoder ONLY; the exported model is
+                                                      # usable for automatic segmentation but not
+                                                      # for interactive prompting
+micro_sam.training.CONFIGURATIONS                  # hardware -> {model_type, n_objects_per_batch}:
+#  Minimal/gtx1080 -> vit_t · CPU/gtx3080/rtx5000/V100 -> vit_b · A100 -> vit_h
+```
+
+Sparse (partial) annotation is allowed **only** with `with_segmentation_decoder=False`, which
+gives up AIS — see `FINETUNING.md` for why the tile-based workflow is used instead.
 
 ## Models — `micro_sam.util.get_model_names()`
 

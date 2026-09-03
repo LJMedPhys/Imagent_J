@@ -1,19 +1,17 @@
 ---
 name: micro_sam
 description: >-
-  micro_sam ("Segment Anything for Microscopy") is a napari plugin + Python API that brings the SAM
-  foundation model to microscopy, with models finetuned for light microscopy (LM), electron microscopy
-  (EM), histopathology and medical imaging. Route a SEGMENTATION step here when there is NO trained
-  StarDist/Cellpose model for the object, when objects are arbitrary/novel, when the data are difficult
-  (EM, low contrast), or when the user wants promptable, human-in-the-loop, correctable segmentation.
-  Prefer StarDist/Cellpose for standard nuclei and cells (faster, often better) — micro_sam is the
-  specialist for the hard, novel or interactive cases. Installed in the `napari-mcp` conda env. TWO
-  backends: interactive in the live napari viewer (backend "napari"), or headless batch (backend
-  "python_data_analyst", first line `# imagentj-env: napari-mcp`). ALSO route here for interactive
-  OBJECT CLASSIFICATION — sorting objects that are ALREADY segmented into classes (live/dead,
-  infected/uninfected, phenotype A/B): mark a few objects per class on the first image and a random
-  forest classifies the rest of the folder automatically. The model table, the annotator commands
-  and the batch API are in the files listed at the end.
+  micro_sam ("Segment Anything for Microscopy") brings the SAM foundation model to microscopy,
+  finetuned for light microscopy (LM), EM, histopathology and medical imaging. Route SEGMENTATION
+  here when no StarDist/Cellpose model fits, objects are novel, data are hard (EM, low contrast),
+  or the user wants promptable, correctable segmentation. Prefer StarDist/Cellpose for standard
+  nuclei and cells. ALSO route here for FINE-TUNING — teaching the model better masks from the
+  user's own corrections ("it keeps missing my cells", "learn what I mean", "train on my data"):
+  the user fixes a few small tiles, never whole images, and the gain is measured before use. AND
+  for OBJECT CLASSIFICATION — sorting ALREADY-segmented objects into classes (live/dead,
+  infected/uninfected) from a few marked examples. Installed in the `napari-mcp` conda env; ALL
+  of it, interactive annotator sessions included, runs as python_data_analyst scripts whose first
+  line is `# imagentj-env: napari-mcp`.
 ---
 
 # micro_sam — Segment Anything for Microscopy
@@ -69,6 +67,12 @@ Stage 0 measurement (`skimage.measure.regionprops_table` or `cp_measure`) exactl
 Cellpose mask.
 
 ## Backend B — interactive in the live napari viewer (supervisor via napari MCP)
+
+> **Scope note.** This backend is for putting a finished result in front of the user, and for
+> the small click-prompt session in Pattern 2. A napari session the user WORKS in for minutes —
+> the object classifier (Pattern 3) and the whole fine-tuning workflow (`FINETUNING.md`) —
+> belongs in a `python_data_analyst` script that opens its own window and blocks on
+> `napari.run()`, not here. Those scripts are listed under Files.
 
 > ### THE ONE RULE: never compute inside `mcp__napari_mcp__execute_code`
 >
@@ -267,9 +271,16 @@ finetuned decoder) · `"apg"`. Default picks AIS when a decoder model is availab
 
 **Fine-tuned / custom weights instead of a stock model:** `get_predictor_and_segmenter(checkpoint=...)`
 (batch) or `checkpoint_path=`/`decoder_path=` (interactive annotators — see `SCRIPT_API.md` for the
-per-function asymmetry, e.g. `image_series_annotator` has no `decoder_path`). Actually fine-tuning a new
-checkpoint (`micro_sam.training`) is a separate, GPU-hours, labeled-data workflow **out of scope for
-this skill** — only reach for it if no stock `*_lm`/`*_em`/`*_histopathology` model is remotely usable.
+per-function asymmetry, e.g. `image_series_annotator` has no `decoder_path`).
+
+**PRODUCING such a checkpoint from the user's own annotations → `FINETUNING.md` and the four
+`WORKFLOW_FINETUNE_*.py` scripts.** That is the route for "teach it what I mean", "it keeps missing
+my cells", "train it on my data". It is a guided human-in-the-loop procedure, not a research project:
+the user clicks where the tiles should sit (one field per well/condition, ~2 min) and then corrects
+~8 small tiles (~20 min, and they never annotate a whole image), training takes 10-20 min on a GPU,
+and the result is measured against the stock model on held-out tiles before anything downstream
+uses it. Reach for it when no stock `*_lm`/`*_em`/`*_histopathology` model is
+good enough on this data — not before; try the stock model first and look at the overlay.
 
 > **A fine-tuned SAM checkpoint never reaches "the rest of the folder" on its own.**
 > - **Automatic/batch** (`WORKFLOW_AUTOMATIC_SEGMENTATION.py`): the model is built ONCE, before the
@@ -286,12 +297,15 @@ this skill** — only reach for it if no stock `*_lm`/`*_em`/`*_histopathology` 
 >   then **restart** `image_series_annotator(..., checkpoint_path=<new checkpoint>)`. The default
 >   `skip_segmented=True` resumes at the first *un*-annotated image, so you don't lose that work.
 
-**"Learn from image 1, apply to the rest" IS supported — but by the object CLASSIFIER, not by SAM
-fine-tuning.** This is the right route whenever the user's goal is *categorising* already-segmented
-objects (live/dead, infected/uninfected, phenotype A/B) rather than producing new masks. It trains a
-random forest on SAM object features in seconds — no GPU hours, no `micro_sam.training`. See
-**Pattern 3** below and `WORKFLOW_OBJECT_CLASSIFIER.py`. Do not tell the user "micro_sam cannot
-learn from your annotations and apply them to the next images" — it can, this is the feature.
+**"Learn from what I mark, then do the rest" — TWO different features. Pick by what the user wants:**
+- *Categorising objects that are already segmented* (live/dead, infected/uninfected, phenotype A/B)
+  → the object CLASSIFIER, **Pattern 3** below. A random forest on SAM features, trained in seconds,
+  no GPU hours. This is the cheap one; prefer it whenever it fits.
+- *Producing better masks* (it misses cells, splits them, outlines debris) → **fine-tuning**,
+  `FINETUNING.md`. ~20 min of the user's time + 10-20 min on a GPU.
+
+Do not tell the user "micro_sam cannot learn from your annotations and apply them to the next
+images" — it can, both ways, and both are implemented here as verified workflow scripts.
 
 **Before a heavy run, a free sanity check:** the `napari-mcp` env installs `micro_sam.info` as a CLI
 command — run it by **full path** (its `bin/` is not on PATH just from the `# imagentj-env` header) in
@@ -337,4 +351,9 @@ tag, and whether this process actually sees a GPU. Cheaper than finding out 60 s
 | `SCRIPT_API.md` | Verified signatures (`get_predictor_and_segmenter`, `automatic_instance_segmentation`, `precompute_state`, all four annotator widgets incl. `checkpoint_path`/`decoder_path`), the full model-name list, mode semantics, the `micro_sam.info` CLI check, and CLI entry points |
 | `WORKFLOW_AUTOMATIC_SEGMENTATION.py` | Batch script (`# imagentj-env: napari-mcp`): folder → per-image label TIFF + object counts CSV, model built once, GPU/CPU auto-select |
 | `WORKFLOW_OBJECT_CLASSIFIER.py` | Interactive object classifier over an image series (`# imagentj-env: napari-mcp`): annotate classes on image 1, "Train and predict", then `N` classifies each subsequent image automatically. Patches the stock `next_image()`, which otherwise leaves images 2..N blank and saves them as all-zero masks. **Use this instead of calling `image_series_object_classifier` directly.** Exports `rf.joblib` + `classifier_meta.json` |
+| `FINETUNING.md` | **Teaching the model on the user's own annotations**, end to end: why the user annotates small tiles instead of whole images, the four stages, the exact words to guide the human through the napari annotator, and the verified pitfalls (SAM's 1024 px resize and why inference must be tiled at the annotation tile size; 16-bit input failing micro_sam's own loader check; commit refusing to overwrite an existing object; the broken `T` shortcut in 1.8.2) |
+| `WORKFLOW_FINETUNE_1_PREPARE.py` | Stage 1: **the user clicks the tiles** in a napari picker that walks one field per group (`GROUP_REGEX` — per well, per condition, per sub-folder) **with the stock model's current segmentation painted on it, so they can aim at what it gets wrong**; the tile size is MEASURED from object density, not fixed. Then pre-segment each tile and write `manifest.json` + generated human instructions. `PICK_MODE="auto"` falls back to a content heuristic for unattended runs |
+| `WORKFLOW_FINETUNE_2_ANNOTATE.py` | Stage 2: the annotator with an ADD/DELETE helper panel docked in; blocks until the user closes it, then prints a per-tile status table. Resumes an interrupted session |
+| `WORKFLOW_FINETUNE_3_TRAIN.py` | Stage 3: validate the annotations, split by source image, train (encoder + AIS decoder), export, then measure **stock vs fine-tuned on held-out tiles** and name the winner in `evaluation.json` |
+| `WORKFLOW_FINETUNE_4_APPLY.py` | Stage 4: segment the whole folder with whichever model stage 3 measured as better, tiled at the training scale so the fine-tuning actually applies |
 | `WORKFLOW_OBJECT_CLASSIFIER_BATCH.py` | Headless counterpart: applies the `rf.joblib` from an interactive session to the rest of the folder with no viewer. Requires label masks as input (it classifies, never segments) and pins the backbone to the one that trained the forest — a mismatch misclassifies silently instead of erroring |

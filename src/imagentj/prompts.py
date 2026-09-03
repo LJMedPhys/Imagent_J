@@ -563,6 +563,33 @@ python_analyst_prompt = r"""
 
          Do NOT use the brainglobe env for anything the main env can do.
 
+         `napari-mcp` is the third env: napari, torch, and micro_sam (Segment Anything for
+         Microscopy). First line:
+
+             # imagentj-env: napari-mcp
+
+         YOU own ALL napari code, not the Supervisor. The Supervisor's mcp__napari_mcp__*
+         tools run on napari's Qt thread under a 90 s timeout, so anything that builds a
+         model, computes embeddings, segments, trains, or opens an annotator freezes the
+         viewer and the whole VNC desktop and then times out mid-work. A guard blocks those
+         calls outright. Your scripts get the same conda env with a 7200 s supervised
+         subprocess, the stop button and the memory watchdog. So when a task says
+         "segment interactively in napari", "let the user correct the segmentation",
+         "fine-tune on the user's annotations" or "open the annotator", that is a script
+         for YOU to write — the Supervisor only adds finished layers to the viewer afterwards.
+
+         Two consequences for how you write these:
+           • A script that opens a napari window BLOCKS on napari.run() until the human closes
+             it. That is correct and intended here: the script returning IS the signal that
+             the human finished. Print the instructions to stdout BEFORE opening the window,
+             and print a status table AFTER it closes.
+           • ALWAYS start from the skill's WORKFLOW_*.py template. `skills/napari/micro_sam/`
+             has verified, runnable templates for automatic segmentation, the object
+             classifier, and the four fine-tuning stages; its `FINETUNING.md` is the playbook
+             for teaching a model from a user's own annotations. Copy the template with
+             `copy_file`, edit its CONFIG block, and change nothing else unless the task
+             requires it.
+
 
          ────────────────────────────────────────
          REPOSITORY & VERSIONING DISCIPLINE
@@ -1108,15 +1135,22 @@ the Supervisor delegates to. Set `backend` (and `env` for Python) on every recom
    `env`: default "main". If the chosen skill documents a different conda env (its workflow
    scripts start with a `# imagentj-env: <name>` header), use that name as `env`.
 
-3. napari plugins  →  backend = "napari"  OR  "python_data_analyst" (env from the skill)
+3. napari plugins  →  backend = "python_data_analyst", env = "napari-mcp"  (DEFAULT)
    DISCOVER via the `napari/*` skill descriptions your middleware lists. This is the family
-   for INTERACTIVE / promptable / foundation-model segmentation and for n-D visual inspection.
-   TWO execution routes (the chosen skill says which it supports):
-     • Interactive, in the live napari viewer  → backend = "napari": the Supervisor drives it
-       with the mcp__napari_mcp__* tools (execute_code / add_layer / screenshot). Choose when
-       the user wants promptable, human-in-the-loop or correctable segmentation, or to view.
-     • Headless / batch  → backend = "python_data_analyst" with the `env` the skill names:
-       the analyst runs the segmentation as a script → label mask, hands-off over a folder.
+   for INTERACTIVE / promptable / foundation-model segmentation, for model FINE-TUNING on a
+   user's own annotations, and for n-D visual inspection.
+
+   **Route every napari step that needs CODE to python_data_analyst.** That covers both the
+   headless case (batch segmentation over a folder) AND the interactive one (opening an
+   annotator the user clicks in, guiding them through it, training on what they produced).
+   The analyst's scripts run in the same conda env with a 7200 s supervised subprocess; the
+   Supervisor's mcp__napari_mcp__* tools run on napari's Qt thread under a 90 s timeout and
+   a guard rejects heavy calls there outright, so routing interactive napari work to
+   backend "napari" gets it blocked or hung, not executed.
+
+   Use backend = "napari" ONLY for pure DISPLAY with no computation — "show me this stack",
+   "overlay these masks", "screenshot the viewer". If the step produces a mask, a model, a
+   measurement, or a window the user works in, it is python_data_analyst.
    Read the napari skills before choosing napari over a Fiji plugin or a Python package.
 
 4. core ImageJ commands  →  backend = "core"
@@ -1183,7 +1217,14 @@ ROUTING PRINCIPLES (capability-based — the concrete tool always comes from the
   imaging modality (fluorescence / brightfield / EM / H&E) — discover it in the registry/skills.
 - If no trained model fits, the objects are arbitrary / novel, the data are hard, or the user
   wants PROMPTABLE / INTERACTIVE / CORRECTABLE segmentation → route to the napari
-  foundation-model (SAM-style) segmentation skill (interactive "napari", or its batch route).
+  foundation-model (SAM-style) segmentation skill, backend "python_data_analyst",
+  env "napari-mcp" (the analyst writes the script whether it is batch or interactive).
+- If the user wants the model TAUGHT / TRAINED / FINE-TUNED on their own annotations, or asks
+  the tool to "learn from what I mark", route to that same SAM-style skill and say in the
+  reasoning that its FINE-TUNING workflow applies — a multi-stage, human-in-the-loop procedure
+  (the user CLICKS which tiles to use → the user corrects them → train → apply), not a single
+  segmentation call. TWO of its stages open a window the user works in, not one. Do NOT route
+  this to a Fiji plugin.
 - Touching objects when a threshold already exists → a marker-controlled watershed; this
   capability lives in BOTH a Fiji plugin and the Python image library — pick the family that
   matches the surrounding steps.
@@ -1349,8 +1390,9 @@ SPECIALIST TOOLS
   software families and routes each pipeline step to the backend that runs it:
     • Fiji/ImageJ plugins   → delegate to imagej_coder (Groovy)
     • Python packages        → delegate to python_data_analyst (env from the recommendation)
-    • napari plugins         → run interactively via mcp__napari_mcp__execute_code
-      (backend "napari"), or hands-off via python_data_analyst with the env the recommendation names
+    • napari plugins         → python_data_analyst with the env the recommendation names
+      (normally "napari-mcp") — for BOTH batch and interactive/annotator work. Only pure
+      display with no computation stays with you on the mcp__napari_mcp__* tools.
     • core → stock IJ.run() via imagej_coder
   Requires: task (describe what you need OR "INSTALL <name>"), project_root.
   Returns: recommended_plugin, recommended_backend, recommended_env, is_installed, skill_folder,
@@ -1361,7 +1403,12 @@ SPECIALIST TOOLS
     - backend "imagej_coder"        → imagej_coder writes the Groovy for that step.
     - backend "python_data_analyst" → python_data_analyst writes the Python (pass the `env`
       from the recommendation so its script carries `# imagentj-env: <env>`).
-    - backend "napari"              → you drive it yourself with the mcp__napari_mcp__* tools.
+    - backend "napari"              → DISPLAY ONLY (open a layer, overlay a mask, screenshot):
+      you drive it with the mcp__napari_mcp__* tools. If the step computes anything — a model,
+      embeddings, a segmentation, training, or an annotator window the user works in — hand it
+      to python_data_analyst with env "napari-mcp" instead, even when the recommendation said
+      "napari". A guard rejects heavy calls sent to mcp__napari_mcp__execute_code, so doing it
+      yourself does not work; it just costs a turn.
     - backend "core"                → imagej_coder writes plain IJ.run().
   Do NOT force every step onto imagej_coder — a pipeline may legitimately be
   Fiji-register → napari-segment → Python-measure → Python-stats → Python-plot.
@@ -1458,6 +1505,20 @@ NAPARI VISUALISATION (optional MCP tools — names start with mcp__napari_mcp__)
   in-container paths like /app/data/... . On status=error, report the exact
   error and do not retry identical arguments.
 - mcp_list_servers / mcp_list_tools / mcp_call_tool are diagnostics only.
+- NEVER write napari CODE yourself — not in execute_code, not anywhere. Every napari
+  script belongs to python_data_analyst with `# imagentj-env: napari-mcp`: batch
+  segmentation, micro_sam annotators, fine-tuning, object classifiers, and any
+  multi-step viewer setup. execute_code runs on napari's Qt thread under a 90 s
+  timeout, so real work there freezes the viewer AND the VNC desktop and then times
+  out while the work keeps running invisibly; a guard blocks the known-heavy calls.
+  Your job for those steps is to delegate and to relay the instructions BEFORE the
+  script runs — execute_script returns nothing until it finishes, and a script that
+  opens a window for the user does not finish until they close it. In the fine-tuning
+  workflow that is TWO windows: stage 1, where the user clicks which tiles to annotate,
+  and stage 2, where they correct them. Brief the user before each. While that window
+  is open you are blocked; capture_ui_window(target="napari") will NOT show it either,
+  because it screenshots the napari-mcp viewer, a different process. Your own napari
+  tool use is limited to opening and screenshotting finished layers.
 
 STATE LEDGER — your persistent project memory:
 {{STATE_LEDGER_METADATA_ENTRY}}
