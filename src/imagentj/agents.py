@@ -52,7 +52,7 @@ from .tools import (
     get_script_info, load_script, get_script_history,
     setup_analysis_workspace, save_markdown,
     NarrationReminderMiddleware, PhaseGuardMiddleware, ToolOutputLimitMiddleware,
-    VisionOptionMiddleware, BioRefusalRetryMiddleware,
+    VisionOptionMiddleware, BioRefusalRetryMiddleware, InterjectMiddleware,
     update_state_ledger, read_state_ledger, set_ledger_metadata, get_ledger_context,
     check_environment,
     set_dialog_vision_llm,
@@ -1432,6 +1432,10 @@ def init_agent():
     no_vision_prompt = build_supervisor_prompt(enable_qa=True, enable_vision=False)
 
     supervisor_middleware = [
+        # First, so a note the user typed mid-run is already in `messages` when
+        # every other middleware inspects them this turn (PhaseGuard's phase
+        # detection, the context editor's keep-window, the Vision prompt swap).
+        InterjectMiddleware(),
         ToolOutputLimitMiddleware(),
         ContextEditingMiddleware(
             edits=[

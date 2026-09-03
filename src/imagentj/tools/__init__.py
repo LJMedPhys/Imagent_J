@@ -21,6 +21,7 @@ from .middleware import (
     ToolOutputLimitMiddleware,
     VisionOptionMiddleware,
     BioRefusalRetryMiddleware,
+    InterjectMiddleware,
 )
 from .vision_tools import (
     capture_ij_window,
@@ -50,7 +51,7 @@ __all__ = [
     'run_script_safe', 'ask_user', 'load_image_ij', 'show_in_imagej_gui', 'inspect_all_ui_windows', 'extract_image_metadata', 'capture_plugin_dialog', 'estimate_cellpose_diameter_manual', 'estimate_cellpose_diameter_auto', 'merge_cellpose_diameter_runs', 'close_imagej_windows',
     'internet_search', 'inspect_java_class',
     'search_fiji_plugins', 'install_fiji_plugin', 'check_plugin_installed',
-    'SafeToolLoggerMiddleware', 'TodoDisplayMiddleware', 'NarrationReminderMiddleware', 'PhaseGuardMiddleware', 'ToolOutputLimitMiddleware', 'VisionOptionMiddleware',
+    'SafeToolLoggerMiddleware', 'TodoDisplayMiddleware', 'NarrationReminderMiddleware', 'PhaseGuardMiddleware', 'ToolOutputLimitMiddleware', 'VisionOptionMiddleware', 'InterjectMiddleware',
     'get_vec_store_docs', 'is_rag_available', 'is_plugin_db_available',
     'set_dialog_vision_llm',
     'run_python_code', 'inspect_csv_header', 'summarize_deliverables', 'mkdir_copy','save_script', 'edit_script', 'copy_file', 'execute_script', 'get_script_info', 'load_script', 'get_script_history',

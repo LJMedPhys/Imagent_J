@@ -28,6 +28,7 @@ from imagentj.agents import init_agent, set_qa_enabled
 from imagentj.imagej_context import get_ij
 from imagentj.chat_history import ChatHistoryManager
 import imagentj.stop_signal as stop_signal
+from imagentj import interject
 from imagentj import run_control
 from imagentj import watchdog
 from imagentj.safety_filter import is_bio_refusal
@@ -737,6 +738,9 @@ class AgentWorker(QObject):
     stop_report = Signal(int, int)
     # Watchdog verdicts, surfaced in the chat rather than buried in the log.
     watchdog_notice = Signal(str)
+    # Notes the user posted after the agent's final model turn; re-submitted as a
+    # prompt rather than silently dropped. Carries how many.
+    notes_requeued = Signal(int)
 
     def __init__(self, supervisor, thread_id: str, tracker_callback):
         super().__init__()
@@ -760,6 +764,10 @@ class AgentWorker(QObject):
 
     def _run_prompt(self, user_input: str):
         try:
+            # InterjectMiddleware has no way to learn which chat is running —
+            # Runtime carries no config — so tell it explicitly, here, on the
+            # thread that is about to run the graph.
+            interject.bind_thread(self.thread_id)
             config = {
                 "configurable": {"thread_id": self.thread_id},
                 "callbacks":    [self.tracker_callback],
@@ -794,6 +802,14 @@ class AgentWorker(QObject):
                 self.error.emit(str(e))
         finally:
             log.debug("_run_prompt finished")
+            # A note posted after the agent's last model turn would otherwise sit
+            # in the queue for ever, looking delivered to the user but seen by
+            # nobody. Re-submit it as an ordinary prompt so the run continues.
+            stranded = interject.drain(self.thread_id)
+            if stranded and not self._stop_requested:
+                log.info("re-submitting %d undelivered note(s) as a prompt", len(stranded))
+                self.notes_requeued.emit(len(stranded))
+                self.tasks.put("\n\n".join(stranded))
             self.finished.emit()
 
     def submit(self, prompt: str):
@@ -1000,6 +1016,7 @@ class ImageJAgentGUI(QWidget):
         self.worker.error.connect(self.on_agent_error)
         self.worker.stop_report.connect(self.on_stop_report)
         self.worker.watchdog_notice.connect(self.on_watchdog_notice)
+        self.worker.notes_requeued.connect(self.on_notes_requeued)
         # The watchdog fires from its own thread; hop onto the GUI thread via the
         # worker's signal rather than touching widgets directly.
         watchdog.set_notifier(self.worker.watchdog_notice.emit)
@@ -1140,7 +1157,11 @@ class ImageJAgentGUI(QWidget):
         return super().eventFilter(obj, event)
 
     def _agent_is_busy(self) -> bool:
-        return not self.send_button.isEnabled()
+        # Explicit flag rather than the send button's enabled state: the button
+        # stays enabled while running so mid-run notes can be typed, so it no
+        # longer distinguishes the two. Several callers depend on this being
+        # right (the Vision/QA toggles and thread switching all refuse mid-run).
+        return getattr(self, "_busy", False)
 
     def set_status(self, text: str):
         colors = {"Ready": "green", "Thinking...": "blue", "Stopping...": "#e74c3c"}
@@ -1149,9 +1170,14 @@ class ImageJAgentGUI(QWidget):
         self.status_label.setStyleSheet(f"color: {color}; font-weight: bold;")
 
     def set_ui_busy(self, busy: bool):
+        self._busy = busy
         self.stop_button.setEnabled(busy)
-        self.send_button.setDisabled(busy)
-        self.input_line.setDisabled(busy)
+        # Input stays live while the agent works: on_send routes what is typed to
+        # the interjection queue instead of starting a second run. The history
+        # panel stays disabled — switching chats mid-run is still unsafe.
+        self.send_button.setEnabled(True)
+        self.input_line.setEnabled(True)
+        self.send_button.setText("Send note" if busy else "Send")
         self.history_panel.setEnabled(not busy)
 
         if busy:
@@ -1159,9 +1185,13 @@ class ImageJAgentGUI(QWidget):
                 "background-color: #e74c3c; color: white; font-weight: bold; padding: 8px;"
             )
             self.send_button.setStyleSheet(
-                "background-color: #bdc3c7; color: #7f8c8d; font-weight: bold; padding: 8px;"
+                "background-color: #8e7cc3; color: white; font-weight: bold; padding: 8px; border:none;"
+            )
+            self.input_line.setPlaceholderText(
+                "Send a note to the agent — it reads this at its next step…"
             )
         else:
+            self.input_line.setPlaceholderText("")
             self.stop_button.setStyleSheet(
                 "background-color: #bdc3c7; color: #7f8c8d; font-weight: bold; padding: 8px;"
             )
@@ -1277,6 +1307,53 @@ class ImageJAgentGUI(QWidget):
         self.set_ui_busy(True)
         self.worker.submit(prompt)
 
+    def _post_note(self, text: str):
+        """Queue a mid-run note and reflect it in the chat immediately."""
+        if self.attached_files:
+            self.set_status_busy_with_notes()
+            self.chat_scroll.add_message(
+                "system",
+                "Attachments cannot be added to a running task — send the note on "
+                "its own, or wait for the agent to finish."
+            )
+            return
+
+        depth = interject.post(self.current_thread_id, text)
+        if depth == 0:
+            self.chat_scroll.add_message(
+                "system",
+                f"Note not queued: the limit of {interject.MAX_PENDING} pending "
+                "notes was reached. Wait for the agent to read the ones already "
+                "queued."
+            )
+            return
+
+        self.chat_scroll.add_message("user", text)
+        self.chat_scroll.add_message(
+            "system",
+            "Queued — the agent will read this at its next step. A long-running "
+            "script has to finish first."
+        )
+        self.input_line.clear()
+        self.history_manager.touch_thread(self.current_thread_id)
+        self.set_status_busy_with_notes()
+
+    def set_status_busy_with_notes(self):
+        """Status line that also says how many notes are waiting to be read."""
+        n = interject.pending(self.current_thread_id)
+        if n:
+            self.set_status(f"Thinking... · {n} note{'s' if n > 1 else ''} queued")
+        else:
+            self.set_status("Thinking...")
+
+    def on_notes_requeued(self, count: int):
+        self.chat_scroll.add_message(
+            "system",
+            f"The agent finished before reading {count} note"
+            f"{'s' if count > 1 else ''} — sending {'them' if count > 1 else 'it'} "
+            "as a new message."
+        )
+
     # ------------------------------------------------------------------
     # Send
     # ------------------------------------------------------------------
@@ -1284,6 +1361,13 @@ class ImageJAgentGUI(QWidget):
     def on_send(self):
         user_input = self.input_line.toPlainText().strip()
         if not user_input and not self.attached_files:
+            return
+
+        # Agent already running: this is a note, not a new task. It is parked and
+        # delivered at the agent's next model turn (see imagentj.interject), so
+        # the run is never interrupted and nothing is thrown away.
+        if self._agent_is_busy():
+            self._post_note(user_input)
             return
 
         full_prompt = user_input

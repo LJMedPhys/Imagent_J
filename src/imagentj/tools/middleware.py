@@ -5,10 +5,11 @@ import re
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ToolCallRequest, AgentState
-from langchain_core.messages import ToolMessage, SystemMessage, AIMessage
+from langchain_core.messages import ToolMessage, SystemMessage, AIMessage, HumanMessage
 from langgraph.types import Command
 from langchain.agents.middleware import TodoListMiddleware
 
+from .. import interject
 from ..safety_filter import (
     filter_injected_blocks,
     find_sensitive_terms,
@@ -489,3 +490,37 @@ class TodoDisplayMiddleware(TodoListMiddleware):
             )
             output["content"] += "\n\n" + formatted
         return output
+
+
+class InterjectMiddleware(AgentMiddleware):
+    """Deliver notes the user typed WHILE the agent was running.
+
+    The GUI parks them in :mod:`imagentj.interject`; this drains them at the next
+    model turn and returns them as a state update, so LangGraph merges and
+    checkpoints them. That matters: the note becomes a real message in the
+    thread's history rather than a decoration on one model call, so it is visible
+    to every later turn, to context editing, and to the transcript on reload.
+
+    Returning ``{"messages": [...]}`` from ``before_model`` is the same mechanism
+    PhaseGuardMiddleware already uses for its reminder.
+
+    Notes are delivered as HumanMessage, not SystemMessage: they ARE the user
+    speaking, and dressing them as system text would let the model treat them as
+    infrastructure noise it can skip.
+    """
+
+    def before_model(self, state, runtime=None):
+        notes = interject.drain(interject.active_thread())
+        if not notes:
+            return None
+        _log.info("delivering %d queued user note(s) to the agent", len(notes))
+        return {
+            "messages": [
+                HumanMessage(content=(
+                    "[NOTE FROM THE USER, sent while you were working — read it "
+                    "before your next action and adjust if it changes the plan]\n"
+                    + note
+                ))
+                for note in notes
+            ]
+        }
