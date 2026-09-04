@@ -1343,7 +1343,7 @@ class ImageJAgentGUI(QWidget):
             "rag_retrieve_docs":         "Searching ImageJ documentation…",
             "rag_retrieve_mistakes":     "Checking past lessons learned…",
             "inspect_all_ui_windows":    "Listing open ImageJ windows…",
-            "capture_plugin_dialog":     "Reading plugin dialog (taking screenshot)…",
+            "capture_ui_window":         "Reading what's on screen (taking screenshot)…",
             "extract_image_metadata":    "Reading image metadata & calibration…",
             "setup_analysis_workspace":  "Creating project workspace…",
             "search_fiji_plugins":       "Searching Fiji plugin registry…",
