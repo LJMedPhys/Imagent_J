@@ -1100,10 +1100,10 @@ A napari window opens with two layers listed on the left:
 | `committed_objects` | the computer's guess — one colour per object. **This is your answer sheet.** |
 
 The **ImagentJ — Annotation Helper** panel on the right has everything you need: a tile
-counter and three buttons. Use the buttons — they put napari into the right mode for you,
+counter and four buttons. Use the buttons — they put napari into the right mode for you,
 which is the one thing that is easy to get wrong.
 
-## Only two things to do
+## Three things to do
 
 ### ➕ ADD a missing object
 1. Click **➕ ADD objects** in the helper panel (it turns green).
@@ -1117,6 +1117,18 @@ which is the one thing that is easy to get wrong.
 > **Pressed C and nothing happened?** The thing you clicked is already outlined. The tool
 > refuses to draw on top of an existing object — delete that outline first, then add it again.
 
+### ✏ DRAW an outline by hand
+Use this when **ADD will not cooperate** — two objects that keep coming out as one, or an
+outline the computer gets wrong however you click it.
+
+1. Click **✏ DRAW outline** in the helper panel (it turns purple).
+2. Click once at each corner all the way around the object.
+3. **Double-click** to close it → the shape fills in as a new object.
+   - misclicked? Right-click removes the last point; **Esc** abandons the shape.
+
+No **S**, no **C** — those belong to ADD. What you draw goes straight onto the answer sheet.
+Your outline only has to follow the object roughly; a dozen clicks around it is plenty.
+
 ### ✖ DELETE a wrong object
 1. Click **✖ DELETE objects** in the helper panel (it turns red).
 2. Click on the wrong object → it disappears.
@@ -1125,7 +1137,7 @@ which is the one thing that is easy to get wrong.
 
 Delete anything that is not a real object (debris, dirt, a shadow), and anything the computer
 got badly wrong. **To fix a bad outline, delete it and add it again** — that is faster and
-safer than trying to repair it, and those two actions are all you ever need:
+safer than trying to repair it:
 
 | problem | fix |
 |---|---|
@@ -1134,11 +1146,14 @@ safer than trying to repair it, and those two actions are all you ever need:
 | one outline covers two objects | DELETE it, then ADD each object separately |
 | one object split into two outlines | DELETE both, then ADD it with one click |
 | outline is badly off | DELETE it, then ADD it again |
+| ADD keeps getting the same object wrong | DELETE it, then **DRAW** it |
+| objects packed tightly together | DELETE the clump, then **DRAW** each one |
 
-> **Objects packed tightly together are the one case this cannot fix.** One click inside a
-> tight clump gives you the whole clump, and once that is committed every further click inside
-> it is ignored. Try it twice; if it will not separate them, leave the clump as it is and tell
-> whoever asked — it needs a different tool, not more clicking.
+> **Tight clumps are what DRAW is for.** One click inside a clump gives you the whole clump,
+> and once that is committed every further click inside it is ignored — clicking more will
+> not help. Draw them by hand instead. If a clump is so dense that you cannot tell where one
+> object ends and the next begins, leave it out and say so to whoever asked: a guess there is
+> worse for training than nothing, because the computer learns the guess.
 
 ## Finishing a tile
 

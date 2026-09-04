@@ -4,7 +4,8 @@ micro_sam fine-tuning — STAGE 2 of 4: the human corrects the tiles.
 
 Opens micro_sam's image-series annotator on the tiles built by stage 1, with the stock model's
 guess already loaded into `committed_objects`, plus a small **Annotation Helper** panel that
-reduces the whole job to two buttons: ADD an object, DELETE an object.
+reduces the whole job to three buttons: ADD an object (SAM does the outlining), DRAW an
+outline by hand, DELETE an object.
 
 RUN THIS VIA python_data_analyst, NEVER via mcp__napari_mcp__execute_code. It opens its own
 napari window and blocks on napari.run() until the human closes it — which is correct here
@@ -46,8 +47,9 @@ BANNER = r"""
   nothing else is. Outlines only need to be roughly right.
 
   ADD an object     ->  click "ADD objects", click the object,  S ,  then  C
+  DRAW one by hand  ->  click "DRAW outline", click round the object, double-click to close
   DELETE an object  ->  click "DELETE objects", click the object
-  BAD OUTLINE       ->  delete it, then add it again
+  BAD OUTLINE       ->  delete it, then add it again (or DRAW it)
   TILE FINISHED     ->  press  N        <-- N is what SAVES the tile
 
   *** Press N on EVERY tile, INCLUDING THE LAST ONE. ***
@@ -98,12 +100,20 @@ def ensure_model_cache(fallback_dir):
     return fallback_dir
 
 def build_helper(viewer, manifest):
-    """Dock a two-button panel: ADD (point prompts) / DELETE (fill with 0).
+    """Dock a three-button panel: ADD (point prompts) / DRAW (polygon) / DELETE (fill with 0).
 
     Everything a beginner gets wrong here is a MODE problem — clicking the canvas does
     something different depending on which layer is selected and which tool it is in, and
     nothing on screen explains that. These buttons set layer + mode + label together, so a
     click always does what the button they last pressed says it does.
+
+    ADD goes through SAM: the click is a prompt, SAM returns the outline. DRAW does not —
+    it writes the polygon straight into `committed_objects`. That matters because SAM's
+    prompt encoder only accepts points, boxes and a coarse mask, so there is no way to hand
+    it an outline; but the file stage 3 trains on is the LABEL IMAGE, not SAM's opinion of
+    it. Anything that ends up in `committed_objects` is ground truth, however it got there.
+    So DRAW is the escape hatch for the cases the docs otherwise tell the user to give up
+    on — touching objects that SAM insists on merging, and outlines it keeps getting wrong.
     """
     from qtpy import QtWidgets, QtCore
 
@@ -121,12 +131,20 @@ def build_helper(viewer, manifest):
     sub.setWordWrap(True)
     lay.addWidget(sub)
 
+    BTN_BASE = "font-size:14px; font-weight:bold;"
     btn_add = QtWidgets.QPushButton("➕  ADD objects")
+    btn_draw = QtWidgets.QPushButton("✏  DRAW outline")
     btn_del = QtWidgets.QPushButton("✖  DELETE objects")
-    for b in (btn_add, btn_del):
+    for b in (btn_add, btn_draw, btn_del):
         b.setMinimumHeight(44)
-        b.setStyleSheet("font-size:14px; font-weight:bold;")
+        b.setStyleSheet(BTN_BASE)
         lay.addWidget(b)
+
+    def highlight(active, colour):
+        """Exactly one button is coloured, and it is the mode the canvas is actually in."""
+        for b in (btn_add, btn_draw, btn_del):
+            b.setStyleSheet(BTN_BASE + (f" background:{colour}; color:white;"
+                                        if b is active else ""))
 
     hint = QtWidgets.QLabel()
     hint.setWordWrap(True)
@@ -157,7 +175,8 @@ def build_helper(viewer, manifest):
         "<b>C</b> commit the object<br>"
         "<b>Shift+C</b> start this object over<br>"
         "<b>D</b> delete the object under the mouse<br>"
-        "<b>Ctrl+Z</b> undo<br><br>"
+        "<b>Ctrl+Z</b> undo<br>"
+        "<i>(S, T and C belong to ADD only — DRAW needs none of them)</i><br><br>"
         "<b>N</b> — save this tile, go to the next<br>"
         "<span style='color:#d33;'><b>Press N on every tile,<br>including the last one.</b></span>"
         "<br><br><i>On a tile with nothing outlined, N asks \u201cNothing is segmented yet\u201d "
@@ -187,14 +206,53 @@ def build_helper(viewer, manifest):
             pts.current_properties = props
         except Exception:
             pass
-        btn_add.setStyleSheet("font-size:14px; font-weight:bold; background:#2d7d46; color:white;")
-        btn_del.setStyleSheet("font-size:14px; font-weight:bold;")
+        highlight(btn_add, "#2d7d46")
         hint.setText(
             "Click the middle of an object → press <b>S</b> → press <b>C</b>.<br><br>"
             "<i>Pressed C and nothing happened?</i> That object is already outlined — "
             "micro_sam refuses to commit on top of an existing one. "
             "<b>DELETE the old outline first</b>, then add it again."
         )
+
+    def set_draw():
+        """Draw one outline by hand, straight into committed_objects — no SAM in the loop."""
+        lyr = committed()
+        if lyr is None:
+            return
+        viewer.layers.selection.active = lyr
+        lyr.n_edit_dimensions = 2
+        # A fresh id per object, or two polygons drawn one after the other come out as a
+        # single object. preserve_labels keeps the neighbours safe: the fill then writes
+        # over background only, so a vertex that strays across a committed object cannot
+        # eat it — which matters precisely in the touching-objects case this is here for.
+        lyr.preserve_labels = True
+        lyr.selected_label = int(lyr.data.max()) + 1
+        # napari's polygon tool for Labels arrived in 0.4.19. Fall back to the brush on
+        # anything older rather than leaving the button dead and the mode unchanged.
+        active_mode = None
+        for mode in ("polygon", "paint"):
+            try:
+                lyr.mode = mode
+                active_mode = mode
+                break
+            except (ValueError, KeyError, AttributeError):
+                continue
+        highlight(btn_draw, "#7a4fa3")
+        if active_mode == "polygon":
+            hint.setText(
+                "Click once at each corner around the object, then <b>double-click</b> to "
+                "close it — the shape fills in as a new object.<br><br>"
+                "Right-click removes the last point; <b>Esc</b> abandons the shape.<br><br>"
+                "<i>Nothing here goes through SAM, so there is no S and no C — the outline "
+                "you draw IS the answer. Use it for objects that are touching, and for any "
+                "outline the ADD button keeps getting wrong.</i>")
+        elif active_mode == "paint":
+            lyr.brush_size = 6
+            hint.setText("<b>This napari has no polygon tool</b> — using the brush instead. "
+                         "Drag over the object to fill it in; <b>[</b> and <b>]</b> resize "
+                         "the brush.")
+        else:
+            hint.setText("<b>Could not switch to a drawing tool</b> — use ADD instead.")
 
     def set_delete():
         lyr = committed()
@@ -205,11 +263,11 @@ def build_helper(viewer, manifest):
         lyr.preserve_labels = False             # else the fill refuses to write 0 over a label
         lyr.selected_label = 0                  # fill target 0 = erase the whole object
         lyr.n_edit_dimensions = 2
-        btn_del.setStyleSheet("font-size:14px; font-weight:bold; background:#a33; color:white;")
-        btn_add.setStyleSheet("font-size:14px; font-weight:bold;")
+        highlight(btn_del, "#a33")
         hint.setText("Click on a wrong object → it disappears.")
 
     btn_add.clicked.connect(set_add)
+    btn_draw.clicked.connect(set_draw)
     btn_del.clicked.connect(set_delete)
 
     # T (include <-> exclude) is broken in stock micro_sam 1.8.2 for the most common case:
@@ -260,6 +318,13 @@ def build_helper(viewer, manifest):
             done = len(glob.glob(os.path.join(ann_dir, "*.tif")))
             lyr = committed()
             n_obj = int(np.count_nonzero(np.unique(lyr.data))) if lyr is not None else 0
+            # Once a hand-drawn polygon has landed, the id it used is spent. Move to the
+            # next one so the following polygon is a separate object; napari itself keeps
+            # selected_label as-is, which would silently merge every shape into one.
+            if lyr is not None and str(lyr.mode) == "polygon":
+                cur = int(lyr.selected_label)
+                if cur and int(lyr.data.max()) >= cur:
+                    lyr.selected_label = cur + 1
             head.setText(f"Tile {min(done + 1, n_total)} of {n_total}")
             sub.setText(f"<b>{n_obj}</b> objects outlined on this tile &nbsp;|&nbsp; "
                         f"{done} tile(s) saved")

@@ -171,11 +171,14 @@ table on exit; relay that.
 > the outlines that already look right alone — you are checking its work, not redrawing it. You
 > don't need to touch anything outside the squares.
 >
-> Use the two big buttons in the **ImagentJ — Annotation Helper** panel on the right:
+> Use the three big buttons in the **ImagentJ — Annotation Helper** panel on the right:
 > - **➕ ADD objects** — click the middle of a missed object, press **S**, then press **C**.
+> - **✏ DRAW outline** — click round the object, double-click to close. No S, no C.
 > - **✖ DELETE objects** — click on anything outlined that shouldn't be.
 >
-> To fix a bad outline: **delete it, then add it again.** That's the whole workflow.
+> To fix a bad outline: **delete it, then add it again.** If ADD keeps getting the same object
+> wrong, or two objects are touching and come out as one, **draw it by hand instead** — that is
+> what the DRAW button is for. That's the whole workflow.
 >
 > When a square looks right, press **N** (or the blue *TILE DONE* button). **Press N on the last
 > square too — N is what saves your work.** You can stop any time; finished squares are kept and
@@ -339,8 +342,11 @@ CSV and overlay previews; the masks go straight into a `python_data_analyst` mea
     them collapsed the mask to 4-362 px (IoU 0.00-0.26). What this workflow reliably teaches
     is *find the objects you missed*, *stop outlining debris*, and *follow this boundary*, on
     objects that are separable to begin with. If the correction the user needs IS "split these
-    touching objects", say so before they annotate: they will need a different tool for the
-    labels (or the object classifier route in SKILL.md), not this one.
+    touching objects", the fix is the **✏ DRAW outline** button, not more clicking: it writes a
+    hand-drawn polygon straight into `committed_objects`, so SAM never sees the prompt and the
+    >75 % overlap rule never applies. Say so before they annotate, and budget for it — drawing
+    a clump by hand is perhaps 20-30 s per object against 2-3 s for a click that works, so a
+    tile that is mostly clumps is a slow tile, not an impossible one.
 21. **A folder that mixes grayscale and RGB files silently breaks the annotator.** The series
     annotator shows every tile in ONE napari image layer, so the first `(512,512,3)` tile after
     a `(512,512)` one is read as a 512-SLICE STACK: the canvas goes black, the committed masks
