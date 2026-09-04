@@ -59,11 +59,17 @@ version out of `evaluation.json`, so it follows whatever stage 3 trained without
 **Pick the starting model by CONTRAST MECHANISM, not by name.** `nuclei` sounds right for a
 nucleus task and is usually wrong for brightfield: it was trained on *fluorescent* nuclei —
 bright objects on a dark ground — while a stained brightfield slide is the opposite. Measured on
-the CD177 May-Grünwald neutrophils: **stock `nuclei` returns 0 objects on most tiles (mSA 0.020)
-while stock `cpsam` scores 0.545** on the same tiles. Fine-tuning still rescues `nuclei` there
-(0.020 → 0.744), but it starts from far behind and needs the annotations to do all the work, so
-`cpsam` is the better base on brightfield unless you have a reason otherwise. The rule generalises:
-match the model's training modality first, its target object second.
+the CD177 May-Grünwald neutrophils, **segmenting whole CELLS**: stock `nuclei` returns 0 objects
+on most tiles (mSA 0.020) while stock `cpsam` scores 0.545. Fine-tuning rescues `nuclei` there
+(0.020 → 0.744) but it starts from far behind, so `cpsam` is the better base.
+
+**Read the target, not just the dataset.** Those numbers are the whole-cell task. On the SAME
+images asked for the NUCLEI instead, both stock models score **0.000** — the 0.020-vs-0.545
+contrast says nothing about that task, and quoting it as if it did is a mistake a real run made.
+The nucleus numbers are: fine-tuned `cpsam` **0.274**, fine-tuned `nuclei` **0.000**. cpsam is
+still the right base, for a different reason — it recovers from a useless start and the v3
+nucleus model does not. Every figure below is labelled with the target it was measured on;
+match BOTH the modality and the object before reusing one.
 
 **Three things differ on v3 and they all matter:**
 
@@ -91,8 +97,8 @@ Fine-tune whichever model is **already closest** on this data, and set `SEGMENT_
 match so the user corrects that model's mistakes. Run both stock first and look at the overlays;
 it costs minutes and decides the rest of the workflow. On the CD177 neutrophils, stock
 `vit_b_lm` rejects debris that stock `cyto3` counts — but stock cpsam fine-tuned from
-0.545 to 0.831 mSA on the same tiles, so "which is better stock" and "which fine-tunes better"
-are different questions.
+0.545 to 0.831 mSA on the same tiles (whole CELLS), so "which is better stock" and "which
+fine-tunes better" are different questions — as are "which target".
 
 ## Pitfalls
 
@@ -164,16 +170,18 @@ are different questions.
 
 On 23 CD177 neutrophil tiles (1024 px RGB, brightfield, May-Grünwald) annotated in stage 2:
 
-| step | result |
+| step (target) | result |
 |---|---|
-| stage 3, `CP_MODEL="nuclei"` (v3, env hop) | diameter measured 67.1 px, learned 67.3; stock **0.020** → fine-tuned **0.744** |
+| stage 3, `CP_MODEL="nuclei"` (v3, env hop) — whole CELLS | diameter measured 67.1 px, learned 67.3; stock **0.020** → fine-tuned **0.744** |
+| stage 3, `cpsam` — **NUCLEI** (labels derived from the hematoxylin stain inside the known cell masks, so approximate) | stock **0.000** → fine-tuned **0.274**; measured diameter 28.7 px vs 67.1 for cells |
+| stage 3, `nuclei` (v3) — **NUCLEI** | stock **0.000** → fine-tuned **0.000**: on brightfield the v3 nucleus model does not recover |
 | stage 3, round 2 on top of round 1 | **0.831 → 0.932** (+12.1 %), baseline exactly matching round 1 |
 | stage 1, `SEGMENT_BACKEND="cellpose"` | worker up on GPU, probe + 4 tiles pre-segmented by cpsam, manifest written |
 | stage 1, `SEGMENT_BACKEND="micro_sam"` | unchanged behaviour (regression check) |
 | stage 3 validation | 14 of 23 tiles usable, 9 rejected below `min_train_masks=5` with reasons |
 | stage 3 split | 10 train tiles from 9 source images; 4 held out from 3 |
 | stage 3 training | 20 epochs, **1.4 min** on an A100 |
-| **stage 3 measurement** | **mSA 0.545 → 0.831 (+52.6 %)** on the held-out tiles |
+| **stage 3 measurement** (whole CELLS) | **mSA 0.545 → 0.831 (+52.6 %)** on the held-out tiles |
 | stage 4 | 23 images segmented in 0.3 min, 151 objects, 34 lines of output |
 
 The mSA implementation was checked against `elf.evaluation.mean_segmentation_accuracy` on the
