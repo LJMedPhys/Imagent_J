@@ -39,6 +39,7 @@ Run in the `napari-mcp` env (the `# imagentj-env` header selects it). Edit CONFI
 """
 import os
 import re
+import glob
 import json
 import datetime
 
@@ -81,6 +82,29 @@ AUTO_ADVANCE = True    # move to the next group by itself once this group's quot
 MODEL_TYPE = None      # None = auto (vit_b_lm on GPU, vit_t_lm on CPU). This is BOTH the
                        # pre-segmentation model AND the fine-tuning starting point — stage 3
                        # reads it from the manifest, so set it once, here.
+SEGMENT_BACKEND = "micro_sam"   # WHICH MODEL the user is shown and will end up training.
+                       # "micro_sam" -> stages 3/4 are skills/napari/micro_sam/WORKFLOW_FINETUNE_3,4
+                       # "cellpose"  -> stages 3/4 are skills/cellpose_documentation/
+                       #                WORKFLOW_FINETUNE_CP_3,4 (cpsam). Stages 1 and 2 are
+                       # SHARED either way: the picker and the SAM-assisted annotator do not care
+                       # what gets trained, and SAM-assisted clicking is the fastest way to
+                       # produce masks whichever model consumes them. Set this to match the model
+                       # you intend to fine-tune, so the user corrects THAT model's mistakes.
+CP_MODEL = "cpsam"     # SEGMENT_BACKEND="cellpose" only: WHICH cellpose model the picker
+                       # segments with — and therefore which model's mistakes the user
+                       # corrects. It is recorded in the manifest and stage 3 fine-tunes from
+                       # the SAME model by default, so the two cannot drift apart. "cpsam"
+                       # (cellpose 4) or any v3 zoo name ("nuclei", "cyto3", ...); the worker
+                       # re-execs into whichever env has it. Match it to the model you intend
+                       # to fine-tune: showing the user cpsam's errors and then training
+                       # `nuclei` throws away the whole point of letting them pick.
+BASE_CHECKPOINT = "auto"   # ROUND 2 AND LATER. "auto" = if this data has already been fine-tuned
+                       # once, start from THAT model instead of the stock one: the picker then
+                       # shows what the CURRENT model gets wrong, so the user spends their tiles
+                       # on the remaining errors instead of re-fixing what is already learned.
+                       # Stage 3 continues training from it and measures against it, so "did it
+                       # improve?" means "better than last round", not "better than stock".
+                       # None = always start from stock. A path = use that .pt.
 CHANNEL = None         # 2D grayscale / RGB input: leave None.
                        # 3D input (C,Y,X) or (Z,Y,X): REQUIRED — an int index, or "max" for a
                        # maximum projection. The script refuses to guess; training on the
@@ -326,17 +350,168 @@ def measure_tile_size(probe_segs, min_dim, target=None, floor=256, ceil=1024):
     return t, why
 
 
-def segment_field(predictor, segmenter, img, tile_shape):
+class MicroSamBackend:
+    """Stock micro_sam AIS. `segment(img, tile)` is the whole interface the picker needs."""
+
+    label = "micro_sam"
+
+    def __init__(self, model_type, checkpoint, device, is_tiled):
+        from micro_sam.automatic_segmentation import get_predictor_and_segmenter
+        self.predictor, self.segmenter = get_predictor_and_segmenter(
+            model_type=model_type, checkpoint=checkpoint, device=device,
+            segmentation_mode="ais", is_tiled=is_tiled,
+        )
+
+    def segment(self, img, tile_shape=None):
+        return segment_field(self.predictor, self.segmenter, img, tile_shape)
+
+    def close(self):
+        pass
+
+
+class CellposeBackend:
+    """Cellpose reached across the conda-env boundary by a resident subprocess.
+
+    cellpose and napari cannot share an interpreter here — `napari-mcp` has napari and
+    micro_sam but no cellpose, and `cellpose4` has cellpose but no napari, no skimage and no
+    imageio. The picker must run where napari is, so segmentation crosses as a subprocess over
+    TIFFs. The worker is kept ALIVE in `--serve` mode: cpsam takes ~10 s to load and the picker
+    segments a new field every time the user asks for one, so a process per field would make it
+    unusable.
+
+    Note what this backend does NOT do: tiling. cpsam has no fixed input resolution to fight, so
+    a field is segmented whole and `tile_shape` is accepted and ignored.
+    """
+
+    label = "cellpose"
+    WORKER = ("/app/skills/python/cellpose/"
+              "WORKFLOW_FINETUNE_CP_SEGMENT_WORKER.py")
+    PYTHON = "/opt/conda/envs/cellpose4/bin/python"
+
+    def __init__(self, checkpoint, work_dir, diameter=None, cp_model="cpsam"):
+        import subprocess
+        import tempfile
+
+        if not os.path.exists(self.WORKER):
+            raise SystemExit(f"Cellpose backend needs {self.WORKER}, which is missing.")
+        self._tmp = tempfile.mkdtemp(prefix="cpseg_", dir=work_dir)
+        setup = os.path.join(self._tmp, "setup.json")
+        with open(setup, "w") as f:
+            # A round-2 checkpoint wins over the stock name; otherwise the configured model.
+            json.dump({"pretrained_model": checkpoint or cp_model, "diameter": diameter}, f)
+        self.proc = subprocess.Popen(
+            [self.PYTHON, self.WORKER, "--serve", setup],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, bufsize=1,
+        )
+        ready = self._read_until("model_ready")
+        print(f"[prepare] cellpose worker up: {ready.get('pretrained')} "
+              f"({'GPU' if ready.get('gpu') else 'CPU'})")
+        self._n = 0
+
+    def _read_until(self, event):
+        while True:
+            line = self.proc.stdout.readline()
+            if not line:
+                raise SystemExit("The cellpose worker died before it was ready. Check that the "
+                                 "cellpose4 env exists and that a GPU/CPU torch is importable.")
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                continue
+            if msg.get("event") == event:
+                return msg
+
+    def segment(self, img, tile_shape=None):
+        self._n += 1
+        src = os.path.join(self._tmp, f"in_{self._n}.tif")
+        dst = os.path.join(self._tmp, f"out_{self._n}.tif")
+        tifffile.imwrite(src, img)
+        self.proc.stdin.write(json.dumps({"pairs": [[src, dst]]}) + "\n")
+        self.proc.stdin.flush()
+        self._read_until("summary")
+        out = tifffile.imread(dst) if os.path.exists(dst) else np.zeros(img.shape[:2], np.uint16)
+        for p in (src, dst):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        return np.asarray(out)
+
+    def close(self):
+        try:
+            self.proc.stdin.close()
+            self.proc.wait(timeout=10)
+        except Exception:
+            self.proc.kill()
+
+
+def build_backend(name, model_type, checkpoint, device, is_tiled, work_dir, cp_model="cpsam"):
+    if name == "cellpose":
+        return CellposeBackend(checkpoint, work_dir, cp_model=cp_model)
+    if name == "micro_sam":
+        return MicroSamBackend(model_type, checkpoint, device, is_tiled)
+    raise SystemExit(f'SEGMENT_BACKEND must be "micro_sam" or "cellpose", got {name!r}')
+
+
+def find_base_checkpoint(task_dir, model_type, setting="auto"):
+    """The fine-tuned model to build on, or None to start from stock.
+
+    Iterating matters more than any single round: round 1 teaches the obvious cases, and the
+    tiles worth annotating in round 2 are the ones the ROUND-1 model still gets wrong. Showing
+    the stock model's guess again wastes the user's time on errors that are already fixed.
+
+    "auto" looks in this task folder first, then in sibling folders (people run round 2 in a
+    new directory), taking the newest round whose stage 3 actually promoted a checkpoint. It
+    prints what it found: silently training on top of a different model than the user expects
+    is the failure this must never cause.
+    """
+    if setting is None:
+        return None
+    if setting != "auto":
+        if not os.path.exists(setting):
+            raise SystemExit(f"BASE_CHECKPOINT does not exist: {setting}")
+        return setting
+
+    cands = []
+    here = sorted(glob.glob(os.path.join(task_dir, "model", f"*_{model_type}.pt")))
+    cands += [(os.path.getmtime(p), p, task_dir) for p in here]
+    parent = os.path.dirname(os.path.abspath(task_dir))
+    for ev in glob.glob(os.path.join(parent, "*", "evaluation.json")):
+        if os.path.dirname(os.path.abspath(ev)) == os.path.abspath(task_dir):
+            continue
+        try:
+            with open(ev) as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        ckpt = data.get("recommended_checkpoint")
+        if ckpt and os.path.exists(ckpt) and data.get("model_type") == model_type:
+            cands.append((os.path.getmtime(ckpt), ckpt, os.path.dirname(ev)))
+    if not cands:
+        return None
+    _, best, where = max(cands)
+    print(f"[prepare] ROUND 2+: starting from the model fine-tuned in {where}\n"
+          f"          {best}\n"
+          f"          The picker will show what THAT model gets wrong, not the stock model.")
+    return best
+
+
+def segment_field(predictor, segmenter, img, tile_shape=None):
     """Stock segmentation of a whole field, tiled at `tile_shape` when the field is bigger.
 
     Same tiling rule as stage 4: SAM resizes whatever it is given to 1024 px, so a field fed
     whole shows its objects at a different size than a tile does, and the outlines the user is
     judging would not be the ones the model produces on the tiles.
+
+    `tile_shape=None` means NEVER tile — that is the per-tile pre-segmentation, where the crop
+    is already at the scale the model will be trained and applied at and tiling it again would
+    only add seams.
     """
     from micro_sam.automatic_segmentation import automatic_instance_segmentation
     h, w = img.shape[:2]
     kw = {}
-    if max(h, w) > tile_shape:
+    if tile_shape is not None and max(h, w) > tile_shape:
         kw = dict(tile_shape=(tile_shape, tile_shape), halo=(max(tile_shape // 8, 32),) * 2)
     return np.asarray(automatic_instance_segmentation(
         predictor=predictor, segmenter=segmenter, input_path=img, ndim=2,
@@ -829,7 +1004,9 @@ def main():
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model_type = MODEL_TYPE or ("vit_b_lm" if device == "cuda" else "vit_t_lm")
-    print(f"[prepare] {len(paths)} image(s) in {len(groups)} group(s); {model_type} on {device}")
+    base_ckpt = find_base_checkpoint(TASK_DIR, model_type, BASE_CHECKPOINT)
+    print(f"[prepare] {len(paths)} image(s) in {len(groups)} group(s); {model_type} on {device}"
+          + ("  [continuing from a fine-tuned checkpoint]" if base_ckpt else ""))
 
     # --- 2. probe the data, then settle on a tile size ---------------------------------
     shapes, probes = {}, {}
@@ -848,23 +1025,25 @@ def main():
         print("[prepare] no GPU: the picker will show the images without the model's current "
               "segmentation (it would take minutes per field on CPU).")
 
-    predictor = segmenter = None
+    backend = None
     tile_why = f"TILE_SIZE={TILE_SIZE} from the config"
     if TILE_SIZE is None or show_preseg:
         # The model is needed for the probe segmentation, and the probe answers two questions
         # at once: how big a tile should be, and what the picker shows the user.
-        from micro_sam.automatic_segmentation import get_predictor_and_segmenter
-        print(f"[prepare] building {model_type} on {device} ...")
-        predictor, segmenter = get_predictor_and_segmenter(
-            model_type=model_type, device=device, segmentation_mode="ais",
-            is_tiled=max(min(s) for s in shapes.values()) > 512,
+        print(f"[prepare] building "
+              f"{SEGMENT_BACKEND + ' (' + CP_MODEL + ')' if SEGMENT_BACKEND == 'cellpose' else SEGMENT_BACKEND}"
+              f"{' + fine-tuned weights' if base_ckpt else ''} on {device} ...")
+        backend = build_backend(
+            SEGMENT_BACKEND, model_type, base_ckpt, device,
+            is_tiled=max(min(s) for s in shapes.values()) > 512, work_dir=TASK_DIR,
+            cp_model=CP_MODEL,
         )
         probe_tile = int(min(512, min_dim))
         print(f"[prepare] segmenting one field per group to measure the data "
               f"({len(probes)} field(s)) ...")
         probe_segs, preseg_cache = [], {}
         for p, img in probes.items():
-            lab = segment_field(predictor, segmenter, img, probe_tile)
+            lab = backend.segment(img, probe_tile)
             preseg_cache[p] = lab
             probe_segs.append((lab, int(np.prod(as_gray(img).shape))))
             print(f"  {os.path.basename(p)[:44]:<46} {int(lab.max()):>4} objects")
@@ -886,9 +1065,8 @@ def main():
     if PICK_MODE == "interactive":
         selected = pick_tiles_interactive(
             groups, tile, n_tiles,
-            segment=((lambda img: segment_field(predictor, segmenter, img,
-                                                int(min(512, min_dim))))
-                     if show_preseg and predictor is not None else None),
+            segment=((lambda img: backend.segment(img, int(min(512, min_dim))))
+                     if show_preseg and backend is not None else None),
             preseg_cache=preseg_cache,
         )
         if not selected:
@@ -958,22 +1136,20 @@ def main():
         return crop
 
     # --- 4. pre-segment each tile with the stock model ----------------------------------
-    # A fresh, UNTILED segmenter: these are single tiles, already at the scale the model will
-    # be trained and applied at, so tiling them again would only add seams.
-    from micro_sam.automatic_segmentation import (
-        get_predictor_and_segmenter, automatic_instance_segmentation,
-    )
-    print(f"[prepare] pre-segmenting {len(selected)} tile(s) with {model_type} on {device} ...")
-    predictor, segmenter = get_predictor_and_segmenter(
-        model_type=model_type, device=device, segmentation_mode="ais",
-    )
+    print(f"[prepare] pre-segmenting {len(selected)} tile(s) with "
+          f"{'the ROUND-1 fine-tuned ' if base_ckpt else ''}"
+          f"{SEGMENT_BACKEND} on {device} ...")
+    # A FRESH, UNTILED backend: these are single tiles, already at the scale the model will be
+    # trained and applied at, so tiling them again would only add seams.
+    if backend is not None:
+        backend.close()
+    backend = build_backend(SEGMENT_BACKEND, model_type, base_ckpt, device,
+                            is_tiled=False, work_dir=TASK_DIR, cp_model=CP_MODEL)
 
     entries = []
     for i, c in enumerate(selected):
         crop = as_mode(images[c["path"]][c["y0"]:c["y0"] + tile, c["x0"]:c["x0"] + tile])
-        preseg = automatic_instance_segmentation(
-            predictor=predictor, segmenter=segmenter, input_path=crop, ndim=2, verbose=False,
-        ).astype(np.uint32)
+        preseg = np.asarray(backend.segment(crop)).astype(np.uint32)
 
         stem = TILE_STEM.format(i)
         tile_path = os.path.join(dirs["tiles"], stem + ".tif")
@@ -1041,6 +1217,16 @@ def main():
         "created": datetime.datetime.now().isoformat(timespec="seconds"),
         "input_dir": INPUT_DIR, "task_dir": TASK_DIR, "dirs": dirs,
         "model_type": model_type, "device_used": device,
+        # WHICH model the user was shown and corrected. Stage 3 reads it and says so if it is
+        # asked to train a different one — annotations are portable, but "the user fixed THIS
+        # model's mistakes" is the claim that makes an active-learning round worth doing.
+        "segment_backend": SEGMENT_BACKEND,
+        # Which cellpose model the user was actually shown. Stage 3 reads this as its default
+        # CP_MODEL so "corrected model" and "fine-tuned model" are the same one by construction.
+        "cp_model": CP_MODEL if SEGMENT_BACKEND == "cellpose" else None,
+        # None on round 1. On later rounds this is the model the user was shown and corrected,
+        # and stage 3 both continues from it and measures against it.
+        "base_checkpoint": base_ckpt,
         "tile_size": tile, "channel": CHANNEL, "seed": SEED,
         "pick_mode": PICK_MODE, "group_regex": GROUP_REGEX, "tile_mode": tile_mode,
         "source_size_spread": round(float(spread), 2),
@@ -1052,6 +1238,9 @@ def main():
         "total_preseg_objects": total, "median_preseg_objects_per_tile": int(median),
         "tiles": entries,
     }
+    if backend is not None:
+        backend.close()          # a resident cellpose worker must not outlive this script
+
     with open(os.path.join(TASK_DIR, "manifest.json"), "w") as f:
         json.dump(manifest, f, indent=2)
 
@@ -1111,7 +1300,9 @@ which is the one thing that is easy to get wrong.
 3. Press **S** → the outline appears (in `current_object`).
    - grabbed the neighbour too, or too much background? Press **T**, click on the part it
      should *not* include, press **S** again, then press **T** to go back.
-   - still wrong? Press **Shift+C** to clear and start that object again.
+   - still wrong? **Delete that one outline** (DELETE objects mode, or the **D** key with
+     the mouse over it) and add it again. Do NOT reach for Shift+C / *Clear Annotations* —
+     see the note under the key table.
 4. Press **C** → the object turns into a new colour and joins `committed_objects`. Done.
 
 > **Pressed C and nothing happened?** The thing you clicked is already outlined. The tool
@@ -1152,6 +1343,14 @@ If a square genuinely has nothing in it, N asks *"Nothing is segmented yet. Do y
 continue to the next image?"* — click **OK**. That is the tool checking you did not forget the
 tile, not an error.
 
+## Going back
+
+Pressed N too early, or spotted a mistake on the tile before? Click **◀ BACK to previous tile**
+(or press **B**). It reopens the previous square with your corrections on it, exactly as you
+left them — it is not a fresh start. The square you are leaving is saved first, so you never
+lose work by going back. Press **N** when you are done there and it jumps straight back to the
+first square you have not finished yet.
+
 Everything is saved tile by tile, so you can stop any time and pick up where you left off:
 already-finished tiles are skipped when the annotator is restarted.
 
@@ -1160,13 +1359,19 @@ already-finished tiles are skipped when the annotator is restarted.
 | key | action |
 |---|---|
 | **S** | segment from your click |
+| **U** | undo that segment and start the object again |
 | **T** | switch the click between *include* (positive) and *exclude* (negative) |
 | **C** | commit the object you just made |
-| **Shift+C** | clear the object you are working on and start it again |
+| **B** | go back to the previous tile |
 | **N** | save this tile and go to the next one |
 | **D** | delete the object under the mouse pointer |
-| **Ctrl+Z** | undo |
+| **U** or **Ctrl+Z** | throw away the outline you are building (or put back the object you
+just deleted) |
 | scroll / drag | zoom / pan |
+
+> **Do not use Shift+C / *Clear Annotations*.** It is listed in micro_sam's own menus, but in
+> this version it can fail instead of clearing. To start an object over, delete that one
+> outline (**D**, or DELETE objects mode) and add it again — that works in every state.
 """
 
 

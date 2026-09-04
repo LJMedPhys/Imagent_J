@@ -97,6 +97,88 @@ def ensure_model_cache(fallback_dir):
                     pass
     return fallback_dir
 
+def series_nav(viewer):
+    """Reach micro_sam's series-navigation state so we can move BACKWARDS through the tiles.
+
+    `image_series_annotator` keeps the current tile index in a closure variable
+    (`next_image_id`) of its own `next_image()` callback, and the only move it offers is
+    "save, then advance". With `skip_segmented=True` that advance SKIPS every tile that is
+    already annotated — which is exactly where Back needs to go — so Back cannot be built on
+    top of it. We drive the same objects instead: micro_sam's own predictor, annotator and
+    embedding paths, all of which are in that closure.
+
+    Returns {name: cell} for `next_image()`'s free variables, or None if micro_sam's
+    internals have moved. Callers must treat None as "hide the Back button" and carry on:
+    losing Back must never cost the user their annotation session.
+    """
+    for kb, bound in getattr(viewer, "keymap", {}).items():
+        text = kb.to_text() if hasattr(kb, "to_text") else str(kb)
+        if text.lower() != "n":
+            continue
+        for cell in (getattr(bound, "__closure__", None) or ()):
+            try:
+                cand = cell.cell_contents
+            except ValueError:               # empty cell
+                continue
+            inner = getattr(cand, "_function", cand)   # magicgui FunctionGui -> the function
+            code = getattr(inner, "__code__", None)
+            if code is not None and "next_image_id" in code.co_freevars:
+                return dict(zip(code.co_freevars, inner.__closure__))
+    return None
+
+
+def goto_tile(viewer, nav, target):
+    """Move to tile `target`, saving the current tile's work first. True if it moved.
+
+    Replicates what micro_sam's `next_image()` does after it increments — new image into the
+    image layer, embeddings re-initialised, `_update_image` with the segmentation to show —
+    but for an ARBITRARY index, and it loads the tile's already-saved annotation rather than
+    the stock pre-segmentation, so going back shows the user their own corrections.
+    """
+    import imageio.v3 as imageio
+
+    cur = nav["next_image_id"].cell_contents
+    images = nav["images"].cell_contents
+    if not (0 <= target < len(images)) or target == cur:
+        return False
+    save_path = nav["_get_save_path"].cell_contents
+
+    # 1. Never lose the tile being left. micro_sam only writes on N; Back must write too.
+    seg = np.asarray(viewer.layers["committed_objects"].data)
+    if seg.max() > 0:
+        imageio.imwrite(save_path(images[cur], cur), seg, compression="zlib")
+
+    # 2. Move the counter that micro_sam's own N reads, or N would save the wrong file.
+    nav["next_image_id"].cell_contents = target
+
+    # 3. What to show: the user's saved work for that tile, else the stock pre-segmentation.
+    dst = save_path(images[target], target)
+    if os.path.exists(dst):
+        result = imageio.imread(dst)
+    else:
+        init = nav["initial_segmentations"].cell_contents
+        result = None if init is None else (
+            init[target] if isinstance(init[target], np.ndarray) else imageio.imread(init[target]))
+
+    image = imageio.imread(images[target])
+    viewer.layers["image"].data = image
+    state = nav["state"].cell_contents
+    if getattr(state, "amg", None) is not None:
+        state.amg.clear_state()
+    state.initialize_predictor(
+        image, model_type=nav["model_type"].cell_contents, ndim=2,
+        save_path=nav["embedding_paths"].cell_contents[target],
+        tile_shape=nav["tile_shape"].cell_contents, halo=nav["halo"].cell_contents,
+        predictor=nav["predictor"].cell_contents, decoder=nav["decoder"].cell_contents,
+        precompute_amg_state=nav["precompute_amg_state"].cell_contents,
+        device=nav["device"].cell_contents, skip_load=False,
+    )
+    state.image_shape = image.shape[:2] if (image.ndim == 3 and image.shape[-1] in (3, 4)) \
+        else image.shape
+    nav["annotator"].cell_contents._update_image(segmentation_result=result)
+    return True
+
+
 def build_helper(viewer, manifest):
     """Dock a two-button panel: ADD (point prompts) / DELETE (fill with 0).
 
@@ -128,15 +210,54 @@ def build_helper(viewer, manifest):
         b.setStyleSheet("font-size:14px; font-weight:bold;")
         lay.addWidget(b)
 
+    btn_undo = QtWidgets.QPushButton("↩  UNDO the outline I am building")
+    btn_undo.setMinimumHeight(34)
+    btn_undo.setStyleSheet("font-size:13px;")
+    btn_undo.setToolTip("Throw away the outline S just produced, and the clicks that made it.")
+    lay.addWidget(btn_undo)
+
     hint = QtWidgets.QLabel()
     hint.setWordWrap(True)
     hint.setStyleSheet("padding:6px; font-size:12px;")
     lay.addWidget(hint)
 
+    nav = series_nav(viewer)          # None = micro_sam moved; Back is then simply absent
+
+    btn_prev = QtWidgets.QPushButton("◀  BACK to previous tile")
+    btn_prev.setMinimumHeight(34)
+    btn_prev.setStyleSheet("font-size:13px;")
+    btn_prev.setToolTip("Save this tile, then reopen the previous one with your corrections on it.")
+    btn_prev.setVisible(nav is not None)
+    lay.addWidget(btn_prev)
+
     btn_next = QtWidgets.QPushButton("✓  TILE DONE → NEXT TILE")
     btn_next.setMinimumHeight(44)
     btn_next.setStyleSheet("font-size:14px; font-weight:bold; background:#1f5fa8; color:white;")
     lay.addWidget(btn_next)
+
+    def press_prev():
+        """Go one tile back. Saves the current tile first, so nothing is ever lost.
+
+        After correcting an old tile, N behaves as it always does: it saves and jumps to the
+        first tile that still has no annotation — i.e. straight back to where the user was.
+        """
+        if nav is None:
+            return
+        cur = nav["next_image_id"].cell_contents
+        if cur <= 0:
+            hint.setText("<b>This is the first tile — there is nothing before it.</b>")
+            return
+        try:
+            if goto_tile(viewer, nav, cur - 1):
+                set_add()
+                hint.setText(
+                    f"Back on tile <b>{cur}</b> of {n_total}, with your saved corrections on it.<br>"
+                    f"<i>Press N when done — it jumps forward to the first tile you have not "
+                    f"annotated yet.</i>")
+        except Exception as exc:
+            hint.setText(f"<b>Could not go back:</b> {exc}")
+
+    btn_prev.clicked.connect(press_prev)
 
     def press_next():
         """Fire micro_sam's own 'n' binding — the ONLY thing that saves the tile."""
@@ -155,9 +276,9 @@ def build_helper(viewer, manifest):
         "<hr><b>S</b> segment from your click<br>"
         "<b>T</b> switch click include ↔ exclude<br>"
         "<b>C</b> commit the object<br>"
-        "<b>Shift+C</b> start this object over<br>"
         "<b>D</b> delete the object under the mouse<br>"
-        "<b>Ctrl+Z</b> undo<br><br>"
+        "<b>U</b> or <b>Ctrl+Z</b> undo the outline you are building<br><br>"
+        "<b>B</b> — back to the previous tile<br>"
         "<b>N</b> — save this tile, go to the next<br>"
         "<span style='color:#d33;'><b>Press N on every tile,<br>including the last one.</b></span>"
         "<br><br><i>On a tile with nothing outlined, N asks \u201cNothing is segmented yet\u201d "
@@ -171,6 +292,9 @@ def build_helper(viewer, manifest):
         return viewer.layers["committed_objects"] if "committed_objects" in viewer.layers else None
 
     def set_add():
+        if "point_prompts" not in viewer.layers:   # same failure as Shift+C, same explanation
+            prompt_layer_lost()
+            return
         pts = viewer.layers["point_prompts"]
         viewer.layers.selection.active = pts
         pts.mode = "add"
@@ -234,6 +358,101 @@ def build_helper(viewer, manifest):
                      f"{' (green)' if lbl == 'positive' else ' (red) — click the part that should NOT be in the object'}"
                      f"<br>then press <b>S</b> again. Press <b>T</b> to switch back.")
 
+    def undo_last():
+        """Throw away the in-progress outline, or put back the object just deleted.
+
+        Ctrl+Z cannot do this. `S` writes its result into the `current_object` layer
+        PROGRAMMATICALLY, and napari's undo history only records interactive edits, so there is
+        nothing for it to revert — measured on micro_sam 1.8.2: after S the layer still holds
+        every pixel it wrote, and Ctrl+Z is not even in the viewer keymap (napari handles it as
+        an app-level Qt shortcut on the selected layer). So the honest fix is to implement the
+        undo the user actually wants rather than to keep advertising a key that does nothing.
+        """
+        cur = viewer.layers["current_object"] if "current_object" in viewer.layers else None
+        if cur is not None and int(np.count_nonzero(np.asarray(cur.data))):
+            cur.data = np.zeros_like(np.asarray(cur.data))
+            cur.refresh()
+            if "point_prompts" in viewer.layers:
+                pts = viewer.layers["point_prompts"]
+                try:
+                    pts.selected_data = set(range(len(pts.data)))
+                    pts.remove_selected()
+                except Exception:
+                    pts.data = []
+                pts.refresh()
+            hint.setText("Dropped the outline you were building. Click the object again and "
+                         "press <b>S</b>.")
+            return
+        # Nothing in progress: the last thing that changed was a DELETE on committed_objects.
+        lyr = committed()
+        try:
+            if lyr is not None and hasattr(lyr, "undo"):
+                lyr.undo()
+                hint.setText("Put back the object you deleted.")
+                return
+        except Exception:
+            pass
+        hint.setText("Nothing to undo. (This undoes the outline you are building, or the last "
+                     "object you deleted — not a whole tile.)")
+
+    btn_undo.clicked.connect(undo_last)
+
+    def prompts_alive():
+        return "point_prompts" in viewer.layers
+
+    def prompt_layer_lost():
+        """Say what happened and how to recover, once, in language that fits the panel.
+
+        Everything the annotator does with clicks goes through the `point_prompts` layer — S,
+        C and the ADD button alike — so once it is gone the session cannot be repaired from
+        here: micro_sam binds its segmentation callback to that layer OBJECT, and a replacement
+        layer would restore the buttons while leaving S silently dead, which is worse than
+        saying so. Recovery is cheap and lossless for finished tiles: close the window and
+        re-run stage 2, which resumes at the first tile with no annotation saved.
+        """
+        hint.setText(
+            "<b style='color:#d33;'>The prompt layer is gone.</b><br>"
+            "Clicking, <b>S</b> and <b>C</b> cannot work without it. Nothing you already "
+            "saved is lost — <b>close this window and run stage 2 again</b>; it picks up at "
+            "the first tile you have not finished.<br><br>"
+            "<i>(It disappears if 'point_prompts' gets deleted in the layer list on the left.)</i>")
+
+    # micro_sam binds Shift+C to its Clear Annotations widget, which does
+    #     viewer.layers["point_prompts"].data = []
+    # with no guard. If that layer has been deleted, the binding raises
+    #     KeyError: "'point_prompts' is not in list"
+    # out of a Qt callback — reproduced in this container on micro_sam 1.8.2. Re-binding AFTER
+    # micro_sam (last binding wins) keeps an accidental Shift+C from taking the session down.
+    # It is deliberately NOT advertised in the key list: "start this object over" is served by
+    # deleting the one bad outline and adding it again, which works in every state.
+    @viewer.bind_key("Shift-C", overwrite=True)
+    def _safe_clear(_v):
+        if not prompts_alive():
+            prompt_layer_lost()
+            return
+        try:
+            from micro_sam.sam_annotator import util as _u
+            _u.clear_annotations(viewer)
+        except Exception as exc:
+            hint.setText(f"<b>Clear did not work ({type(exc).__name__}).</b> Delete the one "
+                         f"bad outline with <b>DELETE objects</b> (or <b>D</b>) and add it "
+                         f"again — that works in every state.")
+
+    # `U` is the one that is guaranteed to arrive: napari routes Ctrl+Z through its own Qt
+    # action on the selected layer, so a viewer keybinding for it may never fire. Both are
+    # bound so whichever the user reaches for does the same, working thing.
+    @viewer.bind_key("u", overwrite=True)
+    def _undo_u(_v):
+        undo_last()
+
+    @viewer.bind_key("Control-Z", overwrite=True)
+    def _undo_ctrl_z(_v):
+        undo_last()
+
+    @viewer.bind_key("b", overwrite=True)
+    def _back_one_tile(_v):
+        press_prev()
+
     @viewer.bind_key("d", overwrite=True)
     def _delete_under_cursor(_v):
         lyr = committed()
@@ -260,7 +479,13 @@ def build_helper(viewer, manifest):
             done = len(glob.glob(os.path.join(ann_dir, "*.tif")))
             lyr = committed()
             n_obj = int(np.count_nonzero(np.unique(lyr.data))) if lyr is not None else 0
-            head.setText(f"Tile {min(done + 1, n_total)} of {n_total}")
+            # The saved-file COUNT is not the position once Back exists — after stepping back
+            # the count is unchanged while the tile on screen is an earlier one. Ask
+            # micro_sam where it actually is; fall back to the count only if Back is absent.
+            pos = (nav["next_image_id"].cell_contents + 1) if nav is not None \
+                else min(done + 1, n_total)
+            head.setText(f"Tile {pos} of {n_total}")
+            btn_prev.setEnabled(nav is not None and nav["next_image_id"].cell_contents > 0)
             sub.setText(f"<b>{n_obj}</b> objects outlined on this tile &nbsp;|&nbsp; "
                         f"{done} tile(s) saved")
             if done != state["done"]:

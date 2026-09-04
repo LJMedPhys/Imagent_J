@@ -20,6 +20,12 @@ so after stage 1 the only thing to set is `TASK_DIR`.
 
 ---
 
+> **Fine-tuning CELLPOSE instead?** Stages 1 and 2 are the same scripts — set
+> `SEGMENT_BACKEND="cellpose"` in stage 1 so the user corrects Cellpose's mistakes, then use
+> `skills/python/cellpose/WORKFLOW_FINETUNE_CP_3_TRAIN.py` and `_4_APPLY.py` for
+> training and inference. See `skills/python/cellpose/FINETUNING.md`. Pick the backend
+> by which model is already closest on the data; run both stock first and look at the overlays.
+
 ## The idea: the user never annotates a whole image
 
 micro_sam's automatic instance segmentation (AIS) decoder — the thing that lets you segment a
@@ -176,10 +182,16 @@ table on exit; relay that.
 > - **✖ DELETE objects** — click on anything outlined that shouldn't be.
 >
 > To fix a bad outline: **delete it, then add it again.** That's the whole workflow.
+> Don't use *Clear Annotations* (Shift+C) — deleting the one bad outline always works.
 >
 > When a square looks right, press **N** (or the blue *TILE DONE* button). **Press N on the last
 > square too — N is what saves your work.** You can stop any time; finished squares are kept and
 > restarting picks up where you left off.
+>
+> Moved on too early? **◀ BACK to previous tile** (or the **B** key) reopens the square before
+> this one with your corrections still on it. It saves the square you are leaving first, so
+> nothing is lost either way. When you press **N** again it jumps straight back to the first
+> square you have not finished.
 >
 > Full written instructions: `<TASK_DIR>/ANNOTATION_INSTRUCTIONS.md`
 
@@ -286,11 +298,29 @@ CSV and overlay previews; the masks go straight into a `python_data_analyst` mea
     worth keeping. Stage 3 therefore scores `best.pt` and `latest.pt` (and any `epoch-*.pt` kept
     via `SAVE_EVERY_KTH_EPOCH`) by real mSA on the held-out tiles and keeps the winner. Never
     export `best.pt` blindly.
-13. **Do not fine-tune from a fine-tuned checkpoint by accident.** Stage 3 always starts from
-    the stock `model_type` in the manifest. To iterate — more tiles on top of an existing model
-    — pass `checkpoint_path=<exported .pt>` to `train_sam`, and re-measure against the model you
-    started from, not against stock.
-14. **An automatic content score cannot tell a cell from debris — this is why the user picks.**
+13. **A second round must build on the first, and be measured against it.** This is now wired,
+    not manual: stage 1's `BASE_CHECKPOINT="auto"` finds the checkpoint a previous round
+    promoted (in this task folder, or in a sibling folder — people run round 2 in a new
+    directory) and records it in the manifest as `base_checkpoint`. Stage 1 then shows the user
+    what **that** model gets wrong, so their tiles go on the remaining errors instead of
+    re-fixing what is already learned; stage 3 passes it to `train_sam(checkpoint_path=...)`
+    and — the part that is easy to get wrong — makes it the BASELINE. Scoring round 2 against
+    stock would credit it with round 1's gain and call a regression a win. Two consequences
+    worth knowing: a round whose `recommended_checkpoint` is `null` is ignored (stage 3
+    measured it as no better, so building on it would carry a regression forward), and when a
+    round loses, stage 4 keeps the PREVIOUS round's model rather than falling back to stock.
+14. **Shift+C / "Clear Annotations" can take the whole session down.** micro_sam's binding
+    calls `clear_annotations()`, which does `viewer.layers["point_prompts"].data = []` with no
+    guard; if that layer has been removed (it is deletable from napari's own layer list) the
+    binding raises `KeyError: "'point_prompts' is not in list"` out of a Qt callback.
+    Reproduced on micro_sam 1.8.2. Stage 2 now re-binds Shift+C after micro_sam so an
+    accidental press explains itself instead of crashing, and the ADD button is guarded the
+    same way — but the prompt layer cannot be rebuilt from outside (micro_sam binds its
+    segmentation callback to that layer OBJECT, so a replacement would restore the buttons
+    while leaving `S` silently dead). If it happens: close the window and re-run stage 2, which
+    resumes at the first tile with no annotation saved. The instructions no longer mention
+    Shift+C at all — deleting the one bad outline works in every state.
+15. **An automatic content score cannot tell a cell from debris — this is why the user picks.**
     Measured on a real May-Grünwald neutrophil slide: the tile the blob-count heuristic ranked
     *highest* (score 132, 78 pre-segmentation objects) was a field of stain precipitate with
     **zero cells** in it; another was out-of-focus haze with one object. Of ten auto-picked
@@ -299,21 +329,21 @@ CSV and overlay previews; the masks go straight into a `python_data_analyst` mea
     square" — and pre-segmentation object count does not save you either, because the stock
     model segments the specks too. `PICK_MODE="interactive"` exists for this. If you ever run
     `"auto"`, look at `previews/`.
-15. **Otsu picks the wrong side of the histogram on brightfield.** `sm > thr` means "objects are
+16. **Otsu picks the wrong side of the histogram on brightfield.** `sm > thr` means "objects are
     bright", which is true for fluorescence and false for every brightfield / histology stain,
     where it scores the *background*. `foreground_mask()` takes whichever side covers less of
     the frame, since objects are the minority class in both modalities. Only affects `"auto"`.
-16. **Microscope exports are `.TIF`, and `glob("*.tif")` does not match them.** On a
+17. **Microscope exports are `.TIF`, and `glob("*.tif")` does not match them.** On a
     case-sensitive filesystem the run dies with "No images matching (...)" pointing at a folder
     that is visibly full of images. Stages 1 and 4 match extensions case-insensitively; keep it
     that way if you write your own loop.
-17. **The micro_sam model cache can be unwritable, and the traceback blames pooch.** In a
+18. **The micro_sam model cache can be unwritable, and the traceback blames pooch.** In a
     container whose `/home` is a named volume older than the image, `~/.cache/micro_sam`
     survives as an empty root-owned directory: `MICROSAM_CACHEDIR` points at it, and every
     model load dies with `PermissionError: .../micro_sam/models`. All four stages call
     `ensure_model_cache()` first, which probes the directory for real and falls back to
     `<TASK_DIR>/.micro_sam_cache`. `docker-entrypoint.sh` does the same at container start.
-18. **An interactive stage must keep talking, or the watchdog kills it.** The run watchdog
+19. **An interactive stage must keep talking, or the watchdog kills it.** The run watchdog
     ends a script that prints nothing for 180 s, and stages 1 and 2 are silent by nature while
     a person works: a real picker session was killed at 52 minutes — *"PICK_MODE=interactive
     has the script blocked in a napari GUI event loop ... 52.5 min with zero interaction ...
@@ -321,7 +351,7 @@ CSV and overlay previews; the masks go straight into a `python_data_analyst` mea
     stages now print a heartbeat every 45 s saying how far the human has got and that the wait
     is intended. If you write your own interactive script, do the same, and `flush=True`:
     stdout is block-buffered to a pipe, so unflushed prints do not count as output.
-19. **All the tiles must come from images of the SAME size.** A fixed tile size cut from a
+20. **All the tiles must come from images of the SAME size.** A fixed tile size cut from a
     512 px field and from a 2048 px field shows the same object 4x apart, and SAM resizes both
     to 1024 regardless — so the training set contains the same structure at four magnifications
     and the model learns none of them. Measured on OrgaSegment, which mixes 512/1024/2048 px
@@ -330,7 +360,7 @@ CSV and overlay previews; the masks go straight into a `python_data_analyst` mea
     cut from are 2x or more apart (`source_size_spread` in the manifest); point `INPUT_DIR` at
     one size class before anyone annotates. This is the same scale argument as pitfall 1, one
     level up: pitfall 1 is train-vs-inference, this is tile-vs-tile.
-20. **You cannot split a tight cluster with the one-click workflow — do not plan a run
+21. **You cannot split a tight cluster with the one-click workflow — do not plan a run
     around it.** Measured on packed brightfield organoids: a single positive click inside a
     lobe returns the WHOLE clump (10 011 / 15 199 / 10 507 px against lobes of 1 000-1 900 px,
     IoU 0.09-0.17 with the true lobe), and once that clump is committed every further click
@@ -341,13 +371,13 @@ CSV and overlay previews; the masks go straight into a `python_data_analyst` mea
     objects that are separable to begin with. If the correction the user needs IS "split these
     touching objects", say so before they annotate: they will need a different tool for the
     labels (or the object classifier route in SKILL.md), not this one.
-21. **A folder that mixes grayscale and RGB files silently breaks the annotator.** The series
+22. **A folder that mixes grayscale and RGB files silently breaks the annotator.** The series
     annotator shows every tile in ONE napari image layer, so the first `(512,512,3)` tile after
     a `(512,512)` one is read as a 512-SLICE STACK: the canvas goes black, the committed masks
     float on nothing, and a dimension slider appears at the bottom. No error is raised. Stage 1
     now writes one colour mode for the whole task (`tile_mode` in the manifest) — RGB if any
     source has colour. Check that field if an annotator session ever looks like this.
-22. **A napari window launched from `python_data_analyst` can die on a Qt plugin mismatch.**
+23. **A napari window launched from `python_data_analyst` can die on a Qt plugin mismatch.**
     Importing cv2 in the agent's own env sets `QT_QPA_PLATFORM_PLUGIN_PATH` to *its* bundled Qt
     plugins, children inherit it, and the `napari-mcp` interpreter (a different Python and Qt
     build) then aborts with *Could not load the Qt platform plugin "xcb" ... even though it was
