@@ -333,10 +333,18 @@ def build_helper(viewer, manifest):
         Left in the Shapes layer the trace is worth only its bounding box — that is all
         micro_sam ever does with a shape. Rasterised into current_object it is a real mask:
         C commits it as drawn, and S can hand it to SAM as a coarse-mask prompt.
+
+        Called from the S and C handlers, and NOT from a timer. napari builds a polygon in
+        `layer.data` as each vertex is clicked, so a shape exists from the first click and
+        looks finished to anything watching the data. A timer that consumed it wiped the
+        half-drawn outline on every click — the line appeared and vanished, and the polygon
+        could never be closed.
         """
         from skimage.draw import polygon as _rasterise
         shp = viewer.layers["prompts"]
         cur = viewer.layers["current_object"]
+        if getattr(shp, "_is_creating", False):     # vertices still being placed
+            return False
         traces = [np.asarray(s) for s in shp.data]
         if not traces or cur.data.ndim != 2:
             return False
@@ -372,28 +380,42 @@ def build_helper(viewer, manifest):
                          "<b>C</b> commits, <b>Shift+C</b> starts this object over.")
         return True
 
-    # micro_sam owns "s". Keep its handler and fall through to it whenever we are not in
-    # DRAW mode with something traced, so ADD behaves exactly as it did before.
-    _stock_s = None
-    for _kb, _fn in list(viewer.keymap.items()):
-        _text = _kb.to_text() if hasattr(_kb, "to_text") else str(_kb)
-        if _text.lower() == "s":
-            _stock_s = _fn
-            break
-    if _stock_s is None:                            # ADD's S would go dead — say so loudly
-        print("[annotate] WARNING: micro_sam's 's' binding was not found on the viewer "
-              "keymap; ADD may not segment. DRAW is unaffected.", flush=True)
+    # micro_sam owns "s" and "c". Keep both handlers and fall through to them whenever we are
+    # not in DRAW mode with a finished trace, so ADD behaves exactly as it did before.
+    def stock_key(key):
+        for kb, fn in list(viewer.keymap.items()):
+            text = kb.to_text() if hasattr(kb, "to_text") else str(kb)
+            if text.lower() == key:
+                return fn
+        print(f"[annotate] WARNING: micro_sam's '{key}' binding is not on the viewer keymap; "
+              f"ADD may not work as documented.", flush=True)
+        return None
+
+    _stock_s, _stock_c = stock_key("s"), stock_key("c")
+
+    def fire(fn, v):
+        if fn is None:
+            return
+        res = fn(v)
+        if hasattr(res, "__next__"):                # press/release generator bindings
+            next(res, None)
 
     @viewer.bind_key("s", overwrite=True)
     def _segment_or_refine(_v):
         if mode_state["draw"]:
-            take_polygon()                          # the 700 ms tick may not have run yet
+            take_polygon()
             if refine():
                 return
-        if _stock_s is not None:
-            res = _stock_s(_v)
-            if hasattr(res, "__next__"):            # press/release generator bindings
-                next(res, None)
+        fire(_stock_s, _v)
+
+    @viewer.bind_key("c", overwrite=True)
+    def _commit_trace_or_object(_v):
+        # C on a trace the user never refined has to commit the trace itself. Nothing else
+        # picks it up now that the timer does not, and micro_sam's own C would commit the
+        # empty current_object and silently drop the outline.
+        if mode_state["draw"]:
+            take_polygon()
+        fire(_stock_c, _v)
 
     # T (include <-> exclude) is broken in stock micro_sam 1.8.2 for the most common case:
     # committing with C deletes the point prompts but napari keeps their indices in
@@ -443,11 +465,6 @@ def build_helper(viewer, manifest):
             done = len(glob.glob(os.path.join(ann_dir, "*.tif")))
             lyr = committed()
             n_obj = int(np.count_nonzero(np.unique(lyr.data))) if lyr is not None else 0
-            # Pick a trace up as soon as it is closed, so the pending object appears without
-            # the user having to press anything first.
-            if mode_state["draw"] and take_polygon():
-                hint.setText("Outline captured. <b>S</b> lets SAM tidy it to the real edge, "
-                             "<b>C</b> commits it exactly as you drew it.")
             head.setText(f"Tile {min(done + 1, n_total)} of {n_total}")
             sub.setText(f"<b>{n_obj}</b> objects outlined on this tile &nbsp;|&nbsp; "
                         f"{done} tile(s) saved")
