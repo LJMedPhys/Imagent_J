@@ -173,7 +173,8 @@ table on exit; relay that.
 >
 > Use the three big buttons in the **ImagentJ — Annotation Helper** panel on the right:
 > - **➕ ADD objects** — click the middle of a missed object, press **S**, then press **C**.
-> - **✏ DRAW outline** — click round the object, double-click to close. No S, no C.
+> - **✏ DRAW outline** — trace round the object, double-click to close, **S** to let the model
+>   tidy your trace onto the real edge, **C** to keep it. **C** without **S** keeps it as drawn.
 > - **✖ DELETE objects** — click on anything outlined that shouldn't be.
 >
 > To fix a bad outline: **delete it, then add it again.** If ADD keeps getting the same object
@@ -342,11 +343,16 @@ CSV and overlay previews; the masks go straight into a `python_data_analyst` mea
     them collapsed the mask to 4-362 px (IoU 0.00-0.26). What this workflow reliably teaches
     is *find the objects you missed*, *stop outlining debris*, and *follow this boundary*, on
     objects that are separable to begin with. If the correction the user needs IS "split these
-    touching objects", the fix is the **✏ DRAW outline** button, not more clicking: it writes a
-    hand-drawn polygon straight into `committed_objects`, so SAM never sees the prompt and the
-    >75 % overlap rule never applies. Say so before they annotate, and budget for it — drawing
-    a clump by hand is perhaps 20-30 s per object against 2-3 s for a click that works, so a
-    tile that is mostly clumps is a slow tile, not an impossible one.
+    touching objects", the fix is the **✏ DRAW outline** button, not more clicking. The trace
+    is rasterised into `current_object`, so **C** alone commits it verbatim — SAM never sees a
+    prompt and the >75 % overlap rule never applies. Pressing **S** first sends the trace back
+    as a coarse-mask prompt (`mask_input`, the one prompt type that can describe a concave
+    object — a box cannot, and micro_sam reduces every Shape to its bounding box), and the
+    answer is discarded if its IoU with the trace is under 0.25, which is what happens when
+    SAM replies with the whole clump. So: **S then C** on a badly-outlined single object,
+    **C alone** on a clump. Say so before they annotate, and budget for it — tracing a clump
+    is perhaps 20-30 s per object against 2-3 s for a click that works, so a tile that is
+    mostly clumps is a slow tile, not an impossible one.
 21. **A folder that mixes grayscale and RGB files silently breaks the annotator.** The series
     annotator shows every tile in ONE napari image layer, so the first `(512,512,3)` tile after
     a `(512,512)` one is read as a 512-SLICE STACK: the canvas goes black, the committed masks

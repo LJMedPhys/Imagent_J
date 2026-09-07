@@ -4,8 +4,8 @@ micro_sam fine-tuning — STAGE 2 of 4: the human corrects the tiles.
 
 Opens micro_sam's image-series annotator on the tiles built by stage 1, with the stock model's
 guess already loaded into `committed_objects`, plus a small **Annotation Helper** panel that
-reduces the whole job to three buttons: ADD an object (SAM does the outlining), DRAW an
-outline by hand, DELETE an object.
+reduces the whole job to three buttons: ADD an object (click, SAM outlines it), DRAW an
+outline by hand (SAM tidies the trace), DELETE an object.
 
 RUN THIS VIA python_data_analyst, NEVER via mcp__napari_mcp__execute_code. It opens its own
 napari window and blocks on napari.run() until the human closes it — which is correct here
@@ -47,7 +47,8 @@ BANNER = r"""
   nothing else is. Outlines only need to be roughly right.
 
   ADD an object     ->  click "ADD objects", click the object,  S ,  then  C
-  DRAW one by hand  ->  click "DRAW outline", click round the object, double-click to close
+  DRAW an outline   ->  click "DRAW outline", trace the object, double-click to close,
+                        then  S  (SAM tidies it)  and  C   -- C alone keeps it as drawn
   DELETE an object  ->  click "DELETE objects", click the object
   BAD OUTLINE       ->  delete it, then add it again (or DRAW it)
   TILE FINISHED     ->  press  N        <-- N is what SAVES the tile
@@ -99,6 +100,65 @@ def ensure_model_cache(fallback_dir):
                     pass
     return fallback_dir
 
+
+def _sam_mask_prompt(predictor, mask):
+    """Refine a coarse binary mask with SAM, using the mask ITSELF as the prompt.
+
+    SAM's prompt encoder takes three things: points, a box, and a coarse mask. The third is
+    exactly what a hand-traced outline is, and it is the only one no annotator UI exposes —
+    hence the universal advice to "use points", and the box as the usual fallback. A box
+    cannot describe a concave nucleus. A mask can.
+
+    Two details decide whether this works or silently returns nonsense. The mask goes in as
+    LOW-RES LOGITS on the model's own 256x256 grid, and that grid covers the padded-to-square
+    1024 input frame, not the image frame — resize straight to 256x256 and SAM refines a
+    squashed, shifted copy of the outline, which looks like a model failure. And mask_input
+    was trained as an ITERATIVE refinement signal, always accompanied by a point or box, so
+    the outline's box and an interior point go in with it.
+
+    Returns the refined boolean mask, or None when SAM's answer bears no resemblance to what
+    the user drew — it likes to reply with the whole clump the object sits in.
+    """
+    from skimage.transform import resize
+    from scipy.ndimage import distance_transform_edt
+
+    mask = np.asarray(mask, dtype=bool)
+    if not mask.any():
+        return None
+
+    ys, xs = np.nonzero(mask)
+    # SAM speaks XYXY and XY — (column, row), the opposite order to numpy indexing.
+    kwargs = {
+        "box": np.array([xs.min(), ys.min(), xs.max() + 1, ys.max() + 1], dtype=float),
+        "multimask_output": False,
+    }
+    # The centroid of a concave shape can land outside it; the deepest interior pixel cannot.
+    depth = distance_transform_edt(mask)
+    py, px = np.unravel_index(int(np.argmax(depth)), depth.shape)
+    kwargs["point_coords"] = np.array([[px, py]], dtype=float)
+    kwargs["point_labels"] = np.array([1])
+
+    tr = getattr(predictor, "transform", None)
+    if tr is not None and hasattr(tr, "get_preprocess_shape"):
+        side = int(getattr(tr, "target_length", 1024))
+        nh, nw = tr.get_preprocess_shape(mask.shape[0], mask.shape[1], side)
+        padded = np.zeros((side, side), np.float32)
+        padded[:nh, :nw] = resize(mask.astype(np.float32), (nh, nw),
+                                  order=0, preserve_range=True)
+        low = resize(padded, (256, 256), order=0, preserve_range=True)
+        kwargs["mask_input"] = (low * 20.0 - 10.0)[None].astype(np.float32)  # SAM cuts at 0
+    else:
+        print("[annotate] predictor has no .transform — box + point prompt only", flush=True)
+
+    masks, scores, _ = predictor.predict(**kwargs)
+    out = np.asarray(masks[0], dtype=bool)
+    union = int(np.logical_or(out, mask).sum())
+    iou = int(np.logical_and(out, mask).sum()) / union if union else 0.0
+    print(f"[annotate] SAM refine: score={float(scores[0]):.3f} IoU-with-trace={iou:.2f}",
+          flush=True)
+    return None if (not out.any() or iou < 0.25) else out
+
+
 def build_helper(viewer, manifest):
     """Dock a three-button panel: ADD (point prompts) / DRAW (polygon) / DELETE (fill with 0).
 
@@ -107,13 +167,15 @@ def build_helper(viewer, manifest):
     nothing on screen explains that. These buttons set layer + mode + label together, so a
     click always does what the button they last pressed says it does.
 
-    ADD goes through SAM: the click is a prompt, SAM returns the outline. DRAW does not —
-    it writes the polygon straight into `committed_objects`. That matters because SAM's
-    prompt encoder only accepts points, boxes and a coarse mask, so there is no way to hand
-    it an outline; but the file stage 3 trains on is the LABEL IMAGE, not SAM's opinion of
-    it. Anything that ends up in `committed_objects` is ground truth, however it got there.
-    So DRAW is the escape hatch for the cases the docs otherwise tell the user to give up
-    on — touching objects that SAM insists on merging, and outlines it keeps getting wrong.
+    ADD and DRAW are two ways of prompting the same model. ADD sends a click. DRAW sends the
+    outline you trace, as a coarse-mask prompt — the only prompt type that can describe a
+    concave nucleus, and the reason this does not simply reuse micro_sam's Shapes layer,
+    which reduces everything drawn in it to a bounding box.
+
+    The trace lands in `current_object` first, which makes both halves available from one
+    button: C commits it exactly as drawn if S is never pressed, and if SAM's refinement
+    wanders off into the neighbouring clump it is thrown away and the trace kept. Either way
+    stage 3 trains on the LABEL IMAGE, so a hand trace is fully valid ground truth.
     """
     from qtpy import QtWidgets, QtCore
 
@@ -176,7 +238,7 @@ def build_helper(viewer, manifest):
         "<b>Shift+C</b> start this object over<br>"
         "<b>D</b> delete the object under the mouse<br>"
         "<b>Ctrl+Z</b> undo<br>"
-        "<i>(S, T and C belong to ADD only — DRAW needs none of them)</i><br><br>"
+        "<i>(in DRAW, S tidies the outline you traced and C commits it)</i><br><br>"
         "<b>N</b> — save this tile, go to the next<br>"
         "<span style='color:#d33;'><b>Press N on every tile,<br>including the last one.</b></span>"
         "<br><br><i>On a tile with nothing outlined, N asks \u201cNothing is segmented yet\u201d "
@@ -188,6 +250,11 @@ def build_helper(viewer, manifest):
 
     def committed():
         return viewer.layers["committed_objects"] if "committed_objects" in viewer.layers else None
+
+    # Which button is armed. S has to do something different in DRAW mode (refine the trace)
+    # from ADD mode (micro_sam's own point-prompt segmentation), and once a shape has been
+    # consumed there is nothing left on the layers themselves to tell the two apart.
+    mode_state = {"draw": False}
 
     def set_add():
         pts = viewer.layers["point_prompts"]
@@ -206,6 +273,7 @@ def build_helper(viewer, manifest):
             pts.current_properties = props
         except Exception:
             pass
+        mode_state["draw"] = False
         highlight(btn_add, "#2d7d46")
         hint.setText(
             "Click the middle of an object → press <b>S</b> → press <b>C</b>.<br><br>"
@@ -215,44 +283,32 @@ def build_helper(viewer, manifest):
         )
 
     def set_draw():
-        """Draw one outline by hand, straight into committed_objects — no SAM in the loop."""
-        lyr = committed()
-        if lyr is None:
+        """Trace the object by hand; the trace becomes the pending object, S refines it."""
+        if "prompts" not in viewer.layers or "current_object" not in viewer.layers:
+            hint.setText("<b>This viewer has no prompts layer</b> — use ADD instead.")
             return
-        viewer.layers.selection.active = lyr
-        lyr.n_edit_dimensions = 2
-        # A fresh id per object, or two polygons drawn one after the other come out as a
-        # single object. preserve_labels keeps the neighbours safe: the fill then writes
-        # over background only, so a vertex that strays across a committed object cannot
-        # eat it — which matters precisely in the touching-objects case this is here for.
-        lyr.preserve_labels = True
-        lyr.selected_label = int(lyr.data.max()) + 1
-        # napari's polygon tool for Labels arrived in 0.4.19. Fall back to the brush on
-        # anything older rather than leaving the button dead and the mode unchanged.
+        shp = viewer.layers["prompts"]
+        viewer.layers.selection.active = shp
         active_mode = None
-        for mode in ("polygon", "paint"):
+        for mode in ("add_polygon", "add_polygon_lasso"):
             try:
-                lyr.mode = mode
+                shp.mode = mode
                 active_mode = mode
                 break
             except (ValueError, KeyError, AttributeError):
                 continue
+        mode_state["draw"] = active_mode is not None
         highlight(btn_draw, "#7a4fa3")
-        if active_mode == "polygon":
+        print(f"[annotate] DRAW -> {active_mode or 'NO POLYGON TOOL'}", flush=True)
+        if active_mode:
             hint.setText(
-                "Click once at each corner around the object, then <b>double-click</b> to "
-                "close it — the shape fills in as a new object.<br><br>"
-                "Right-click removes the last point; <b>Esc</b> abandons the shape.<br><br>"
-                "<i>Nothing here goes through SAM, so there is no S and no C — the outline "
-                "you draw IS the answer. Use it for objects that are touching, and for any "
-                "outline the ADD button keeps getting wrong.</i>")
-        elif active_mode == "paint":
-            lyr.brush_size = 6
-            hint.setText("<b>This napari has no polygon tool</b> — using the brush instead. "
-                         "Drag over the object to fill it in; <b>[</b> and <b>]</b> resize "
-                         "the brush.")
+                "Click round the object, <b>double-click</b> to close.<br><br>"
+                "Then <b>S</b> — SAM tidies your outline to the real edge — then <b>C</b>.<br><br>"
+                "<i>Press C without S to keep the outline exactly as you drew it; press S "
+                "again to refine further. Right-click removes the last point, <b>Esc</b> "
+                "abandons the shape.</i>")
         else:
-            hint.setText("<b>Could not switch to a drawing tool</b> — use ADD instead.")
+            hint.setText("<b>Could not switch to the polygon tool</b> — use ADD instead.")
 
     def set_delete():
         lyr = committed()
@@ -263,12 +319,81 @@ def build_helper(viewer, manifest):
         lyr.preserve_labels = False             # else the fill refuses to write 0 over a label
         lyr.selected_label = 0                  # fill target 0 = erase the whole object
         lyr.n_edit_dimensions = 2
+        mode_state["draw"] = False
         highlight(btn_del, "#a33")
         hint.setText("Click on a wrong object → it disappears.")
 
     btn_add.clicked.connect(set_add)
     btn_draw.clicked.connect(set_draw)
     btn_del.clicked.connect(set_delete)
+
+    def take_polygon():
+        """Move a finished trace out of `prompts` and into `current_object`.
+
+        Left in the Shapes layer the trace is worth only its bounding box — that is all
+        micro_sam ever does with a shape. Rasterised into current_object it is a real mask:
+        C commits it as drawn, and S can hand it to SAM as a coarse-mask prompt.
+        """
+        from skimage.draw import polygon as _rasterise
+        shp = viewer.layers["prompts"]
+        cur = viewer.layers["current_object"]
+        traces = [np.asarray(s) for s in shp.data]
+        if not traces or cur.data.ndim != 2:
+            return False
+        buf = np.zeros(cur.data.shape, dtype=bool)
+        for verts in traces:
+            v = verts[:, -2:]                       # (row, col), trailing dims if 3D-ish
+            rr, cc = _rasterise(v[:, 0], v[:, 1], shape=buf.shape)
+            buf[rr, cc] = True
+        shp.data = []                               # consumed, or it re-fires every tick
+        if not buf.any():
+            return False
+        cur.data = buf.astype(cur.data.dtype)
+        return True
+
+    def refine():
+        """S in DRAW mode: hand the pending trace to SAM as a coarse-mask prompt."""
+        cur = viewer.layers["current_object"]
+        mask = np.asarray(cur.data) > 0
+        if not mask.any():
+            return False                            # nothing traced — let micro_sam's S run
+        out = None
+        try:
+            from micro_sam.sam_annotator._state import AnnotatorState
+            out = _sam_mask_prompt(AnnotatorState().predictor, mask)
+        except Exception as exc:                    # fail closed: the trace is never lost
+            print(f"[annotate] SAM refine unavailable: {exc}", flush=True)
+        if out is None:
+            hint.setText("SAM had nothing better to offer, so <b>your outline is kept</b> — "
+                         "press <b>C</b> to commit it.")
+        else:
+            cur.data = out.astype(cur.data.dtype)
+            hint.setText("SAM tidied your outline. <b>S</b> again refines further, "
+                         "<b>C</b> commits, <b>Shift+C</b> starts this object over.")
+        return True
+
+    # micro_sam owns "s". Keep its handler and fall through to it whenever we are not in
+    # DRAW mode with something traced, so ADD behaves exactly as it did before.
+    _stock_s = None
+    for _kb, _fn in list(viewer.keymap.items()):
+        _text = _kb.to_text() if hasattr(_kb, "to_text") else str(_kb)
+        if _text.lower() == "s":
+            _stock_s = _fn
+            break
+    if _stock_s is None:                            # ADD's S would go dead — say so loudly
+        print("[annotate] WARNING: micro_sam's 's' binding was not found on the viewer "
+              "keymap; ADD may not segment. DRAW is unaffected.", flush=True)
+
+    @viewer.bind_key("s", overwrite=True)
+    def _segment_or_refine(_v):
+        if mode_state["draw"]:
+            take_polygon()                          # the 700 ms tick may not have run yet
+            if refine():
+                return
+        if _stock_s is not None:
+            res = _stock_s(_v)
+            if hasattr(res, "__next__"):            # press/release generator bindings
+                next(res, None)
 
     # T (include <-> exclude) is broken in stock micro_sam 1.8.2 for the most common case:
     # committing with C deletes the point prompts but napari keeps their indices in
@@ -318,13 +443,11 @@ def build_helper(viewer, manifest):
             done = len(glob.glob(os.path.join(ann_dir, "*.tif")))
             lyr = committed()
             n_obj = int(np.count_nonzero(np.unique(lyr.data))) if lyr is not None else 0
-            # Once a hand-drawn polygon has landed, the id it used is spent. Move to the
-            # next one so the following polygon is a separate object; napari itself keeps
-            # selected_label as-is, which would silently merge every shape into one.
-            if lyr is not None and str(lyr.mode) == "polygon":
-                cur = int(lyr.selected_label)
-                if cur and int(lyr.data.max()) >= cur:
-                    lyr.selected_label = cur + 1
+            # Pick a trace up as soon as it is closed, so the pending object appears without
+            # the user having to press anything first.
+            if mode_state["draw"] and take_polygon():
+                hint.setText("Outline captured. <b>S</b> lets SAM tidy it to the real edge, "
+                             "<b>C</b> commits it exactly as you drew it.")
             head.setText(f"Tile {min(done + 1, n_total)} of {n_total}")
             sub.setText(f"<b>{n_obj}</b> objects outlined on this tile &nbsp;|&nbsp; "
                         f"{done} tile(s) saved")

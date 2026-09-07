@@ -1123,11 +1123,17 @@ outline the computer gets wrong however you click it.
 
 1. Click **✏ DRAW outline** in the helper panel (it turns purple).
 2. Click once at each corner all the way around the object.
-3. **Double-click** to close it → the shape fills in as a new object.
+3. **Double-click** to close it → your outline becomes the pending object.
    - misclicked? Right-click removes the last point; **Esc** abandons the shape.
+4. Press **S** → the computer tidies your outline onto the real edge of the object.
+5. Press **C** to keep it.
 
-No **S**, no **C** — those belong to ADD. What you draw goes straight onto the answer sheet.
-Your outline only has to follow the object roughly; a dozen clicks around it is plenty.
+Your outline only has to follow the object roughly — a dozen clicks around it is plenty,
+because **S** does the fine work from there. Press **S** again to tidy it further.
+
+**Press C without pressing S** and you keep the outline exactly as you drew it. That is the
+one to use on a clump: the computer is the thing that merges touching objects, so on those
+your own outline is the better answer, and it counts just as much.
 
 ### ✖ DELETE a wrong object
 1. Click **✖ DELETE objects** in the helper panel (it turns red).
