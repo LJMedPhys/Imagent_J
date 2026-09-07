@@ -1117,23 +1117,22 @@ which is the one thing that is easy to get wrong.
 > **Pressed C and nothing happened?** The thing you clicked is already outlined. The tool
 > refuses to draw on top of an existing object — delete that outline first, then add it again.
 
-### ✏ PAINT an object by hand
-Use this when **ADD will not cooperate** — two objects that keep coming out as one, or an
-outline the computer gets wrong however you click it.
+### ▭ DRAW boxes round objects
+Use this when **ADD will not cooperate** — an outline the computer gets wrong however you
+click it, or an object it keeps missing. Telling it *where* the object is often works where
+telling it *what to click* does not.
 
-1. Click **✏ PAINT object** in the helper panel (it turns purple).
-2. **Drag** over the object to fill it in. Rough is fine — you are showing the computer
-   *which* object you mean, not drawing its edge.
-   - painted too much? Right-drag rubs it out. **[** and **]** change the brush size.
-3. Press **S** → the computer turns your blob into a proper outline of that object.
-4. Press **C** to keep it.
+1. Click **▭ DRAW boxes** in the helper panel (it turns purple).
+2. **Drag a box** round an object. Draw as many boxes as you like before going on.
+   - the box only has to contain the object; it does not have to be tight.
+3. Press **S** → each box is outlined.
+4. Press **C** to keep them.
 
-Press **S** again to refine further. A couple of strokes down the middle of the object is
-usually all it needs.
+Same **S** and **C** as ADD — the only difference is what you gave the computer to work from.
+You can mix the two: a box round the object and a click inside it are both prompts.
 
-**Press C without pressing S** and you keep exactly what you painted. That is the one to use
-on a clump: the computer is the thing that merges touching objects, so on those your own
-paint is the better answer, and it counts just as much.
+> If a neighbour creeps into the box, press **ADD**, then **T** (the next click now means
+> *exclude*), and click the neighbour. Then **S** again.
 
 ### ✖ DELETE a wrong object
 1. Click **✖ DELETE objects** in the helper panel (it turns red).
@@ -1152,14 +1151,15 @@ safer than trying to repair it:
 | one outline covers two objects | DELETE it, then ADD each object separately |
 | one object split into two outlines | DELETE both, then ADD it with one click |
 | outline is badly off | DELETE it, then ADD it again |
-| ADD keeps getting the same object wrong | DELETE it, then **PAINT** it |
-| objects packed tightly together | DELETE the clump, then **PAINT** each one |
+| ADD keeps getting the same object wrong | DELETE it, then **BOX** it |
+| objects packed tightly together | DELETE the clump, then BOX each one and exclude with **T** |
 
-> **Tight clumps are what DRAW is for.** One click inside a clump gives you the whole clump,
-> and once that is committed every further click inside it is ignored — clicking more will
-> not help. Draw them by hand instead. If a clump is so dense that you cannot tell where one
-> object ends and the next begins, leave it out and say so to whoever asked: a guess there is
-> worse for training than nothing, because the computer learns the guess.
+> **Tight clumps are the hard case.** One click inside a clump gives you the whole clump, and
+> once that is committed every further click inside it is ignored — clicking more will not
+> help. DELETE the clump first, then box one object at a time, adding an *exclude* click
+> (**T**) on the neighbour that keeps coming along. If a clump is so dense that you cannot
+> tell where one object ends and the next begins, leave it out and say so to whoever asked:
+> a guess there is worse for training than nothing, because the computer learns the guess.
 
 ## Finishing a tile
 

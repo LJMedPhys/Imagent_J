@@ -4,8 +4,8 @@ micro_sam fine-tuning — STAGE 2 of 4: the human corrects the tiles.
 
 Opens micro_sam's image-series annotator on the tiles built by stage 1, with the stock model's
 guess already loaded into `committed_objects`, plus a small **Annotation Helper** panel that
-reduces the whole job to three buttons: ADD an object (click, SAM outlines it), PAINT an
-object roughly by hand (SAM turns the blob into the outline), DELETE an object.
+reduces the whole job to three buttons: ADD an object (click it), DRAW boxes round objects
+(drag a box round each), DELETE an object. Both prompts then go through the same S and C.
 
 RUN THIS VIA python_data_analyst, NEVER via mcp__napari_mcp__execute_code. It opens its own
 napari window and blocks on napari.run() until the human closes it — which is correct here
@@ -47,10 +47,9 @@ BANNER = r"""
   nothing else is. Outlines only need to be roughly right.
 
   ADD an object     ->  click "ADD objects", click the object,  S ,  then  C
-  PAINT an object   ->  click "PAINT object", drag over it to fill it in roughly,
-                        then  S  (SAM finds the edge)  and  C   -- C alone keeps your paint
+  BOX some objects  ->  click "DRAW boxes", drag a box round each one,  S ,  then  C
   DELETE an object  ->  click "DELETE objects", click the object
-  BAD OUTLINE       ->  delete it, then add it again (or PAINT it)
+  BAD OUTLINE       ->  delete it, then add it again (a BOX often works where a click did not)
   TILE FINISHED     ->  press  N        <-- N is what SAVES the tile
 
   *** Press N on EVERY tile, INCLUDING THE LAST ONE. ***
@@ -101,81 +100,26 @@ def ensure_model_cache(fallback_dir):
     return fallback_dir
 
 
-def _sam_mask_prompt(predictor, mask):
-    """Refine a coarse binary mask with SAM, using the mask ITSELF as the prompt.
-
-    SAM's prompt encoder takes three things: points, a box, and a coarse mask. The third is
-    exactly what a hand-traced outline is, and it is the only one no annotator UI exposes —
-    hence the universal advice to "use points", and the box as the usual fallback. A box
-    cannot describe a concave nucleus. A mask can.
-
-    Two details decide whether this works or silently returns nonsense. The mask goes in as
-    LOW-RES LOGITS on the model's own 256x256 grid, and that grid covers the padded-to-square
-    1024 input frame, not the image frame — resize straight to 256x256 and SAM refines a
-    squashed, shifted copy of the outline, which looks like a model failure. And mask_input
-    was trained as an ITERATIVE refinement signal, always accompanied by a point or box, so
-    the outline's box and an interior point go in with it.
-
-    Returns the refined boolean mask, or None when SAM's answer bears no resemblance to what
-    the user drew — it likes to reply with the whole clump the object sits in.
-    """
-    from skimage.transform import resize
-    from scipy.ndimage import distance_transform_edt
-
-    mask = np.asarray(mask, dtype=bool)
-    if not mask.any():
-        return None
-
-    ys, xs = np.nonzero(mask)
-    # SAM speaks XYXY and XY — (column, row), the opposite order to numpy indexing.
-    kwargs = {
-        "box": np.array([xs.min(), ys.min(), xs.max() + 1, ys.max() + 1], dtype=float),
-        "multimask_output": False,
-    }
-    # The centroid of a concave shape can land outside it; the deepest interior pixel cannot.
-    depth = distance_transform_edt(mask)
-    py, px = np.unravel_index(int(np.argmax(depth)), depth.shape)
-    kwargs["point_coords"] = np.array([[px, py]], dtype=float)
-    kwargs["point_labels"] = np.array([1])
-
-    tr = getattr(predictor, "transform", None)
-    if tr is not None and hasattr(tr, "get_preprocess_shape"):
-        side = int(getattr(tr, "target_length", 1024))
-        nh, nw = tr.get_preprocess_shape(mask.shape[0], mask.shape[1], side)
-        padded = np.zeros((side, side), np.float32)
-        padded[:nh, :nw] = resize(mask.astype(np.float32), (nh, nw),
-                                  order=0, preserve_range=True)
-        low = resize(padded, (256, 256), order=0, preserve_range=True)
-        kwargs["mask_input"] = (low * 20.0 - 10.0)[None].astype(np.float32)  # SAM cuts at 0
-    else:
-        print("[annotate] predictor has no .transform — box + point prompt only", flush=True)
-
-    masks, scores, _ = predictor.predict(**kwargs)
-    out = np.asarray(masks[0], dtype=bool)
-    union = int(np.logical_or(out, mask).sum())
-    iou = int(np.logical_and(out, mask).sum()) / union if union else 0.0
-    print(f"[annotate] SAM refine: score={float(scores[0]):.3f} IoU-with-trace={iou:.2f}",
-          flush=True)
-    return None if (not out.any() or iou < 0.25) else out
-
-
 def build_helper(viewer, manifest):
-    """Dock a three-button panel: ADD (point prompts) / PAINT (brush) / DELETE (fill with 0).
+    """Dock a three-button panel: ADD (point prompts) / BOX (box prompts) / DELETE (fill 0).
 
     Everything a beginner gets wrong here is a MODE problem — clicking the canvas does
     something different depending on which layer is selected and which tool it is in, and
     nothing on screen explains that. These buttons set layer + mode + label together, so a
     click always does what the button they last pressed says it does.
 
-    ADD and PAINT are two ways of prompting the same model. ADD sends a click. PAINT sends
-    the blob you paint, as a coarse-mask prompt — the only prompt type that can describe a
-    concave nucleus, which is why this does not use micro_sam's Shapes layer: micro_sam
-    reduces every shape drawn there to its bounding box, and a box cannot.
+    ADD and BOX are the two prompt types SAM actually takes, and both go to micro_sam's own
+    S: ADD puts a point in `point_prompts`, BOX puts a rectangle in `prompts`. Neither this
+    panel nor anything else here intercepts S or C. Earlier versions tried to add a third
+    prompt — a traced polygon, then a painted mask, fed to the predictor directly — and both
+    lost to the same thing: micro_sam's prompt handling lives on the VIEWER's mouse callbacks
+    and fires on every click whatever layer is selected, so any tool that has to hold state
+    across more than one press gets interrupted mid-way. A rectangle is one press-drag-release
+    and has no such state, which is why this is the shape that works.
 
-    The paint goes into `current_object`, which makes both halves available from one button:
-    C commits it exactly as painted if S is never pressed, and if SAM's refinement wanders
-    off into the neighbouring clump it is thrown away and the paint kept. Either way stage 3
-    trains on the LABEL IMAGE, so a hand-painted object is fully valid ground truth.
+    For touching objects a box is still weak — it contains the neighbours. The honest answer
+    there is a negative point (ADD, then T) inside the neighbour, or accepting the clump and
+    deleting it.
     """
     from qtpy import QtWidgets, QtCore
 
@@ -195,16 +139,16 @@ def build_helper(viewer, manifest):
 
     BTN_BASE = "font-size:14px; font-weight:bold;"
     btn_add = QtWidgets.QPushButton("➕  ADD objects")
-    btn_draw = QtWidgets.QPushButton("✏  PAINT object")
+    btn_box = QtWidgets.QPushButton("▭  DRAW boxes")
     btn_del = QtWidgets.QPushButton("✖  DELETE objects")
-    for b in (btn_add, btn_draw, btn_del):
+    for b in (btn_add, btn_box, btn_del):
         b.setMinimumHeight(44)
         b.setStyleSheet(BTN_BASE)
         lay.addWidget(b)
 
     def highlight(active, colour):
         """Exactly one button is coloured, and it is the mode the canvas is actually in."""
-        for b in (btn_add, btn_draw, btn_del):
+        for b in (btn_add, btn_box, btn_del):
             b.setStyleSheet(BTN_BASE + (f" background:{colour}; color:white;"
                                         if b is active else ""))
 
@@ -238,7 +182,7 @@ def build_helper(viewer, manifest):
         "<b>Shift+C</b> start this object over<br>"
         "<b>D</b> delete the object under the mouse<br>"
         "<b>Ctrl+Z</b> undo<br>"
-        "<i>(in PAINT, S turns your blob into an outline and C commits it)</i><br><br>"
+        "<i>(S and C work the same for a click and for a box)</i><br><br>"
         "<b>N</b> — save this tile, go to the next<br>"
         "<span style='color:#d33;'><b>Press N on every tile,<br>including the last one.</b></span>"
         "<br><br><i>On a tile with nothing outlined, N asks \u201cNothing is segmented yet\u201d "
@@ -250,35 +194,6 @@ def build_helper(viewer, manifest):
 
     def committed():
         return viewer.layers["committed_objects"] if "committed_objects" in viewer.layers else None
-
-    # micro_sam binds its prompt handling to the VIEWER's mouse callbacks, which fire on every
-    # click whatever layer is active — so a press meant for the brush can also register as a
-    # point prompt. PAINT borrows the mouse while it is armed and gives it back on exit.
-    stashed = {"drag": None, "dbl": None}
-
-    def grab_mouse():
-        if stashed["drag"] is not None:
-            return
-        stashed["drag"] = list(viewer.mouse_drag_callbacks)
-        stashed["dbl"] = list(viewer.mouse_double_click_callbacks)
-        viewer.mouse_drag_callbacks.clear()
-        viewer.mouse_double_click_callbacks.clear()
-        names = ", ".join(getattr(f, "__name__", repr(f)) for f in stashed["drag"]) or "none"
-        print(f"[annotate] PAINT: suspended {len(stashed['drag'])} viewer mouse callbacks "
-              f"({names})", flush=True)
-
-    def release_mouse():
-        """Idempotent, and called by every other mode — ADD must never come back mute."""
-        if stashed["drag"] is None:
-            return
-        viewer.mouse_drag_callbacks.extend(stashed["drag"])
-        viewer.mouse_double_click_callbacks.extend(stashed["dbl"])
-        stashed["drag"] = stashed["dbl"] = None
-
-    # Which button is armed. S has to do something different in PAINT mode (refine what was
-    # painted) from ADD mode (micro_sam's own point-prompt segmentation), and the layers alone
-    # cannot tell the two apart — `current_object` looks the same either way.
-    mode_state = {"draw": False}
 
     def set_add():
         pts = viewer.layers["point_prompts"]
@@ -297,8 +212,6 @@ def build_helper(viewer, manifest):
             pts.current_properties = props
         except Exception:
             pass
-        mode_state["draw"] = False
-        release_mouse()
         highlight(btn_add, "#2d7d46")
         hint.setText(
             "Click the middle of an object → press <b>S</b> → press <b>C</b>.<br><br>"
@@ -307,49 +220,39 @@ def build_helper(viewer, manifest):
             "<b>DELETE the old outline first</b>, then add it again."
         )
 
-    def set_draw():
-        """Paint a rough blob over the object; S turns it into a real outline.
+    def set_box():
+        """Drag a box round each object; micro_sam segments inside them on S.
 
-        A brush, not a polygon tool. There is no in-progress shape for anything to discard,
-        nothing to close and no vertices to lose — which is what made the polygon unusable
-        against micro_sam's own mouse handling. It also paints straight into `current_object`,
-        where the coarse mask has to end up anyway, so nothing is rasterised or moved between
-        layers and there is no window in which a half-finished trace exists.
-
-        Precision is not the point: `mask_input` wants a rough blob and S does the boundary
-        work, so two or three strokes is ideal input rather than a compromise.
+        This is stock micro_sam and nothing else. The `prompts` Shapes layer IS its box-prompt
+        input and its own S already reads it — several boxes at once if several are drawn — so
+        this button only has to select the layer and set the tool. It holds no drawing state of
+        its own and never touches the mouse callbacks, which is exactly why it survives where
+        the polygon and the brush did not: a rectangle is one press-drag-release, with nothing
+        in between for micro_sam's viewer-level prompt handling to interrupt.
         """
-        cur = viewer.layers["current_object"] if "current_object" in viewer.layers else None
-        if cur is None:
-            hint.setText("<b>This viewer has no current_object layer</b> — use ADD instead.")
+        if "prompts" not in viewer.layers:
+            hint.setText("<b>This viewer has no prompts layer</b> — use ADD instead.")
             return
-        viewer.layers.selection.active = cur
-        grab_mouse()
-        cur.n_edit_dimensions = 2
-        cur.preserve_labels = False
-        cur.selected_label = 1                  # current_object holds one object at a time
-        try:                                    # ~1/40 of the tile: a few strokes cover a cell
-            cur.brush_size = max(4, int(min(cur.data.shape) / 40))
-        except Exception:
-            pass
+        shp = viewer.layers["prompts"]
+        viewer.layers.selection.active = shp
         active_mode = None
         try:
-            cur.mode = "paint"
-            active_mode = str(cur.mode)          # what it ACTUALLY took, not what we asked
+            shp.mode = "add_rectangle"
+            active_mode = str(shp.mode)          # what it ACTUALLY took, not what we asked
         except (ValueError, KeyError, AttributeError):
             pass
-        mode_state["draw"] = active_mode is not None
-        highlight(btn_draw, "#7a4fa3")
-        print(f"[annotate] PAINT -> layer 'current_object', mode {active_mode or 'NONE'}, "
-              f"brush {getattr(cur, 'brush_size', '?')}", flush=True)
+        highlight(btn_box, "#7a4fa3")
+        print(f"[annotate] BOX -> layer 'prompts', mode {active_mode or 'NONE'}", flush=True)
         if active_mode:
             hint.setText(
-                "<b>Drag over the object</b> to fill it in — rough is fine.<br><br>"
-                "Then <b>S</b> — SAM turns your blob into the real outline — then <b>C</b>.<br><br>"
-                "<i>Right-drag erases. <b>[</b> and <b>]</b> resize the brush. Press C without "
-                "S to keep exactly what you painted — that is the one to use on a clump.</i>")
+                "<b>Drag a box round each object</b> you want outlined. You can draw "
+                "several boxes before pressing anything.<br><br>"
+                "Then <b>S</b> to outline them, then <b>C</b> to keep them.<br><br>"
+                "<i>The box only has to contain the object — it does not have to be tight. "
+                "If a neighbour creeps in, press <b>ADD</b>, then <b>T</b>, and click the "
+                "neighbour to exclude it.</i>")
         else:
-            hint.setText("<b>Could not switch to the brush</b> — use ADD instead.")
+            hint.setText("<b>Could not switch to the rectangle tool</b> — use ADD instead.")
 
     def set_delete():
         lyr = committed()
@@ -360,62 +263,16 @@ def build_helper(viewer, manifest):
         lyr.preserve_labels = False             # else the fill refuses to write 0 over a label
         lyr.selected_label = 0                  # fill target 0 = erase the whole object
         lyr.n_edit_dimensions = 2
-        mode_state["draw"] = False
-        release_mouse()
         highlight(btn_del, "#a33")
         hint.setText("Click on a wrong object → it disappears.")
 
     btn_add.clicked.connect(set_add)
-    btn_draw.clicked.connect(set_draw)
+    btn_box.clicked.connect(set_box)
     btn_del.clicked.connect(set_delete)
 
-    def refine():
-        """S in PAINT mode: hand what the user painted to SAM as a coarse-mask prompt."""
-        cur = viewer.layers["current_object"]
-        mask = np.asarray(cur.data) > 0
-        if not mask.any():
-            return False                            # nothing painted — let micro_sam's S run
-        out = None
-        try:
-            from micro_sam.sam_annotator._state import AnnotatorState
-            out = _sam_mask_prompt(AnnotatorState().predictor, mask)
-        except Exception as exc:                    # fail closed: the trace is never lost
-            print(f"[annotate] SAM refine unavailable: {exc}", flush=True)
-        if out is None:
-            hint.setText("SAM had nothing better to offer, so <b>what you painted is kept</b> "
-                         "— press <b>C</b> to commit it.")
-        else:
-            cur.data = out.astype(cur.data.dtype)
-            hint.setText("SAM turned your paint into an outline. <b>S</b> again refines "
-                         "further, <b>C</b> commits, <b>Shift+C</b> starts this object over.")
-        return True
-
-    # micro_sam owns "s". Keep its handler and fall through to it whenever we are not in PAINT
-    # mode with something painted, so ADD behaves exactly as it did before. C needs no wrapper:
-    # the paint is already in `current_object`, which is the layer micro_sam's own C commits.
-    def stock_key(key):
-        for kb, fn in list(viewer.keymap.items()):
-            text = kb.to_text() if hasattr(kb, "to_text") else str(kb)
-            if text.lower() == key:
-                return fn
-        print(f"[annotate] WARNING: micro_sam's '{key}' binding is not on the viewer keymap; "
-              f"ADD may not work as documented.", flush=True)
-        return None
-
-    _stock_s = stock_key("s")
-
-    def fire(fn, v):
-        if fn is None:
-            return
-        res = fn(v)
-        if hasattr(res, "__next__"):                # press/release generator bindings
-            next(res, None)
-
-    @viewer.bind_key("s", overwrite=True)
-    def _segment_or_refine(_v):
-        if mode_state["draw"] and refine():
-            return
-        fire(_stock_s, _v)
+    # S and C are left to micro_sam entirely. Both prompt types this panel offers — points in
+    # `point_prompts`, boxes in `prompts` — are ones its own S already reads, so there is
+    # nothing to intercept and no second code path that can disagree with it.
 
     # T (include <-> exclude) is broken in stock micro_sam 1.8.2 for the most common case:
     # committing with C deletes the point prompts but napari keeps their indices in

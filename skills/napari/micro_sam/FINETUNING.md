@@ -173,8 +173,8 @@ table on exit; relay that.
 >
 > Use the three big buttons in the **ImagentJ — Annotation Helper** panel on the right:
 > - **➕ ADD objects** — click the middle of a missed object, press **S**, then press **C**.
-> - **✏ PAINT object** — drag over the object to fill it in roughly, **S** to let the model
->   turn that blob into the real outline, **C** to keep it. **C** without **S** keeps the paint.
+> - **▭ DRAW boxes** — drag a box round each object (several is fine), then the same **S** and
+>   **C**. Use it when clicking keeps getting an object wrong.
 > - **✖ DELETE objects** — click on anything outlined that shouldn't be.
 >
 > To fix a bad outline: **delete it, then add it again.** If ADD keeps getting the same object
@@ -343,24 +343,21 @@ CSV and overlay previews; the masks go straight into a `python_data_analyst` mea
     them collapsed the mask to 4-362 px (IoU 0.00-0.26). What this workflow reliably teaches
     is *find the objects you missed*, *stop outlining debris*, and *follow this boundary*, on
     objects that are separable to begin with. If the correction the user needs IS "split these
-    touching objects", the fix is the **✏ PAINT object** button, not more clicking. The brush
-    paints into `current_object`, so **C** alone commits it verbatim — SAM never sees a prompt
-    and the >75 % overlap rule never applies. Pressing **S** first sends the paint back as a
-    coarse-mask prompt (`mask_input`, the one prompt type that can describe a concave object —
-    a box cannot, and micro_sam reduces every Shape to its bounding box), and the answer is
-    discarded if its IoU with the paint is under 0.25, which is what happens when SAM replies
-    with the whole clump. So: **S then C** on a badly-outlined single object, **C alone** on a
-    clump. Say so before they annotate, and budget for it — painting a clump by hand is
-    perhaps 20-30 s per object against 2-3 s for a click that works, so a tile that is mostly
-    clumps is a slow tile, not an impossible one.
+    touching objects", say so before they annotate rather than letting them click at it. The
+    **▭ DRAW boxes** button helps on a badly-outlined *single* object — a box says where the
+    object is instead of what to click — but a box round one object in a clump contains its
+    neighbours too, so there it needs an exclude point (**T**) as well, and sometimes the
+    honest answer is to leave that clump out.
 
-    A brush and not a polygon tool on purpose. napari's polygon keeps its in-progress vertices
-    in layer state that `_finish_drawing()` discards the moment anything disturbs the active
-    layer, and micro_sam's prompt handling sits on the VIEWER's mouse callbacks, which fire on
-    every click whatever layer is selected — so vertices vanish as they are placed and the
-    shape can never be closed. A brush has no in-progress state to lose. PAINT still suspends
-    those viewer callbacks while it is armed (restored by ADD and DELETE) so a stroke does not
-    also register as a point prompt.
+    **Do not try to add a fourth prompt type here.** Two attempts failed the same way: a
+    traced polygon (napari Shapes) and a painted coarse mask (`mask_input` on the Labels
+    layer), both fed to the predictor directly. micro_sam's prompt handling lives on the
+    VIEWER's mouse callbacks and fires on every click whatever layer is selected, so any tool
+    that must hold state across more than one press — placing polygon vertices, dragging a
+    brush — gets interrupted part-way and the in-progress shape is discarded by napari's
+    `_finish_drawing()`. Suspending those callbacks while the tool is armed did not rescue it
+    either. A rectangle is one press-drag-release with no state in between, which is why the
+    box is the only hand-drawn prompt that survives contact with this annotator.
 21. **A folder that mixes grayscale and RGB files silently breaks the annotator.** The series
     annotator shows every tile in ONE napari image layer, so the first `(512,512,3)` tile after
     a `(512,512)` one is read as a 512-SLICE STACK: the canvas goes black, the committed masks
@@ -435,7 +432,7 @@ annotations, and the train-val split never sharing a source image), and
 | file | what it is |
 |---|---|
 | `WORKFLOW_FINETUNE_1_PREPARE.py` | tiles + pre-segmentation + `manifest.json` + generated human instructions |
-| `WORKFLOW_FINETUNE_2_ANNOTATE.py` | the annotator with the ADD/PAINT/DELETE helper panel; blocks until the user is done, then reports |
+| `WORKFLOW_FINETUNE_2_ANNOTATE.py` | the annotator with the ADD/BOX/DELETE helper panel; blocks until the user is done, then reports |
 | `WORKFLOW_FINETUNE_3_TRAIN.py` | validate → split → train → export → **stock vs fine-tuned on held-out tiles** → `evaluation.json` |
 | `WORKFLOW_FINETUNE_4_APPLY.py` | segment the folder with whichever model won, tiled at the training scale |
 | `SKILL.md` | the rest of micro_sam: automatic segmentation, the interactive annotator, the object classifier |
