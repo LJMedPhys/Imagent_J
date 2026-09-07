@@ -264,6 +264,32 @@ def build_helper(viewer, manifest):
         return viewer.add_shapes(name="trace", edge_color="#7a4fa3",
                                  face_color="#ffffff00", edge_width=2)
 
+    # micro_sam binds its prompt handling to the VIEWER's mouse callbacks, which fire on every
+    # click whatever layer is active. napari's polygon tool keeps its in-progress vertices in
+    # layer state that `_finish_drawing()` throws away as soon as something disturbs the active
+    # layer or eats the press — so with both live, each click restarts the shape and no vertex
+    # ever sticks. They cannot share the mouse: DRAW borrows it, and gives it back on exit.
+    stashed = {"drag": None, "dbl": None}
+
+    def grab_mouse():
+        if stashed["drag"] is not None:
+            return
+        stashed["drag"] = list(viewer.mouse_drag_callbacks)
+        stashed["dbl"] = list(viewer.mouse_double_click_callbacks)
+        viewer.mouse_drag_callbacks.clear()
+        viewer.mouse_double_click_callbacks.clear()
+        names = ", ".join(getattr(f, "__name__", repr(f)) for f in stashed["drag"]) or "none"
+        print(f"[annotate] DRAW: suspended {len(stashed['drag'])} viewer mouse callbacks "
+              f"({names})", flush=True)
+
+    def release_mouse():
+        """Idempotent, and called by every other mode — ADD must never come back mute."""
+        if stashed["drag"] is None:
+            return
+        viewer.mouse_drag_callbacks.extend(stashed["drag"])
+        viewer.mouse_double_click_callbacks.extend(stashed["dbl"])
+        stashed["drag"] = stashed["dbl"] = None
+
     # Which button is armed. S has to do something different in DRAW mode (refine the trace)
     # from ADD mode (micro_sam's own point-prompt segmentation), and once a shape has been
     # consumed there is nothing left on the layers themselves to tell the two apart.
@@ -287,6 +313,7 @@ def build_helper(viewer, manifest):
         except Exception:
             pass
         mode_state["draw"] = False
+        release_mouse()
         highlight(btn_add, "#2d7d46")
         hint.setText(
             "Click the middle of an object → press <b>S</b> → press <b>C</b>.<br><br>"
@@ -302,6 +329,7 @@ def build_helper(viewer, manifest):
             return
         shp = trace_layer()
         viewer.layers.selection.active = shp
+        grab_mouse()
         active_mode = None
         for mode in ("add_polygon", "add_polygon_lasso"):
             try:
@@ -339,6 +367,7 @@ def build_helper(viewer, manifest):
         lyr.selected_label = 0                  # fill target 0 = erase the whole object
         lyr.n_edit_dimensions = 2
         mode_state["draw"] = False
+        release_mouse()
         highlight(btn_del, "#a33")
         hint.setText("Click on a wrong object → it disappears.")
 
