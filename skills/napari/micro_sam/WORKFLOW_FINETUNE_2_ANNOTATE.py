@@ -251,6 +251,19 @@ def build_helper(viewer, manifest):
     def committed():
         return viewer.layers["committed_objects"] if "committed_objects" in viewer.layers else None
 
+    def trace_layer():
+        """Our own Shapes layer to trace on, created on first use.
+
+        Deliberately NOT micro_sam's `prompts` layer. micro_sam owns that one: it attaches
+        its own mouse callbacks to it, reads it for box prompts and clears it on commit, so
+        a half-drawn polygon living there is being edited by two pieces of code at once. A
+        layer nothing else touches cannot be cleared out from under the user mid-trace.
+        """
+        if "trace" in viewer.layers:
+            return viewer.layers["trace"]
+        return viewer.add_shapes(name="trace", edge_color="#7a4fa3",
+                                 face_color="#ffffff00", edge_width=2)
+
     # Which button is armed. S has to do something different in DRAW mode (refine the trace)
     # from ADD mode (micro_sam's own point-prompt segmentation), and once a shape has been
     # consumed there is nothing left on the layers themselves to tell the two apart.
@@ -284,23 +297,29 @@ def build_helper(viewer, manifest):
 
     def set_draw():
         """Trace the object by hand; the trace becomes the pending object, S refines it."""
-        if "prompts" not in viewer.layers or "current_object" not in viewer.layers:
-            hint.setText("<b>This viewer has no prompts layer</b> — use ADD instead.")
+        if "current_object" not in viewer.layers:
+            hint.setText("<b>This viewer has no current_object layer</b> — use ADD instead.")
             return
-        shp = viewer.layers["prompts"]
+        shp = trace_layer()
         viewer.layers.selection.active = shp
         active_mode = None
         for mode in ("add_polygon", "add_polygon_lasso"):
             try:
                 shp.mode = mode
-                active_mode = mode
+                active_mode = str(shp.mode)         # what it ACTUALLY took, not what we asked
                 break
             except (ValueError, KeyError, AttributeError):
                 continue
         mode_state["draw"] = active_mode is not None
         highlight(btn_draw, "#7a4fa3")
-        print(f"[annotate] DRAW -> {active_mode or 'NO POLYGON TOOL'}", flush=True)
-        if active_mode:
+        print(f"[annotate] DRAW -> layer 'trace', mode {active_mode or 'NONE'}", flush=True)
+        if active_mode and "lasso" in active_mode:
+            # Lasso is drag-to-draw: clicking it produces a dot that vanishes on release,
+            # which reads exactly like a broken button. Say which tool the user actually got.
+            hint.setText("<b>Hold the mouse down and drag</b> right round the object "
+                         "(this napari gave us the lasso tool, not click-by-click).<br><br>"
+                         "Then <b>S</b> to let SAM tidy it, or <b>C</b> to keep it as drawn.")
+        elif active_mode:
             hint.setText(
                 "Click round the object, <b>double-click</b> to close.<br><br>"
                 "Then <b>S</b> — SAM tidies your outline to the real edge — then <b>C</b>.<br><br>"
@@ -341,7 +360,7 @@ def build_helper(viewer, manifest):
         could never be closed.
         """
         from skimage.draw import polygon as _rasterise
-        shp = viewer.layers["prompts"]
+        shp = trace_layer()
         cur = viewer.layers["current_object"]
         if getattr(shp, "_is_creating", False):     # vertices still being placed
             return False
