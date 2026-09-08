@@ -4,7 +4,8 @@ micro_sam fine-tuning — STAGE 2 of 4: the human corrects the tiles.
 
 Opens micro_sam's image-series annotator on the tiles built by stage 1, with the stock model's
 guess already loaded into `committed_objects`, plus a small **Annotation Helper** panel that
-reduces the whole job to two buttons: ADD an object, DELETE an object.
+reduces the whole job to three buttons: ADD an object (click it), DRAW boxes round objects
+(drag a box round each), DELETE an object. Both prompts then go through the same S and C.
 
 RUN THIS VIA python_data_analyst, NEVER via mcp__napari_mcp__execute_code. It opens its own
 napari window and blocks on napari.run() until the human closes it — which is correct here
@@ -17,6 +18,13 @@ unfinished tile (skip_segmented=True), so an interrupted session loses at most o
 
 When the window closes the script prints a per-tile status table. That table is what the agent
 relays to the user and what decides whether stage 3 can start.
+
+THIS PANEL IS A FIXED UI — EDIT `TASK_DIR` AND NOTHING ELSE. It is the only annotator in the
+project, shared unchanged by the Cellpose fine-tuning route (skills/python/cellpose/FINETUNING.md
+stages 1-2); there is no second one to write. The user learns these three buttons and these keys
+once, so a run where a button is renamed, restyled, added, removed or "improved" reads to them as
+the tool breaking — a UI that changes between runs is a bug even when the code is correct. If
+this panel cannot do what a task needs, say so and stop rather than improvising a replacement.
 
 Next: WORKFLOW_FINETUNE_3_TRAIN.py
 
@@ -35,7 +43,7 @@ TASK_DIR = "/app/data/projects/demo/microsam_finetune"   # the folder stage 1 wr
 PRECOMPUTE_AMG_STATE = False   # True also caches the automatic-segmentation state so the
                                # annotator's "Automatic Segmentation" button is instant. Roughly
                                # doubles the startup wait; the pre-segmentation already covers it.
-SHOW_HELPER = True             # the ADD / DELETE panel. Off = stock micro_sam annotator.
+SHOW_HELPER = True             # the ADD / BOX / DELETE panel. Off = stock micro_sam annotator.
 # -----------------------------------------------------------------------------
 
 BANNER = r"""
@@ -46,8 +54,9 @@ BANNER = r"""
   nothing else is. Outlines only need to be roughly right.
 
   ADD an object     ->  click "ADD objects", click the object,  S ,  then  C
+  BOX some objects  ->  click "DRAW boxes", drag a box round each one,  S ,  then  C
   DELETE an object  ->  click "DELETE objects", click the object
-  BAD OUTLINE       ->  delete it, then add it again
+  BAD OUTLINE       ->  delete it, then add it again (a BOX often works where a click did not)
   TILE FINISHED     ->  press  N        <-- N is what SAVES the tile
 
   *** Press N on EVERY tile, INCLUDING THE LAST ONE. ***
@@ -180,12 +189,25 @@ def goto_tile(viewer, nav, target):
 
 
 def build_helper(viewer, manifest):
-    """Dock a two-button panel: ADD (point prompts) / DELETE (fill with 0).
+    """Dock a three-button panel: ADD (point prompts) / BOX (box prompts) / DELETE (fill 0).
 
     Everything a beginner gets wrong here is a MODE problem — clicking the canvas does
     something different depending on which layer is selected and which tool it is in, and
     nothing on screen explains that. These buttons set layer + mode + label together, so a
     click always does what the button they last pressed says it does.
+
+    ADD and BOX are the two prompt types SAM actually takes, and both go to micro_sam's own
+    S: ADD puts a point in `point_prompts`, BOX puts a rectangle in `prompts`. Neither this
+    panel nor anything else here intercepts S or C. Earlier versions tried to add a third
+    prompt — a traced polygon, then a painted mask, fed to the predictor directly — and both
+    lost to the same thing: micro_sam's prompt handling lives on the VIEWER's mouse callbacks
+    and fires on every click whatever layer is selected, so any tool that has to hold state
+    across more than one press gets interrupted mid-way. A rectangle is one press-drag-release
+    and has no such state, which is why this is the shape that works.
+
+    For touching objects a box is still weak — it contains the neighbours. The honest answer
+    there is a negative point (ADD, then T) inside the neighbour, or accepting the clump and
+    deleting it.
     """
     from qtpy import QtWidgets, QtCore
 
@@ -203,18 +225,25 @@ def build_helper(viewer, manifest):
     sub.setWordWrap(True)
     lay.addWidget(sub)
 
+    BTN_BASE = "font-size:14px; font-weight:bold;"
     btn_add = QtWidgets.QPushButton("➕  ADD objects")
+    btn_box = QtWidgets.QPushButton("▭  DRAW boxes")
     btn_del = QtWidgets.QPushButton("✖  DELETE objects")
-    for b in (btn_add, btn_del):
+    for b in (btn_add, btn_box, btn_del):
         b.setMinimumHeight(44)
-        b.setStyleSheet("font-size:14px; font-weight:bold;")
+        b.setStyleSheet(BTN_BASE)
         lay.addWidget(b)
 
-    btn_undo = QtWidgets.QPushButton("↩  UNDO the outline I am building")
-    btn_undo.setMinimumHeight(34)
-    btn_undo.setStyleSheet("font-size:13px;")
-    btn_undo.setToolTip("Throw away the outline S just produced, and the clicks that made it.")
-    lay.addWidget(btn_undo)
+    def highlight(active, colour):
+        """Exactly one button is coloured, and it is the mode the canvas is actually in.
+
+        Only the three MODE buttons take a colour. BACK is an action — it does not
+        change what a click on the canvas does, so highlighting them would say something
+        untrue about the tool currently in the user's hand.
+        """
+        for b in (btn_add, btn_box, btn_del):
+            b.setStyleSheet(BTN_BASE + (f" background:{colour}; color:white;"
+                                        if b is active else ""))
 
     hint = QtWidgets.QLabel()
     hint.setWordWrap(True)
@@ -277,7 +306,7 @@ def build_helper(viewer, manifest):
         "<b>T</b> switch click include ↔ exclude<br>"
         "<b>C</b> commit the object<br>"
         "<b>D</b> delete the object under the mouse<br>"
-        "<b>U</b> or <b>Ctrl+Z</b> undo the outline you are building<br><br>"
+        "<i>(S and C work the same for a click and for a box)</i><br><br>"
         "<b>B</b> — back to the previous tile<br>"
         "<b>N</b> — save this tile, go to the next<br>"
         "<span style='color:#d33;'><b>Press N on every tile,<br>including the last one.</b></span>"
@@ -311,14 +340,47 @@ def build_helper(viewer, manifest):
             pts.current_properties = props
         except Exception:
             pass
-        btn_add.setStyleSheet("font-size:14px; font-weight:bold; background:#2d7d46; color:white;")
-        btn_del.setStyleSheet("font-size:14px; font-weight:bold;")
+        highlight(btn_add, "#2d7d46")
         hint.setText(
             "Click the middle of an object → press <b>S</b> → press <b>C</b>.<br><br>"
             "<i>Pressed C and nothing happened?</i> That object is already outlined — "
             "micro_sam refuses to commit on top of an existing one. "
             "<b>DELETE the old outline first</b>, then add it again."
         )
+
+    def set_box():
+        """Drag a box round each object; micro_sam segments inside them on S.
+
+        This is stock micro_sam and nothing else. The `prompts` Shapes layer IS its box-prompt
+        input and its own S already reads it — several boxes at once if several are drawn — so
+        this button only has to select the layer and set the tool. It holds no drawing state of
+        its own and never touches the mouse callbacks, which is exactly why it survives where
+        the polygon and the brush did not: a rectangle is one press-drag-release, with nothing
+        in between for micro_sam's viewer-level prompt handling to interrupt.
+        """
+        if "prompts" not in viewer.layers:
+            hint.setText("<b>This viewer has no prompts layer</b> — use ADD instead.")
+            return
+        shp = viewer.layers["prompts"]
+        viewer.layers.selection.active = shp
+        active_mode = None
+        try:
+            shp.mode = "add_rectangle"
+            active_mode = str(shp.mode)          # what it ACTUALLY took, not what we asked
+        except (ValueError, KeyError, AttributeError):
+            pass
+        highlight(btn_box, "#7a4fa3")
+        print(f"[annotate] BOX -> layer 'prompts', mode {active_mode or 'NONE'}", flush=True)
+        if active_mode:
+            hint.setText(
+                "<b>Drag a box round each object</b> you want outlined. You can draw "
+                "several boxes before pressing anything.<br><br>"
+                "Then <b>S</b> to outline them, then <b>C</b> to keep them.<br><br>"
+                "<i>The box only has to contain the object — it does not have to be tight. "
+                "If a neighbour creeps in, press <b>ADD</b>, then <b>T</b>, and click the "
+                "neighbour to exclude it.</i>")
+        else:
+            hint.setText("<b>Could not switch to the rectangle tool</b> — use ADD instead.")
 
     def set_delete():
         lyr = committed()
@@ -329,12 +391,16 @@ def build_helper(viewer, manifest):
         lyr.preserve_labels = False             # else the fill refuses to write 0 over a label
         lyr.selected_label = 0                  # fill target 0 = erase the whole object
         lyr.n_edit_dimensions = 2
-        btn_del.setStyleSheet("font-size:14px; font-weight:bold; background:#a33; color:white;")
-        btn_add.setStyleSheet("font-size:14px; font-weight:bold;")
+        highlight(btn_del, "#a33")
         hint.setText("Click on a wrong object → it disappears.")
 
     btn_add.clicked.connect(set_add)
+    btn_box.clicked.connect(set_box)
     btn_del.clicked.connect(set_delete)
+
+    # S and C are left to micro_sam entirely. Both prompt types this panel offers — points in
+    # `point_prompts`, boxes in `prompts` — are ones its own S already reads, so there is
+    # nothing to intercept and no second code path that can disagree with it.
 
     # T (include <-> exclude) is broken in stock micro_sam 1.8.2 for the most common case:
     # committing with C deletes the point prompts but napari keeps their indices in
@@ -357,45 +423,6 @@ def build_helper(viewer, manifest):
         hint.setText(f"Next click = <b>{'INCLUDE' if lbl == 'positive' else 'EXCLUDE'}</b>"
                      f"{' (green)' if lbl == 'positive' else ' (red) — click the part that should NOT be in the object'}"
                      f"<br>then press <b>S</b> again. Press <b>T</b> to switch back.")
-
-    def undo_last():
-        """Throw away the in-progress outline, or put back the object just deleted.
-
-        Ctrl+Z cannot do this. `S` writes its result into the `current_object` layer
-        PROGRAMMATICALLY, and napari's undo history only records interactive edits, so there is
-        nothing for it to revert — measured on micro_sam 1.8.2: after S the layer still holds
-        every pixel it wrote, and Ctrl+Z is not even in the viewer keymap (napari handles it as
-        an app-level Qt shortcut on the selected layer). So the honest fix is to implement the
-        undo the user actually wants rather than to keep advertising a key that does nothing.
-        """
-        cur = viewer.layers["current_object"] if "current_object" in viewer.layers else None
-        if cur is not None and int(np.count_nonzero(np.asarray(cur.data))):
-            cur.data = np.zeros_like(np.asarray(cur.data))
-            cur.refresh()
-            if "point_prompts" in viewer.layers:
-                pts = viewer.layers["point_prompts"]
-                try:
-                    pts.selected_data = set(range(len(pts.data)))
-                    pts.remove_selected()
-                except Exception:
-                    pts.data = []
-                pts.refresh()
-            hint.setText("Dropped the outline you were building. Click the object again and "
-                         "press <b>S</b>.")
-            return
-        # Nothing in progress: the last thing that changed was a DELETE on committed_objects.
-        lyr = committed()
-        try:
-            if lyr is not None and hasattr(lyr, "undo"):
-                lyr.undo()
-                hint.setText("Put back the object you deleted.")
-                return
-        except Exception:
-            pass
-        hint.setText("Nothing to undo. (This undoes the outline you are building, or the last "
-                     "object you deleted — not a whole tile.)")
-
-    btn_undo.clicked.connect(undo_last)
 
     def prompts_alive():
         return "point_prompts" in viewer.layers
@@ -437,17 +464,6 @@ def build_helper(viewer, manifest):
             hint.setText(f"<b>Clear did not work ({type(exc).__name__}).</b> Delete the one "
                          f"bad outline with <b>DELETE objects</b> (or <b>D</b>) and add it "
                          f"again — that works in every state.")
-
-    # `U` is the one that is guaranteed to arrive: napari routes Ctrl+Z through its own Qt
-    # action on the selected layer, so a viewer keybinding for it may never fire. Both are
-    # bound so whichever the user reaches for does the same, working thing.
-    @viewer.bind_key("u", overwrite=True)
-    def _undo_u(_v):
-        undo_last()
-
-    @viewer.bind_key("Control-Z", overwrite=True)
-    def _undo_ctrl_z(_v):
-        undo_last()
 
     @viewer.bind_key("b", overwrite=True)
     def _back_one_tile(_v):

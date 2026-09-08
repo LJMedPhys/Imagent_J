@@ -177,11 +177,15 @@ table on exit; relay that.
 > the outlines that already look right alone — you are checking its work, not redrawing it. You
 > don't need to touch anything outside the squares.
 >
-> Use the two big buttons in the **ImagentJ — Annotation Helper** panel on the right:
+> Use the three big buttons in the **ImagentJ — Annotation Helper** panel on the right:
 > - **➕ ADD objects** — click the middle of a missed object, press **S**, then press **C**.
+> - **▭ DRAW boxes** — drag a box round each object (several is fine), then the same **S** and
+>   **C**. Use it when clicking keeps getting an object wrong.
 > - **✖ DELETE objects** — click on anything outlined that shouldn't be.
 >
-> To fix a bad outline: **delete it, then add it again.** That's the whole workflow.
+> To fix a bad outline: **delete it, then add it again.** If ADD keeps getting the same object
+> wrong, box it with **▭ DRAW boxes** instead — a box says *where* the object is rather than
+> what to click. That's the whole workflow.
 > Don't use *Clear Annotations* (Shift+C) — deleting the one bad outline always works.
 >
 > When a square looks right, press **N** (or the blue *TILE DONE* button). **Press N on the last
@@ -369,8 +373,21 @@ CSV and overlay previews; the masks go straight into a `python_data_analyst` mea
     them collapsed the mask to 4-362 px (IoU 0.00-0.26). What this workflow reliably teaches
     is *find the objects you missed*, *stop outlining debris*, and *follow this boundary*, on
     objects that are separable to begin with. If the correction the user needs IS "split these
-    touching objects", say so before they annotate: they will need a different tool for the
-    labels (or the object classifier route in SKILL.md), not this one.
+    touching objects", say so before they annotate rather than letting them click at it. The
+    **▭ DRAW boxes** button helps on a badly-outlined *single* object — a box says where the
+    object is instead of what to click — but a box round one object in a clump contains its
+    neighbours too, so there it needs an exclude point (**T**) as well, and sometimes the
+    honest answer is to leave that clump out.
+
+    **Do not try to add a fourth prompt type here.** Two attempts failed the same way: a
+    traced polygon (napari Shapes) and a painted coarse mask (`mask_input` on the Labels
+    layer), both fed to the predictor directly. micro_sam's prompt handling lives on the
+    VIEWER's mouse callbacks and fires on every click whatever layer is selected, so any tool
+    that must hold state across more than one press — placing polygon vertices, dragging a
+    brush — gets interrupted part-way and the in-progress shape is discarded by napari's
+    `_finish_drawing()`. Suspending those callbacks while the tool is armed did not rescue it
+    either. A rectangle is one press-drag-release with no state in between, which is why the
+    box is the only hand-drawn prompt that survives contact with this annotator.
 22. **A folder that mixes grayscale and RGB files silently breaks the annotator.** The series
     annotator shows every tile in ONE napari image layer, so the first `(512,512,3)` tile after
     a `(512,512)` one is read as a 512-SLICE STACK: the canvas goes black, the committed masks
@@ -445,7 +462,7 @@ annotations, and the train-val split never sharing a source image), and
 | file | what it is |
 |---|---|
 | `WORKFLOW_FINETUNE_1_PREPARE.py` | tiles + pre-segmentation + `manifest.json` + generated human instructions |
-| `WORKFLOW_FINETUNE_2_ANNOTATE.py` | the annotator with the ADD/DELETE helper panel; blocks until the user is done, then reports |
+| `WORKFLOW_FINETUNE_2_ANNOTATE.py` | the annotator with the ADD/BOX/DELETE helper panel; blocks until the user is done, then reports |
 | `WORKFLOW_FINETUNE_3_TRAIN.py` | validate → split → train → export → **stock vs fine-tuned on held-out tiles** → `evaluation.json` |
 | `WORKFLOW_FINETUNE_4_APPLY.py` | segment the folder with whichever model won, tiled at the training scale |
 | `SKILL.md` | the rest of micro_sam: automatic segmentation, the interactive annotator, the object classifier |

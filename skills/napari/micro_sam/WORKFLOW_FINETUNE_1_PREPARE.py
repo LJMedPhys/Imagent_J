@@ -1289,10 +1289,10 @@ A napari window opens with two layers listed on the left:
 | `committed_objects` | the computer's guess — one colour per object. **This is your answer sheet.** |
 
 The **ImagentJ — Annotation Helper** panel on the right has everything you need: a tile
-counter and three buttons. Use the buttons — they put napari into the right mode for you,
+counter and four buttons. Use the buttons — they put napari into the right mode for you,
 which is the one thing that is easy to get wrong.
 
-## Only two things to do
+## Three things to do
 
 ### ➕ ADD a missing object
 1. Click **➕ ADD objects** in the helper panel (it turns green).
@@ -1308,6 +1308,23 @@ which is the one thing that is easy to get wrong.
 > **Pressed C and nothing happened?** The thing you clicked is already outlined. The tool
 > refuses to draw on top of an existing object — delete that outline first, then add it again.
 
+### ▭ DRAW boxes round objects
+Use this when **ADD will not cooperate** — an outline the computer gets wrong however you
+click it, or an object it keeps missing. Telling it *where* the object is often works where
+telling it *what to click* does not.
+
+1. Click **▭ DRAW boxes** in the helper panel (it turns purple).
+2. **Drag a box** round an object. Draw as many boxes as you like before going on.
+   - the box only has to contain the object; it does not have to be tight.
+3. Press **S** → each box is outlined.
+4. Press **C** to keep them.
+
+Same **S** and **C** as ADD — the only difference is what you gave the computer to work from.
+You can mix the two: a box round the object and a click inside it are both prompts.
+
+> If a neighbour creeps into the box, press **ADD**, then **T** (the next click now means
+> *exclude*), and click the neighbour. Then **S** again.
+
 ### ✖ DELETE a wrong object
 1. Click **✖ DELETE objects** in the helper panel (it turns red).
 2. Click on the wrong object → it disappears.
@@ -1316,7 +1333,7 @@ which is the one thing that is easy to get wrong.
 
 Delete anything that is not a real object (debris, dirt, a shadow), and anything the computer
 got badly wrong. **To fix a bad outline, delete it and add it again** — that is faster and
-safer than trying to repair it, and those two actions are all you ever need:
+safer than trying to repair it:
 
 | problem | fix |
 |---|---|
@@ -1325,11 +1342,15 @@ safer than trying to repair it, and those two actions are all you ever need:
 | one outline covers two objects | DELETE it, then ADD each object separately |
 | one object split into two outlines | DELETE both, then ADD it with one click |
 | outline is badly off | DELETE it, then ADD it again |
+| ADD keeps getting the same object wrong | DELETE it, then **BOX** it |
+| objects packed tightly together | DELETE the clump, then BOX each one and exclude with **T** |
 
-> **Objects packed tightly together are the one case this cannot fix.** One click inside a
-> tight clump gives you the whole clump, and once that is committed every further click inside
-> it is ignored. Try it twice; if it will not separate them, leave the clump as it is and tell
-> whoever asked — it needs a different tool, not more clicking.
+> **Tight clumps are the hard case.** One click inside a clump gives you the whole clump, and
+> once that is committed every further click inside it is ignored — clicking more will not
+> help. DELETE the clump first, then box one object at a time, adding an *exclude* click
+> (**T**) on the neighbour that keeps coming along. If a clump is so dense that you cannot
+> tell where one object ends and the next begins, leave it out and say so to whoever asked:
+> a guess there is worse for training than nothing, because the computer learns the guess.
 
 ## Finishing a tile
 
@@ -1359,15 +1380,16 @@ already-finished tiles are skipped when the annotator is restarted.
 | key | action |
 |---|---|
 | **S** | segment from your click |
-| **U** | undo that segment and start the object again |
 | **T** | switch the click between *include* (positive) and *exclude* (negative) |
 | **C** | commit the object you just made |
 | **B** | go back to the previous tile |
 | **N** | save this tile and go to the next one |
 | **D** | delete the object under the mouse pointer |
-| **U** or **Ctrl+Z** | throw away the outline you are building (or put back the object you
-just deleted) |
 | scroll / drag | zoom / pan |
+
+> **Got an outline you don't want?** Delete it (**D**, or DELETE objects mode) and make it
+> again. There is no undo here — deleting and redoing is the one move that works in every
+> state, so it is the only one the panel offers.
 
 > **Do not use Shift+C / *Clear Annotations*.** It is listed in micro_sam's own menus, but in
 > this version it can fail instead of clearing. To start an object over, delete that one

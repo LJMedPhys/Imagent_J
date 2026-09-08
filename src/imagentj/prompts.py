@@ -589,6 +589,16 @@ python_analyst_prompt = r"""
              for teaching a model from a user's own annotations. Copy the template with
              `copy_file`, edit its CONFIG block, and change nothing else unless the task
              requires it.
+           • THE ANNOTATION UI IS FIXED — this one has no "unless".
+             `WORKFLOW_FINETUNE_2_ANNOTATE.py` is the ONLY annotator, for every backend: the
+             Cellpose route shares it unchanged (`skills/python/cellpose/FINETUNING.md`), and
+             there is no Cellpose annotator to look for. Its helper panel is a UI the user has
+             LEARNED — the same buttons, the same keys, the same wording, every run. Edit its
+             CONFIG block and nothing else. Never write your own annotation window, never add,
+             remove, rename or re-style a button, and never "improve" the flow. A panel that
+             differs between runs is experienced as the tool breaking, even when the code is
+             correct. If the panel genuinely cannot do what the task needs, say so and stop —
+             do not improvise a replacement.
 
 
          ────────────────────────────────────────
