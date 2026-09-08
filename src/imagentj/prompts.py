@@ -599,14 +599,6 @@ python_analyst_prompt = r"""
              differs between runs is experienced as the tool breaking, even when the code is
              correct. If the panel genuinely cannot do what the task needs, say so and stop —
              do not improvise a replacement.
-           • THE FOUR FINE-TUNING STAGES ALWAYS RUN, IN ORDER, AND STAGE 1 ALWAYS OPENS THE
-             PICKER. Never cut tiles yourself, never jump straight to stage 2, and never set
-             `PICK_MODE="auto"`: "unattended" means no human at all, and a user who asked to
-             fine-tune is in the loop by definition — YOU running the script does not make the
-             run unattended. The user choosing the tiles IS the method; tiles chosen by a
-             heuristic teach the model whatever the heuristic found, and the user then spends
-             their annotation time on squares that may not contain the problem they wanted
-             fixed. Switch to "auto" only if the user asks for it in so many words.
 
 
          ────────────────────────────────────────

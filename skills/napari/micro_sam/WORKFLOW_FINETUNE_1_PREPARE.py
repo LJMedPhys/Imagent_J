@@ -53,16 +53,9 @@ from skimage.segmentation import find_boundaries
 INPUT_DIR = "/app/data/projects/demo/raw_images"
 TASK_DIR = "/app/data/projects/demo/microsam_finetune"
 
-PICK_MODE = "interactive"   # "interactive" = the USER clicks the tiles. LEAVE IT ALONE. This
-                            #   is not a performance setting, it is the workflow: fine-tuning
-                            #   learns from THIS user's corrections, so this user is the one
-                            #   who says where the model is wrong.
-                            #   "auto" = content heuristic, no window. "Unattended" here means
-                            #   NO HUMAN AT ALL — a batch job nobody is waiting on. An agent
-                            #   working on a user's behalf is not that: a user who asked to
-                            #   fine-tune is in the loop by definition. Set "auto" only when
-                            #   the user has asked for it in so many words, and review the
-                            #   tiles it chose.
+PICK_MODE = "interactive"   # "interactive" = the USER clicks the tiles (default, and what
+                            #   makes this reliable). "auto" = content heuristic, no window;
+                            #   ONLY for unattended runs, and its tiles must be reviewed.
 GROUP_REGEX = None     # How to split the folder into groups the picker walks through, so the
                        # tile set covers the experiment instead of one lucky corner of it.
                        #   None      -> group by sub-folder, or one group if the folder is flat
