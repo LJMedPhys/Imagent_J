@@ -1,6 +1,6 @@
 services:
   imagentj:
-    image: ${IMAGENTJ_IMAGE:-agenticj:cpu-local-napari}
+    image: ${IMAGENTJ_IMAGE:-agenticj:gpu-local}
     # Do not pin platform here: Docker/BuildKit builds for the host architecture
     # by default, and the Dockerfile routes arch-specific steps via TARGETARCH.
     build:
