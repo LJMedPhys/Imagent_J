@@ -19,6 +19,13 @@ unfinished tile (skip_segmented=True), so an interrupted session loses at most o
 When the window closes the script prints a per-tile status table. That table is what the agent
 relays to the user and what decides whether stage 3 can start.
 
+THIS PANEL IS A FIXED UI — EDIT `TASK_DIR` AND NOTHING ELSE. It is the only annotator in the
+project, shared unchanged by the Cellpose fine-tuning route (skills/python/cellpose/FINETUNING.md
+stages 1-2); there is no second one to write. The user learns these three buttons and these keys
+once, so a run where a button is renamed, restyled, added, removed or "improved" reads to them as
+the tool breaking — a UI that changes between runs is a bug even when the code is correct. If
+this panel cannot do what a task needs, say so and stop rather than improvising a replacement.
+
 Next: WORKFLOW_FINETUNE_3_TRAIN.py
 
 Run in the `napari-mcp` env. Edit TASK_DIR, execute.

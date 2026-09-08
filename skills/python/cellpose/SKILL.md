@@ -16,8 +16,12 @@ description: >-
 
 # Cellpose (Python API) — Documentation Index
 
-> **Teaching Cellpose on the user's own annotations → `FINETUNING.md`** and the four
-> `WORKFLOW_FINETUNE_CP_*.py` scripts here. Route "train cellpose on my data", "it keeps missing
+> **Teaching Cellpose on the user's own annotations → `FINETUNING.md`.** Stages 3 and 4 are the
+> `WORKFLOW_FINETUNE_CP_*.py` scripts here; **stages 1 and 2 — picking tiles and annotating them
+> — are micro_sam's `WORKFLOW_FINETUNE_1_PREPARE.py` and `WORKFLOW_FINETUNE_2_ANNOTATE.py`, run
+> unchanged.** There is no Cellpose annotator and none is to be written: tiles and label masks
+> do not care which model consumes them, and the user gets the same annotation UI either way.
+> Route "train cellpose on my data", "it keeps missing
 > my cells", "the nuclei model finds nothing on my images" there. It works for **any** cellpose
 > model — `cpsam` (v4) and the whole v3 zoo (`nuclei`, `cyto3`, `livecell_cp3`, …); the scripts
 > re-exec into whichever conda env has the model you asked for. The user picks tiles and corrects
