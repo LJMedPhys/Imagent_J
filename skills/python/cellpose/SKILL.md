@@ -16,6 +16,14 @@ description: >-
 
 # Cellpose (Python API) — Documentation Index
 
+> **Teaching Cellpose on the user's own annotations → `FINETUNING.md`** and the four
+> `WORKFLOW_FINETUNE_CP_*.py` scripts here. Route "train cellpose on my data", "it keeps missing
+> my cells", "the nuclei model finds nothing on my images" there. It works for **any** cellpose
+> model — `cpsam` (v4) and the whole v3 zoo (`nuclei`, `cyto3`, `livecell_cp3`, …); the scripts
+> re-exec into whichever conda env has the model you asked for. The user picks tiles and corrects
+> ~8 small ones in napari, training takes minutes on a GPU, and the result is MEASURED against
+> the stock model on held-out tiles before anything downstream uses it.
+
 Deep-learning instance segmentation for cells and nuclei. This skill is the **Python** route.
 There is also a Fiji/BIOP route (`cellpose_documentation`) — see *Which route* below.
 

@@ -385,6 +385,11 @@ Built-ins live in `/home/imagentj/.cellpose/models`: `cyto3`, `cyto2`, `nucleito
 > (they fail to load outright): `neurips_cellpose_default`, `neurips_cellpose_transformer`,
 > `transformer_cp3`.
 
+## Producing a fine-tuned model from the user's annotations
+
+Not here — fine-tuning is a Python/batch job. See `python/cellpose/FINETUNING.md` and the
+`WORKFLOW_FINETUNE_CP_*.py` scripts beside it. This skill covers using a model, not training one.
+
 ## Custom / fine-tuned models the user provides
 
 The user's own fine-tuned Cellpose model files (e.g. from `cellpose --train`) belong in

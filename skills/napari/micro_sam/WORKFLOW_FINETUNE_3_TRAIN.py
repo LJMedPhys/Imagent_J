@@ -135,9 +135,25 @@ def validate(manifest):
             continue
         ids, counts = np.unique(lab, return_counts=True)
         keep = [(i, c) for i, c in zip(ids, counts) if i != 0 and c >= MIN_OBJECT_SIZE]
+        # EMPTY is not the same as UNANNOTATED. The file exists, so the user opened this tile
+        # and confirmed micro_sam's "Nothing is segmented yet" dialog — on a field of pure
+        # debris that is the correct answer, and a deliberate negative example. micro_sam still
+        # cannot train on it: torch_em's MinInstanceSampler(2) has p_reject=1.0, so a patch
+        # with no instances is rejected every time and the tile is never sampled. Say that,
+        # instead of reporting the user's careful work as missing.
+        if not keep:
+            problems.append(
+                f"{name}: cleared to EMPTY by the user (a debris-only field). That is a "
+                f"negative example, not a missing annotation — but torch_em's "
+                f"MinInstanceSampler rejects a patch with no instances every time, so "
+                f"micro_sam cannot learn from it. To use tiles like this, pass a sampler with "
+                f"p_reject < 1.0, or train this data with the Cellpose route "
+                f"(skills/python/cellpose/, MIN_TRAIN_MASKS=0), which accepts them.")
+            continue
         if len(keep) < 2:
-            problems.append(f"{name}: only {len(keep)} object(s) >= {MIN_OBJECT_SIZE} px "
-                            f"(micro_sam needs >= 2 per training patch) — skipped")
+            problems.append(f"{name}: only {len(keep)} object(s) >= {MIN_OBJECT_SIZE} px. "
+                            f"micro_sam's sampler needs >= 2 per training patch, so this real "
+                            f"annotation cannot be used — excluded.")
             continue
         e = dict(e, n_objects=len(keep))
         usable.append(e)
@@ -292,6 +308,13 @@ def main():
     manifest = load_manifest()
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model_type = manifest["model_type"]
+    # Round 2+: the model the user actually corrected in stage 1/2. Training continues from it
+    # and — this is the part that is easy to get wrong — the BASELINE becomes it too. Scoring
+    # round 2 against stock would credit it with round 1's gain and call a regression a win.
+    base_ckpt = manifest.get("base_checkpoint")
+    if base_ckpt and not os.path.exists(base_ckpt):
+        raise SystemExit(f"manifest names a base checkpoint that is gone: {base_ckpt}")
+    baseline_name = "round-1 model" if base_ckpt else "stock"
 
     # --- validate ---------------------------------------------------------------
     usable, problems = validate(manifest)
@@ -369,6 +392,8 @@ def main():
         train_loader=train_loader, val_loader=val_loader,
         n_epochs=N_EPOCHS, n_objects_per_batch=n_obj, lr=LEARNING_RATE,
         n_sub_iteration=N_SUB_ITERATION,
+        checkpoint_path=base_ckpt,          # None on round 1 = start from the stock weights
+
         with_segmentation_decoder=True,     # required for AIS, i.e. for hands-off stage 4
         device=device, save_root=save_root,
         early_stopping=None,                # a few tiles give a noisy val curve; stopping on it
@@ -398,11 +423,12 @@ def main():
         candidates.append((os.path.splitext(os.path.basename(raw))[0], raw))
 
     print("-" * 72)
-    print(f"EVALUATING stock + {len(candidates)} checkpoint(s) on {len(val_e)} held-out tile(s) ...")
-    before = segment_all(model_type, None, val_e, device)
+    print(f"EVALUATING the {baseline_name} + {len(candidates)} checkpoint(s) on "
+          f"{len(val_e)} held-out tile(s) ...")
+    before = segment_all(model_type, base_ckpt, val_e, device)
     rows_b = score(before, val_e)
     msa_b = float(np.mean([r["msa"] for r in rows_b]))
-    print(f"  stock              mSA {msa_b:.3f}")
+    print(f"  {baseline_name:<18} mSA {msa_b:.3f}")
 
     results, best_label, best_msa, after, rows_a = [], None, -1.0, None, None
     for label, raw in candidates:
@@ -447,16 +473,23 @@ def main():
 
     improved = msa_a > msa_b
     delta = msa_a - msa_b
-    rel = 100 * delta / msa_b if msa_b > 0 else float("nan")
-    winner_ckpt = exported if improved else None
+    # A baseline of exactly 0 (the stock model finds nothing at all) has no percentage —
+    # printing "+nan %" in the headline result reads like a crash.
+    rel = (f"{100 * delta / msa_b:+.1f} %" if msa_b > 0
+           else "up from a baseline that found nothing")
+    # Losing means "keep what we had" — which on round 2 is the ROUND-1 checkpoint, not stock.
+    # Returning None here would silently throw away a good round-1 model.
+    winner_ckpt = exported if improved else base_ckpt
     print("-" * 72)
     if improved:
         print(f"RESULT: fine-tuned model WINS ({best_label}).  mSA {msa_b:.3f} -> {msa_a:.3f} "
-              f"({delta:+.3f}, {rel:+.1f} %).  Stage 4 will use the fine-tuned checkpoint.")
+              f"({delta:+.3f}, {rel}).  Stage 4 will use the fine-tuned checkpoint.")
     else:
         print(f"RESULT: fine-tuning did NOT help. The BEST of {len(candidates)} checkpoint(s) "
-              f"still scored {msa_a:.3f} against the stock model's {msa_b:.3f} ({delta:+.3f}).\n"
-              f"        Stage 4 will keep the STOCK {model_type}. Tell the user plainly.\n"
+              f"still scored {msa_a:.3f} against the {baseline_name}'s {msa_b:.3f} ({delta:+.3f}).\n"
+              f"        Stage 4 will keep the "
+              f"{'ROUND-1 fine-tuned model' if base_ckpt else 'STOCK ' + model_type}. "
+              f"Tell the user plainly.\n"
               f"        Most likely causes, in order:\n"
               f"        1. The annotations are not better than what the stock model already does.\n"
               f"           Look at evaluation_comparison.png — if the 'your annotation' column is\n"
@@ -474,6 +507,7 @@ def main():
 
     result = {
         "run_name": RUN_NAME, "model_type": model_type, "device": device,
+        "base_checkpoint": base_ckpt, "baseline": baseline_name,
         "n_epochs": N_EPOCHS, "n_objects_per_batch": n_obj, "lr": LEARNING_RATE,
         "n_sub_iteration": N_SUB_ITERATION, "num_workers": NUM_WORKERS,
         "tile_size": manifest["tile_size"], "tiled_inference": manifest.get("tiled_inference", False),
