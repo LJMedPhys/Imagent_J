@@ -132,9 +132,17 @@ auto-advance off for the rest of the session, and "Next group ▶" moves on when
 pre-segments every tile with the stock model, and writes `manifest.json` plus a generated
 `ANNOTATION_INSTRUCTIONS.md`.
 
-`PICK_MODE = "auto"` restores the old content heuristic for unattended runs. Use it only when
-there is no human in the loop, and **look at `previews/` afterwards**: the heuristic counts
-blobs, and a blob is a blob whether it is a nucleus or a speck of stain precipitate.
+`PICK_MODE = "auto"` restores the old content heuristic for unattended runs. **Never choose it
+on the user's behalf.** "Unattended" means no human at all — a batch job nobody is waiting on;
+an agent running the script is not the same thing, and a user who asked to fine-tune is in the
+loop by definition. Switch only on an explicit request, and **look at `previews/` afterwards**:
+the heuristic counts blobs, and a blob is a blob whether it is a nucleus or a speck of stain
+precipitate.
+
+Skipping the picker is the most expensive mistake available here. The tiles decide everything
+downstream — a run whose tiles came from a heuristic teaches the model whatever the heuristic
+happened to find, and the user spends their annotation time on squares that may not contain a
+single case of the thing they wanted fixed.
 
 Then **read stage 1's output before moving on**:
 - `covering N/M group(s)` — a group with no tile is a well the model never sees.

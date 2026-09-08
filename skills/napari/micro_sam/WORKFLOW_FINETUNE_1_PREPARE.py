@@ -53,9 +53,16 @@ from skimage.segmentation import find_boundaries
 INPUT_DIR = "/app/data/projects/demo/raw_images"
 TASK_DIR = "/app/data/projects/demo/microsam_finetune"
 
-PICK_MODE = "interactive"   # "interactive" = the USER clicks the tiles (default, and what
-                            #   makes this reliable). "auto" = content heuristic, no window;
-                            #   ONLY for unattended runs, and its tiles must be reviewed.
+PICK_MODE = "interactive"   # "interactive" = the USER clicks the tiles. LEAVE IT ALONE. This
+                            #   is not a performance setting, it is the workflow: fine-tuning
+                            #   learns from THIS user's corrections, so this user is the one
+                            #   who says where the model is wrong.
+                            #   "auto" = content heuristic, no window. "Unattended" here means
+                            #   NO HUMAN AT ALL — a batch job nobody is waiting on. An agent
+                            #   working on a user's behalf is not that: a user who asked to
+                            #   fine-tune is in the loop by definition. Set "auto" only when
+                            #   the user has asked for it in so many words, and review the
+                            #   tiles it chose.
 GROUP_REGEX = None     # How to split the folder into groups the picker walks through, so the
                        # tile set covers the experiment instead of one lucky corner of it.
                        #   None      -> group by sub-folder, or one group if the folder is flat
@@ -1380,15 +1387,16 @@ already-finished tiles are skipped when the annotator is restarted.
 | key | action |
 |---|---|
 | **S** | segment from your click |
-| **U** | undo that segment and start the object again |
 | **T** | switch the click between *include* (positive) and *exclude* (negative) |
 | **C** | commit the object you just made |
 | **B** | go back to the previous tile |
 | **N** | save this tile and go to the next one |
 | **D** | delete the object under the mouse pointer |
-| **U** or **Ctrl+Z** | throw away the outline you are building (or put back the object you
-just deleted) |
 | scroll / drag | zoom / pan |
+
+> **Got an outline you don't want?** Delete it (**D**, or DELETE objects mode) and make it
+> again. There is no undo here — deleting and redoing is the one move that works in every
+> state, so it is the only one the panel offers.
 
 > **Do not use Shift+C / *Clear Annotations*.** It is listed in micro_sam's own menus, but in
 > this version it can fail instead of clearing. To start an object over, delete that one

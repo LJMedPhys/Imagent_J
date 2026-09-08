@@ -237,19 +237,13 @@ def build_helper(viewer, manifest):
     def highlight(active, colour):
         """Exactly one button is coloured, and it is the mode the canvas is actually in.
 
-        Only the three MODE buttons take a colour. UNDO and BACK are actions — they do not
+        Only the three MODE buttons take a colour. BACK is an action — it does not
         change what a click on the canvas does, so highlighting them would say something
         untrue about the tool currently in the user's hand.
         """
         for b in (btn_add, btn_box, btn_del):
             b.setStyleSheet(BTN_BASE + (f" background:{colour}; color:white;"
                                         if b is active else ""))
-
-    btn_undo = QtWidgets.QPushButton("↩  UNDO the outline I am building")
-    btn_undo.setMinimumHeight(34)
-    btn_undo.setStyleSheet("font-size:13px;")
-    btn_undo.setToolTip("Throw away the outline S just produced, and the clicks that made it.")
-    lay.addWidget(btn_undo)
 
     hint = QtWidgets.QLabel()
     hint.setWordWrap(True)
@@ -312,7 +306,6 @@ def build_helper(viewer, manifest):
         "<b>T</b> switch click include ↔ exclude<br>"
         "<b>C</b> commit the object<br>"
         "<b>D</b> delete the object under the mouse<br>"
-        "<b>U</b> or <b>Ctrl+Z</b> undo the outline you are building<br>"
         "<i>(S and C work the same for a click and for a box)</i><br><br>"
         "<b>B</b> — back to the previous tile<br>"
         "<b>N</b> — save this tile, go to the next<br>"
@@ -431,45 +424,6 @@ def build_helper(viewer, manifest):
                      f"{' (green)' if lbl == 'positive' else ' (red) — click the part that should NOT be in the object'}"
                      f"<br>then press <b>S</b> again. Press <b>T</b> to switch back.")
 
-    def undo_last():
-        """Throw away the in-progress outline, or put back the object just deleted.
-
-        Ctrl+Z cannot do this. `S` writes its result into the `current_object` layer
-        PROGRAMMATICALLY, and napari's undo history only records interactive edits, so there is
-        nothing for it to revert — measured on micro_sam 1.8.2: after S the layer still holds
-        every pixel it wrote, and Ctrl+Z is not even in the viewer keymap (napari handles it as
-        an app-level Qt shortcut on the selected layer). So the honest fix is to implement the
-        undo the user actually wants rather than to keep advertising a key that does nothing.
-        """
-        cur = viewer.layers["current_object"] if "current_object" in viewer.layers else None
-        if cur is not None and int(np.count_nonzero(np.asarray(cur.data))):
-            cur.data = np.zeros_like(np.asarray(cur.data))
-            cur.refresh()
-            if "point_prompts" in viewer.layers:
-                pts = viewer.layers["point_prompts"]
-                try:
-                    pts.selected_data = set(range(len(pts.data)))
-                    pts.remove_selected()
-                except Exception:
-                    pts.data = []
-                pts.refresh()
-            hint.setText("Dropped the outline you were building. Click the object again and "
-                         "press <b>S</b>.")
-            return
-        # Nothing in progress: the last thing that changed was a DELETE on committed_objects.
-        lyr = committed()
-        try:
-            if lyr is not None and hasattr(lyr, "undo"):
-                lyr.undo()
-                hint.setText("Put back the object you deleted.")
-                return
-        except Exception:
-            pass
-        hint.setText("Nothing to undo. (This undoes the outline you are building, or the last "
-                     "object you deleted — not a whole tile.)")
-
-    btn_undo.clicked.connect(undo_last)
-
     def prompts_alive():
         return "point_prompts" in viewer.layers
 
@@ -510,17 +464,6 @@ def build_helper(viewer, manifest):
             hint.setText(f"<b>Clear did not work ({type(exc).__name__}).</b> Delete the one "
                          f"bad outline with <b>DELETE objects</b> (or <b>D</b>) and add it "
                          f"again — that works in every state.")
-
-    # `U` is the one that is guaranteed to arrive: napari routes Ctrl+Z through its own Qt
-    # action on the selected layer, so a viewer keybinding for it may never fire. Both are
-    # bound so whichever the user reaches for does the same, working thing.
-    @viewer.bind_key("u", overwrite=True)
-    def _undo_u(_v):
-        undo_last()
-
-    @viewer.bind_key("Control-Z", overwrite=True)
-    def _undo_ctrl_z(_v):
-        undo_last()
 
     @viewer.bind_key("b", overwrite=True)
     def _back_one_tile(_v):
