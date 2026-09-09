@@ -509,9 +509,13 @@ def segment_field(predictor, segmenter, img, tile_shape=None):
     only add seams.
     """
     from micro_sam.automatic_segmentation import automatic_instance_segmentation
-    h, w = img.shape[:2]
     kw = {}
-    if tile_shape is not None and max(h, w) > tile_shape:
+    if tile_shape is not None:
+        # No second size test here. The segmenter object was built tiled-or-not from this
+        # same flag, and micro_sam accepts tiled embeddings ONLY in the Tiled* class and
+        # untiled ones only in the plain class — so a per-image test that disagreed with
+        # the caller broke both ways ('batch_size'/'Group'.ndim one way, .attrs the other).
+        # A tile_shape larger than the image is harmless: micro_sam clips it to one tile.
         kw = dict(tile_shape=(tile_shape, tile_shape), halo=(max(tile_shape // 8, 32),) * 2)
     return np.asarray(automatic_instance_segmentation(
         predictor=predictor, segmenter=segmenter, input_path=img, ndim=2,
@@ -1033,17 +1037,27 @@ def main():
         print(f"[prepare] building "
               f"{SEGMENT_BACKEND + ' (' + CP_MODEL + ')' if SEGMENT_BACKEND == 'cellpose' else SEGMENT_BACKEND}"
               f"{' + fine-tuned weights' if base_ckpt else ''} on {device} ...")
+        # is_tiled MUST agree with segment_field()'s own tiling test (`max(h, w) >
+        # tile_shape`) — micro_sam only accepts tiled embeddings in the Tiled* segmenter
+        # class, and get_predictor_and_segmenter picks the class from this flag alone.
+        # Deciding it on the MIN dimension while segment_field decides on the MAX one made
+        # the two disagree for any image with min(dim) <= 512 < max(dim) (e.g. 507x676),
+        # and micro_sam reports that mismatch as `initialize() got an unexpected keyword
+        # argument 'batch_size'`, or — once that is worked around — as `'Group' object has
+        # no attribute 'ndim'`. Neither message names tiling, so derive both from one value.
+        probe_tile = int(min(512, min_dim))
+        tiled = max(max(s) for s in shapes.values()) > probe_tile
+        probe_arg = probe_tile if tiled else None   # the ONLY tiling switch, used everywhere
         backend = build_backend(
             SEGMENT_BACKEND, model_type, base_ckpt, device,
-            is_tiled=max(min(s) for s in shapes.values()) > 512, work_dir=TASK_DIR,
+            is_tiled=tiled, work_dir=TASK_DIR,
             cp_model=CP_MODEL,
         )
-        probe_tile = int(min(512, min_dim))
         print(f"[prepare] segmenting one field per group to measure the data "
               f"({len(probes)} field(s)) ...")
         probe_segs, preseg_cache = [], {}
         for p, img in probes.items():
-            lab = backend.segment(img, probe_tile)
+            lab = backend.segment(img, probe_arg)
             preseg_cache[p] = lab
             probe_segs.append((lab, int(np.prod(as_gray(img).shape))))
             print(f"  {os.path.basename(p)[:44]:<46} {int(lab.max()):>4} objects")
@@ -1065,7 +1079,7 @@ def main():
     if PICK_MODE == "interactive":
         selected = pick_tiles_interactive(
             groups, tile, n_tiles,
-            segment=((lambda img: backend.segment(img, int(min(512, min_dim))))
+            segment=((lambda img: backend.segment(img, probe_arg))
                      if show_preseg and backend is not None else None),
             preseg_cache=preseg_cache,
         )
