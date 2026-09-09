@@ -28,11 +28,25 @@
 4a. RECORD THE MEASURED FACTS BEFORE CHOOSING A TOOL. As soon as
    `extract_image_metadata` returns, call:
      set_ledger_metadata(project_root=project_root, image_metadata={...})
-   filling in AT LEAST: modality (fluorescence | brightfield | EM | …), n_channels,
-   bit_depth, pixel_size_um, n_z_slices, n_timepoints, dimensions.
-   These are the properties that mechanically ADMIT OR EXCLUDE a tool — an RGB
-   3-channel 8-bit brightfield image cannot use a fluorescent-nuclei model, whatever
-   the prose suggests.
+   filling in AT LEAST: n_channels, bit_depth, pixel_size_um, n_z_slices,
+   n_timepoints, dimensions — and `modality`, which is not measured like the rest
+   (see below). These are the properties that mechanically ADMIT OR EXCLUDE a tool —
+   a brightfield H&E image cannot use a fluorescent-nuclei model, whatever the prose
+   suggests.
+
+   `modality` is the one field in that record `extract_image_metadata` does NOT
+   return. It is the CONTRAST MECHANISM (`brightfield`, `phase-contrast`, `DIC`,
+   `H&E`, `confocal fluorescence`, `EM`, `microCT`, …) and **nothing infers it for
+   you** — not the metadata tool, not the ledger. Establish it from what the user
+   said, the acquisition metadata/filename, and the Vision Judge's description.
+   Do NOT read it off the pixel layout: 8-bit RGB is not evidence of brightfield and
+   a single 16-bit channel is not evidence of fluorescence — bit depth describes the
+   CAMERA, not the contrast mechanism. A code rule that tried exactly that inference
+   was measured 42% wrong against real project ledgers and has been removed, so there
+   is no fallback behind you here. **If the file and the user's words do not settle
+   it, ASK THE USER** — one short question, they always know, and it costs far less
+   than segmenting for the wrong contrast mechanism. Never write `"unknown"`: a
+   placeholder is read as no answer.
 
 4b. DO NOT choose a tool in this phase. Tool routing now happens in PHASE 2, after the
    pipeline STEPS have been designed and written to `pipeline_plan` — see
