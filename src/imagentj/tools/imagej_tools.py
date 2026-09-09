@@ -583,11 +583,11 @@ def inspect_all_ui_windows():
                 # so it never showed up in this report even though it was genuinely
                 # open — the window enumeration above found it, this branch just had
                 # nowhere to put it. Surface at least its existence + title; call
-                # capture_plugin_dialog() for the actual fields/values/buttons.
+                # capture_ui_window() for the actual fields/values/buttons.
                 all_inspections["tables_and_text"].append({
                     "type": "Other Window (likely a plugin dialog)",
                     "title": title,
-                    "note": "Call capture_plugin_dialog() to see its fields, values, and buttons.",
+                    "note": "Call capture_ui_window() to see its fields, values, and buttons.",
                 })
         except Exception as e:
             print(f"[inspect_ui] Skipped window: {e}")

@@ -1448,7 +1448,7 @@ def init_agent():
         # supervisor's own tools
         internet_search,
         inspect_all_ui_windows,
-        capture_plugin_dialog,
+        capture_ui_window,
         # Rebase note (2026-09-07): these three landed on main after this branch
         # was cut (cellpose diameter estimation). advanced_tools replaces main's
         # explicit supervisor tool list, so they must be carried over here or the
@@ -1496,7 +1496,7 @@ def init_agent():
     # first. No pipeline tools (workspace/coder/plugin/ledger), so education can
     # demonstrate a concept but not run the student's analysis project.
     demo_tools = [save_script, execute_script, show_in_imagej_gui, inspect_all_ui_windows,
-                  capture_plugin_dialog, close_imagej_windows]
+                  capture_ui_window, close_imagej_windows]
 
     quick_tools = [
         imagej_coder, imagej_debugger, plugin_manager, execute_script, save_script, load_script,
@@ -1588,7 +1588,10 @@ def init_agent():
 
     supervisor = create_deep_agent(
         name="ImageJ_Supervisor",
-        tools=[
+        # _dedup: registered_tools is the superset the ModeMiddleware narrows
+        # from (see its note above); it overlaps the explicit entries below, and
+        # _dedup collapses them by identity.
+        tools=_dedup([
             # ── subagents as tools (return typed JSON) ──────────────────────
             *subagent_tools,
             plugin_manager,
@@ -1623,8 +1626,8 @@ def init_agent():
             update_state_ledger,
             read_state_ledger,
             set_ledger_metadata,
-            registered_tools,
-        ],
+            *registered_tools,
+        ]),
 
         #tools=registered_tools,
         # Kept as main's vision-on prompt rather than the educator branch's plain
