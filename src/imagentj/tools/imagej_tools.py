@@ -154,6 +154,64 @@ def load_image_ij(path: str)  -> object:
     return "Loaded image from " + path
 
 
+# Text and table files must NOT go through IJ.open. `ij.io.Opener.open()` routes
+# anything it cannot decode as an image to net.imagej.legacy's openInEditor hook,
+# which builds the SciJava Swing script editor — and under Xvfb the look-and-feel
+# supplies no UI delegates, exactly as for the Bio-Formats importer dialog (see
+# imagej_context). Measured on the 2026-08-31 Parasite run: ONE such call at
+# 12:31:02 produced 49 `java.lang.Error: no ComponentUI class for` in 660 ms — a
+# JTextArea (TextEditor.java:233), then one JRadioButtonMenuItem per script
+# language as EditorPane.geSyntaxForNoneLang built the syntax menu (BeanShell,
+# Clojure, Groovy, ImageJ Macro, Java, JavaScript, Python, … YAML) — followed by
+#   NullPointerException … because "highlighter" is null
+# and a JOptionPane that could not be constructed to report it.
+# SciJava CATCHES and logs all of that, so IJ.open returns normally: this tool
+# used to answer "Opened in ImageJ GUI: <table>.csv" while nothing was displayed
+# and a half-built editor frame was left behind in the window list.
+# ImageJ1's own text/table windows are AWT (ij.text.TextWindow extends Frame), so
+# they need no Swing UI delegate and work here.
+_TEXT_EXTENSIONS = {".txt", ".log", ".md", ".json", ".yaml", ".yml", ".xml", ".ijm"}
+_TABLE_EXTENSIONS = {".csv", ".tsv"}
+# A text window is for reading, not for holding a whole dataset in the UI.
+_TEXT_WINDOW_MAX_CHARS = 200_000
+
+
+def _show_text_file(abs_path: str) -> str:
+    """Display a text or table file in an ImageJ1 (AWT) window.
+
+    Returns "" on success, or a human-readable reason on failure. A table is
+    shown as a Results table when it parses as one; anything else — including a
+    .csv that ResultsTable rejects — falls back to a plain text window.
+    """
+    from scyjava import jimport
+    title = os.path.basename(abs_path)
+    ext = os.path.splitext(abs_path)[1].lower()
+
+    if ext in _TABLE_EXTENSIONS:
+        try:
+            ResultsTable = jimport('ij.measure.ResultsTable')
+            rt = ResultsTable.open(abs_path)
+            if rt is not None:
+                rt.show(title)
+                return ""
+        except Exception:
+            pass                      # not tabular after all — show it as text
+
+    try:
+        with open(abs_path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read(_TEXT_WINDOW_MAX_CHARS + 1)
+    except OSError as e:
+        return f"could not read the file ({e!s})"
+    if len(text) > _TEXT_WINDOW_MAX_CHARS:
+        text = (text[:_TEXT_WINDOW_MAX_CHARS] +
+                f"\n\n[truncated at {_TEXT_WINDOW_MAX_CHARS} characters — "
+                "open the file directly to see the rest]")
+
+    TextWindow = jimport('ij.text.TextWindow')
+    TextWindow(title, text, 800, 600)   # constructing it shows it
+    return ""
+
+
 @tool
 def show_in_imagej_gui(path: str) -> str:
     """Open a file in the Fiji/ImageJ GUI so the user can see it.
@@ -176,6 +234,16 @@ def show_in_imagej_gui(path: str) -> str:
     Returns:
         A short status string: success message or human-readable error.
     """
+    return open_in_imagej_gui(path)
+
+
+def open_in_imagej_gui(path: str, title: str | None = None) -> str:
+    """Open a file in the Fiji/ImageJ GUI. Plain helper (not a tool) so other
+    tools can reuse the exact same behaviour. Never raises — returns a status
+    string that starts with "Opened" on success, or a human-readable error.
+
+    If `title` is given, the newly opened image window is renamed to it (so the
+    caller can refer to the window by a stable, human-readable label)."""
     if not isinstance(path, str) or not path.strip():
         return "Could not open file: empty or invalid path."
 
@@ -199,8 +267,24 @@ def show_in_imagej_gui(path: str) -> str:
             if not imps:
                 return (f"Could not open file in ImageJ GUI ({abs_path}): "
                         "Bio-Formats returned no image.")
+        elif os.path.splitext(abs_path)[1].lower() in (_TEXT_EXTENSIONS |
+                                                       _TABLE_EXTENSIONS):
+            # Never the script-editor route — see the note above _TEXT_EXTENSIONS.
+            reason = _show_text_file(abs_path)
+            if reason:
+                return f"Could not open file in ImageJ GUI ({abs_path}): {reason}"
         else:
+            # Images plus the IJ1 types Opener handles natively (.roi, .zip ROI
+            # sets, .lut, .avi), none of which reach openInEditor.
             IJ.open(abs_path)
+        if title:
+            try:
+                WindowManager = jimport('ij.WindowManager')
+                imp = WindowManager.getCurrentImage()  # the just-opened image
+                if imp is not None:
+                    imp.setTitle(str(title))
+            except Exception:
+                pass  # renaming is best-effort; opening already succeeded
     except Exception as e:
         return f"Could not open file in ImageJ GUI ({abs_path}): {e!s}"
 
@@ -492,6 +576,18 @@ def inspect_all_ui_windows():
                     "type": "Exception Window",
                     "title": title,
                     "content": text_content[-4000:] if len(text_content) > 4000 else text_content
+                })
+            elif not _is_main_imagej_window(title):
+                # Anything else visible and titled (a plugin's own parameter dialog,
+                # a "command not found" popup, ...) used to be silently dropped here,
+                # so it never showed up in this report even though it was genuinely
+                # open — the window enumeration above found it, this branch just had
+                # nowhere to put it. Surface at least its existence + title; call
+                # capture_ui_window() for the actual fields/values/buttons.
+                all_inspections["tables_and_text"].append({
+                    "type": "Other Window (likely a plugin dialog)",
+                    "title": title,
+                    "note": "Call capture_ui_window() to see its fields, values, and buttons.",
                 })
         except Exception as e:
             print(f"[inspect_ui] Skipped window: {e}")
