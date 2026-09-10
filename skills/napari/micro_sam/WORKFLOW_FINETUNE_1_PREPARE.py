@@ -1322,22 +1322,44 @@ which is the one thing that is easy to get wrong.
 > **Pressed C and nothing happened?** The thing you clicked is already outlined. The tool
 > refuses to draw on top of an existing object — delete that outline first, then add it again.
 
-### ▭ DRAW boxes round objects
+### ✏ DRAW round objects
 Use this when **ADD will not cooperate** — an outline the computer gets wrong however you
 click it, or an object it keeps missing. Telling it *where* the object is often works where
 telling it *what to click* does not.
 
-1. Click **▭ DRAW boxes** in the helper panel (it turns purple).
-2. **Drag a box** round an object. Draw as many boxes as you like before going on.
-   - the box only has to contain the object; it does not have to be tight.
-3. Press **S** → each box is outlined.
+1. Click **✏ DRAW round objects** in the helper panel (it turns purple).
+2. **Click round the object**, then **double-click** to close the shape. Draw as many as you
+   like before going on.
+   - loose is fine. The computer uses the **box around** your shape, so tracing carefully
+     buys nothing — aim, don't trace.
+3. Press **S** → each shape is outlined.
 4. Press **C** to keep them.
 
 Same **S** and **C** as ADD — the only difference is what you gave the computer to work from.
-You can mix the two: a box round the object and a click inside it are both prompts.
+You can mix the two: a shape round the object and a click inside it are both prompts.
 
-> If a neighbour creeps into the box, press **ADD**, then **T** (the next click now means
+> **Points not sticking as you click?** Press **✏ DRAW round objects** again. It switches to
+> drag-a-rectangle, which always works and gives exactly the same result.
+
+> If a neighbour creeps into the shape, press **ADD**, then **T** (the next click now means
 > *exclude*), and click the neighbour. Then **S** again.
+
+### 🖌 PAINT an object by hand
+For the ones the computer simply will not get. What you paint **is** the annotation — there is
+no **S** and no **C**.
+
+1. Click **🖌 PAINT an object** (it turns orange). This starts a new object.
+2. **Drag** over the object to fill it in.
+   - right-drag rubs out; **[** and **]** change the brush size.
+   - you cannot paint over an object that is already there, so you can be careless near
+     neighbours.
+3. To paint the NEXT object, **press the button again** — that is what gives it its own
+   identity. Keep painting without pressing it and the two become one object.
+
+### ⌫ CLEAR my clicks & boxes
+Removes the green/red dots and the shapes you drew. **Your outlines are not touched** — use
+DELETE for those. Worth pressing whenever the picture gets cluttered: a leftover click from
+an earlier object quietly joins the next **S**.
 
 ### ✖ DELETE a wrong object
 1. Click **✖ DELETE objects** in the helper panel (it turns red).
@@ -1356,8 +1378,8 @@ safer than trying to repair it:
 | one outline covers two objects | DELETE it, then ADD each object separately |
 | one object split into two outlines | DELETE both, then ADD it with one click |
 | outline is badly off | DELETE it, then ADD it again |
-| ADD keeps getting the same object wrong | DELETE it, then **BOX** it |
-| objects packed tightly together | DELETE the clump, then BOX each one and exclude with **T** |
+| ADD keeps getting the same object wrong | DELETE it, then **DRAW** round it |
+| objects packed tightly together | DELETE the clump, then **PAINT** each one by hand |
 
 > **Tight clumps are the hard case.** One click inside a clump gives you the whole clump, and
 > once that is committed every further click inside it is ignored — clicking more will not

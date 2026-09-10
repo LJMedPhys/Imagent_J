@@ -4,8 +4,9 @@ micro_sam fine-tuning — STAGE 2 of 4: the human corrects the tiles.
 
 Opens micro_sam's image-series annotator on the tiles built by stage 1, with the stock model's
 guess already loaded into `committed_objects`, plus a small **Annotation Helper** panel that
-reduces the whole job to three buttons: ADD an object (click it), DRAW boxes round objects
-(drag a box round each), DELETE an object. Both prompts then go through the same S and C.
+reduces the whole job to four buttons: ADD an object (click it), DRAW round an object (trace
+it), PAINT an object (fill it in by hand), DELETE an object. ADD and DRAW are prompts and go
+through the same S and C; PAINT writes the label directly and needs neither.
 
 RUN THIS VIA python_data_analyst, NEVER via mcp__napari_mcp__execute_code. It opens its own
 napari window and blocks on napari.run() until the human closes it — which is correct here
@@ -43,7 +44,7 @@ TASK_DIR = "/app/data/projects/demo/microsam_finetune"   # the folder stage 1 wr
 PRECOMPUTE_AMG_STATE = False   # True also caches the automatic-segmentation state so the
                                # annotator's "Automatic Segmentation" button is instant. Roughly
                                # doubles the startup wait; the pre-segmentation already covers it.
-SHOW_HELPER = True             # the ADD / BOX / DELETE panel. Off = stock micro_sam annotator.
+SHOW_HELPER = True             # the ADD / DRAW / PAINT / DELETE panel. Off = stock annotator.
 # -----------------------------------------------------------------------------
 
 BANNER = r"""
@@ -54,9 +55,13 @@ BANNER = r"""
   nothing else is. Outlines only need to be roughly right.
 
   ADD an object     ->  click "ADD objects", click the object,  S ,  then  C
-  BOX some objects  ->  click "DRAW boxes", drag a box round each one,  S ,  then  C
+  DRAW round one    ->  click "DRAW round objects", trace it, double-click to close,
+                        then  S  and  C   (press DRAW again for a drag-a-box gesture)
+  PAINT one by hand ->  click "PAINT an object", drag over it. No S, no C -- what you
+                        paint IS the answer. Press PAINT again for the NEXT object.
   DELETE an object  ->  click "DELETE objects", click the object
-  BAD OUTLINE       ->  delete it, then add it again (a BOX often works where a click did not)
+  CLEAR clicks/boxes->  click "CLEAR my clicks & boxes" (outlines are not touched)
+  BAD OUTLINE       ->  delete it, then add it again (DRAW often works where a click did not)
   TILE FINISHED     ->  press  N        <-- N is what SAVES the tile
 
   *** Press N on EVERY tile, INCLUDING THE LAST ONE. ***
@@ -227,9 +232,10 @@ def build_helper(viewer, manifest):
 
     BTN_BASE = "font-size:14px; font-weight:bold;"
     btn_add = QtWidgets.QPushButton("➕  ADD objects")
-    btn_box = QtWidgets.QPushButton("▭  DRAW boxes")
+    btn_draw = QtWidgets.QPushButton("✏  DRAW round objects")
+    btn_paint = QtWidgets.QPushButton("🖌  PAINT an object")
     btn_del = QtWidgets.QPushButton("✖  DELETE objects")
-    for b in (btn_add, btn_box, btn_del):
+    for b in (btn_add, btn_draw, btn_paint, btn_del):
         b.setMinimumHeight(44)
         b.setStyleSheet(BTN_BASE)
         lay.addWidget(b)
@@ -237,11 +243,11 @@ def build_helper(viewer, manifest):
     def highlight(active, colour):
         """Exactly one button is coloured, and it is the mode the canvas is actually in.
 
-        Only the three MODE buttons take a colour. BACK is an action — it does not
+        Only the four MODE buttons take a colour. BACK and CLEAR are actions — they do not
         change what a click on the canvas does, so highlighting them would say something
         untrue about the tool currently in the user's hand.
         """
-        for b in (btn_add, btn_box, btn_del):
+        for b in (btn_add, btn_draw, btn_paint, btn_del):
             b.setStyleSheet(BTN_BASE + (f" background:{colour}; color:white;"
                                         if b is active else ""))
 
@@ -249,6 +255,15 @@ def build_helper(viewer, manifest):
     hint.setWordWrap(True)
     hint.setStyleSheet("padding:6px; font-size:12px;")
     lay.addWidget(hint)
+
+    # A secondary action, not a mode: it takes no colour and clicking it changes nothing about
+    # what the next canvas click does.
+    btn_clear = QtWidgets.QPushButton("⌫  CLEAR my clicks & boxes")
+    btn_clear.setMinimumHeight(34)
+    btn_clear.setStyleSheet("font-size:13px;")
+    btn_clear.setToolTip("Remove the green/red dots and the rectangles. "
+                         "Committed outlines are not touched.")
+    lay.addWidget(btn_clear)
 
     nav = series_nav(viewer)          # None = micro_sam moved; Back is then simply absent
 
@@ -306,7 +321,8 @@ def build_helper(viewer, manifest):
         "<b>T</b> switch click include ↔ exclude<br>"
         "<b>C</b> commit the object<br>"
         "<b>D</b> delete the object under the mouse<br>"
-        "<i>(S and C work the same for a click and for a box)</i><br><br>"
+        "<i>(S and C work the same for a click and for a drawn shape.<br>"
+        "PAINT needs neither — what you paint is already the answer.)</i><br><br>"
         "<b>B</b> — back to the previous tile<br>"
         "<b>N</b> — save this tile, go to the next<br>"
         "<span style='color:#d33;'><b>Press N on every tile,<br>including the last one.</b></span>"
@@ -340,6 +356,7 @@ def build_helper(viewer, manifest):
             pts.current_properties = props
         except Exception:
             pass
+        draw_state["armed"] = False          # so the next DRAW press arms, not swaps
         highlight(btn_add, "#2d7d46")
         hint.setText(
             "Click the middle of an object → press <b>S</b> → press <b>C</b>.<br><br>"
@@ -348,39 +365,113 @@ def build_helper(viewer, manifest):
             "<b>DELETE the old outline first</b>, then add it again."
         )
 
-    def set_box():
-        """Drag a box round each object; micro_sam segments inside them on S.
+    # Which gesture DRAW is currently armed with, and whether it is the active mode. Pressing
+    # DRAW while it is already active swaps the gesture — see set_draw.
+    draw_state = {"gesture": "add_polygon", "armed": False}
 
-        This is stock micro_sam and nothing else. The `prompts` Shapes layer IS its box-prompt
-        input and its own S already reads it — several boxes at once if several are drawn — so
-        this button only has to select the layer and set the tool. It holds no drawing state of
-        its own and never touches the mouse callbacks, which is exactly why it survives where
-        the polygon and the brush did not: a rectangle is one press-drag-release, with nothing
-        in between for micro_sam's viewer-level prompt handling to interrupt.
+    def set_draw():
+        """Trace round each object; micro_sam segments inside it on S.
+
+        A polygon by default, because tracing round a thing is what people reach for. Be clear
+        about what it buys, though: micro_sam reduces EVERY shape in the `prompts` layer to its
+        BOUNDING BOX before SAM sees it, so a careful trace and a loose rectangle produce the
+        same prompt and the same mask. The polygon is here because it is easier to aim, not
+        because it is more faithful.
+
+        Pressing DRAW again swaps polygon <-> rectangle. Multi-click drawing has failed in this
+        viewer before — vertices vanishing as they were placed, micro_sam's viewer-level mouse
+        callbacks interrupting the sequence — while a rectangle is one press-drag-release and
+        has always survived. Since the two prompts are equivalent anyway, the escape hatch
+        belongs one click away rather than behind a code edit.
         """
         if "prompts" not in viewer.layers:
             hint.setText("<b>This viewer has no prompts layer</b> — use ADD instead.")
             return
+        if draw_state["armed"]:                  # already in DRAW: this press swaps the gesture
+            draw_state["gesture"] = ("add_rectangle" if draw_state["gesture"] == "add_polygon"
+                                     else "add_polygon")
         shp = viewer.layers["prompts"]
         viewer.layers.selection.active = shp
         active_mode = None
+        for mode in (draw_state["gesture"], "add_rectangle", "add_polygon"):
+            try:
+                shp.mode = mode
+                active_mode = str(shp.mode)      # what it ACTUALLY took, not what we asked
+                break
+            except (ValueError, KeyError, AttributeError):
+                continue
+        draw_state["armed"] = active_mode is not None
+        highlight(btn_draw, "#7a4fa3")
+        print(f"[annotate] DRAW -> layer 'prompts', mode {active_mode or 'NONE'}", flush=True)
+        if active_mode and "polygon" in active_mode:
+            hint.setText(
+                "<b>Click round the object</b>, then <b>double-click</b> to close it. Draw as "
+                "many as you like, then <b>S</b>, then <b>C</b>.<br><br>"
+                "<i>Loose is fine — the computer uses the BOX around your shape, so tracing "
+                "carefully buys nothing.</i><br><br>"
+                "<b>Points not sticking?</b> Press <b>DRAW</b> again to switch to "
+                "drag-a-rectangle, which always works and gives the same result.")
+        elif active_mode:
+            hint.setText(
+                "<b>Drag a box round each object.</b> Several is fine, then <b>S</b>, then "
+                "<b>C</b>.<br><br>"
+                "<i>The box only has to contain the object — it does not have to be tight. If "
+                "a neighbour creeps in, press <b>ADD</b>, then <b>T</b>, and click the "
+                "neighbour to exclude it.</i><br><br>"
+                "Press <b>DRAW</b> again to go back to tracing a shape.")
+        else:
+            hint.setText("<b>Could not switch to a drawing tool</b> — use ADD instead.")
+
+    def set_paint():
+        """Paint one object by hand, straight into committed_objects. No SAM involved.
+
+        For the objects SAM refuses: what you paint IS the annotation, because stage 3 trains
+        on the label image and does not care how a label got there.
+
+        EACH PRESS OF THIS BUTTON STARTS A NEW OBJECT — it takes the next free label id. That
+        is why it is a button press and not a timer: painting is a drag, often several drags
+        for one object, and anything that advanced the id automatically would split a single
+        object across strokes. `preserve_labels` keeps the brush off everything already
+        committed, so a stroke that strays over a neighbour cannot eat it.
+        """
+        lyr = committed()
+        if lyr is None:
+            hint.setText("<b>No committed_objects layer yet</b> — outline one object with "
+                         "<b>ADD</b> first, then PAINT works from there.")
+            return
+        viewer.layers.selection.active = lyr
+        lyr.preserve_labels = True               # never paint over an object already there
+        lyr.n_edit_dimensions = 2
         try:
-            shp.mode = "add_rectangle"
-            active_mode = str(shp.mode)          # what it ACTUALLY took, not what we asked
+            lyr.selected_label = int(np.asarray(lyr.data).max()) + 1
+        except Exception:
+            pass
+        try:                                     # ~1/40 of the tile: a few strokes cover a cell
+            lyr.brush_size = max(3, int(min(np.asarray(lyr.data).shape[:2]) / 40))
+        except Exception:
+            pass
+        active_mode = None
+        try:
+            lyr.mode = "paint"
+            active_mode = str(lyr.mode)
         except (ValueError, KeyError, AttributeError):
             pass
-        highlight(btn_box, "#7a4fa3")
-        print(f"[annotate] BOX -> layer 'prompts', mode {active_mode or 'NONE'}", flush=True)
+        draw_state["armed"] = False
+        highlight(btn_paint, "#b06a1f")
+        print(f"[annotate] PAINT -> label {getattr(lyr, 'selected_label', '?')}, "
+              f"mode {active_mode or 'NONE'}, brush {getattr(lyr, 'brush_size', '?')}",
+              flush=True)
         if active_mode:
             hint.setText(
-                "<b>Drag a box round each object</b> you want outlined. You can draw "
-                "several boxes before pressing anything.<br><br>"
-                "Then <b>S</b> to outline them, then <b>C</b> to keep them.<br><br>"
-                "<i>The box only has to contain the object — it does not have to be tight. "
-                "If a neighbour creeps in, press <b>ADD</b>, then <b>T</b>, and click the "
-                "neighbour to exclude it.</i>")
+                f"<b>Drag over the object</b> to fill it in. This is object "
+                f"<b>#{getattr(lyr, 'selected_label', '?')}</b>.<br><br>"
+                "There is no <b>S</b> and no <b>C</b> here — what you paint is already the "
+                "answer.<br><br>"
+                "<i>Right-drag rubs out. <b>[</b> and <b>]</b> resize the brush. Press "
+                "<b>PAINT</b> again to start the NEXT object</i> — keep painting without it "
+                "and both objects share one label.")
         else:
-            hint.setText("<b>Could not switch to the rectangle tool</b> — use ADD instead.")
+            hint.setText("<b>Could not switch to the brush</b> — use ADD instead.")
 
     def set_delete():
         lyr = committed()
@@ -391,12 +482,49 @@ def build_helper(viewer, manifest):
         lyr.preserve_labels = False             # else the fill refuses to write 0 over a label
         lyr.selected_label = 0                  # fill target 0 = erase the whole object
         lyr.n_edit_dimensions = 2
+        draw_state["armed"] = False
         highlight(btn_del, "#a33")
         hint.setText("Click on a wrong object → it disappears.")
 
+    def clear_prompts():
+        """Wipe the clicks and boxes. NOT the outlines already committed.
+
+        Prompts survive every S and nothing in this panel removed them: DELETE fills
+        `committed_objects`, which is a different layer entirely. So they pile up — green and
+        red dots and old rectangles that look exactly like annotations to someone who has not
+        read the docs, and a stale point silently joins the NEXT S and drags the mask
+        somewhere the user did not ask for. micro_sam's own Shift+C is the documented answer
+        and is unreliable in this version (pitfall in FINETUNING.md), so empty the two layers
+        directly instead: nothing here can fail halfway.
+        """
+        wiped = 0
+        for name in ("point_prompts", "prompts"):
+            if name not in viewer.layers:
+                continue
+            lyr = viewer.layers[name]
+            n = len(lyr.data)
+            try:                                # same route micro_sam's own clear takes
+                lyr.selected_data = set(range(n))
+                lyr.remove_selected()
+            except Exception:
+                try:
+                    lyr.data = []
+                except Exception:
+                    continue
+            try:
+                lyr.refresh()
+            except Exception:
+                pass
+            wiped += n
+        hint.setText(f"Cleared <b>{wiped}</b> click(s) and box(es). Your committed outlines "
+                     f"are untouched — <b>DELETE objects</b> removes those.")
+        print(f"[annotate] cleared {wiped} prompt(s)", flush=True)
+
     btn_add.clicked.connect(set_add)
-    btn_box.clicked.connect(set_box)
+    btn_draw.clicked.connect(set_draw)
+    btn_paint.clicked.connect(set_paint)
     btn_del.clicked.connect(set_delete)
+    btn_clear.clicked.connect(clear_prompts)
 
     # S and C are left to micro_sam entirely. Both prompt types this panel offers — points in
     # `point_prompts`, boxes in `prompts` — are ones its own S already reads, so there is
