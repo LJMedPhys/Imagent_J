@@ -1344,18 +1344,6 @@ You can mix the two: a shape round the object and a click inside it are both pro
 > If a neighbour creeps into the shape, press **ADD**, then **T** (the next click now means
 > *exclude*), and click the neighbour. Then **S** again.
 
-### 🖌 PAINT an object by hand
-For the ones the computer simply will not get. What you paint **is** the annotation — there is
-no **S** and no **C**.
-
-1. Click **🖌 PAINT an object** (it turns orange). This starts a new object.
-2. **Drag** over the object to fill it in.
-   - right-drag rubs out; **[** and **]** change the brush size.
-   - you cannot paint over an object that is already there, so you can be careless near
-     neighbours.
-3. To paint the NEXT object, **press the button again** — that is what gives it its own
-   identity. Keep painting without pressing it and the two become one object.
-
 ### ⌫ CLEAR my clicks & boxes
 Removes the green/red dots and the shapes you drew. **Your outlines are not touched** — use
 DELETE for those. Worth pressing whenever the picture gets cluttered: a leftover click from
@@ -1379,7 +1367,7 @@ safer than trying to repair it:
 | one object split into two outlines | DELETE both, then ADD it with one click |
 | outline is badly off | DELETE it, then ADD it again |
 | ADD keeps getting the same object wrong | DELETE it, then **DRAW** round it |
-| objects packed tightly together | DELETE the clump, then **PAINT** each one by hand |
+| objects packed tightly together | DELETE the clump, then **DRAW** round each one and exclude with **T** |
 
 > **Tight clumps are the hard case.** One click inside a clump gives you the whole clump, and
 > once that is committed every further click inside it is ignored — clicking more will not

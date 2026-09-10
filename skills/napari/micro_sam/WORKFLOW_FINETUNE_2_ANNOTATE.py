@@ -4,9 +4,9 @@ micro_sam fine-tuning — STAGE 2 of 4: the human corrects the tiles.
 
 Opens micro_sam's image-series annotator on the tiles built by stage 1, with the stock model's
 guess already loaded into `committed_objects`, plus a small **Annotation Helper** panel that
-reduces the whole job to four buttons: ADD an object (click it), DRAW round an object (trace
-it), PAINT an object (fill it in by hand), DELETE an object. ADD and DRAW are prompts and go
-through the same S and C; PAINT writes the label directly and needs neither.
+reduces the whole job to three buttons: ADD an object (click it), DRAW round an object (trace
+it), DELETE an object. ADD and DRAW are two kinds of prompt and both go through the same S
+and C.
 
 RUN THIS VIA python_data_analyst, NEVER via mcp__napari_mcp__execute_code. It opens its own
 napari window and blocks on napari.run() until the human closes it — which is correct here
@@ -44,7 +44,7 @@ TASK_DIR = "/app/data/projects/demo/microsam_finetune"   # the folder stage 1 wr
 PRECOMPUTE_AMG_STATE = False   # True also caches the automatic-segmentation state so the
                                # annotator's "Automatic Segmentation" button is instant. Roughly
                                # doubles the startup wait; the pre-segmentation already covers it.
-SHOW_HELPER = True             # the ADD / DRAW / PAINT / DELETE panel. Off = stock annotator.
+SHOW_HELPER = True             # the ADD / DRAW / DELETE panel. Off = stock micro_sam annotator.
 # -----------------------------------------------------------------------------
 
 BANNER = r"""
@@ -57,10 +57,8 @@ BANNER = r"""
   ADD an object     ->  click "ADD objects", click the object,  S ,  then  C
   DRAW round one    ->  click "DRAW round objects", trace it, double-click to close,
                         then  S  and  C   (press DRAW again for a drag-a-box gesture)
-  PAINT one by hand ->  click "PAINT an object", drag over it. No S, no C -- what you
-                        paint IS the answer. Press PAINT again for the NEXT object.
   DELETE an object  ->  click "DELETE objects", click the object
-  CLEAR clicks/boxes->  click "CLEAR my clicks & boxes" (outlines are not touched)
+  CLEAR clicks/boxes->  click "CLEAR my clicks/boxes" (outlines are not touched)
   BAD OUTLINE       ->  delete it, then add it again (DRAW often works where a click did not)
   TILE FINISHED     ->  press  N        <-- N is what SAVES the tile
 
@@ -233,9 +231,8 @@ def build_helper(viewer, manifest):
     BTN_BASE = "font-size:14px; font-weight:bold;"
     btn_add = QtWidgets.QPushButton("➕  ADD objects")
     btn_draw = QtWidgets.QPushButton("✏  DRAW round objects")
-    btn_paint = QtWidgets.QPushButton("🖌  PAINT an object")
     btn_del = QtWidgets.QPushButton("✖  DELETE objects")
-    for b in (btn_add, btn_draw, btn_paint, btn_del):
+    for b in (btn_add, btn_draw, btn_del):
         b.setMinimumHeight(44)
         b.setStyleSheet(BTN_BASE)
         lay.addWidget(b)
@@ -243,11 +240,11 @@ def build_helper(viewer, manifest):
     def highlight(active, colour):
         """Exactly one button is coloured, and it is the mode the canvas is actually in.
 
-        Only the four MODE buttons take a colour. BACK and CLEAR are actions — they do not
+        Only the three MODE buttons take a colour. BACK and CLEAR are actions — they do not
         change what a click on the canvas does, so highlighting them would say something
         untrue about the tool currently in the user's hand.
         """
-        for b in (btn_add, btn_draw, btn_paint, btn_del):
+        for b in (btn_add, btn_draw, btn_del):
             b.setStyleSheet(BTN_BASE + (f" background:{colour}; color:white;"
                                         if b is active else ""))
 
@@ -321,8 +318,7 @@ def build_helper(viewer, manifest):
         "<b>T</b> switch click include ↔ exclude<br>"
         "<b>C</b> commit the object<br>"
         "<b>D</b> delete the object under the mouse<br>"
-        "<i>(S and C work the same for a click and for a drawn shape.<br>"
-        "PAINT needs neither — what you paint is already the answer.)</i><br><br>"
+        "<i>(S and C work the same for a click and for a drawn shape)</i><br><br>"
         "<b>B</b> — back to the previous tile<br>"
         "<b>N</b> — save this tile, go to the next<br>"
         "<span style='color:#d33;'><b>Press N on every tile,<br>including the last one.</b></span>"
@@ -422,57 +418,6 @@ def build_helper(viewer, manifest):
         else:
             hint.setText("<b>Could not switch to a drawing tool</b> — use ADD instead.")
 
-    def set_paint():
-        """Paint one object by hand, straight into committed_objects. No SAM involved.
-
-        For the objects SAM refuses: what you paint IS the annotation, because stage 3 trains
-        on the label image and does not care how a label got there.
-
-        EACH PRESS OF THIS BUTTON STARTS A NEW OBJECT — it takes the next free label id. That
-        is why it is a button press and not a timer: painting is a drag, often several drags
-        for one object, and anything that advanced the id automatically would split a single
-        object across strokes. `preserve_labels` keeps the brush off everything already
-        committed, so a stroke that strays over a neighbour cannot eat it.
-        """
-        lyr = committed()
-        if lyr is None:
-            hint.setText("<b>No committed_objects layer yet</b> — outline one object with "
-                         "<b>ADD</b> first, then PAINT works from there.")
-            return
-        viewer.layers.selection.active = lyr
-        lyr.preserve_labels = True               # never paint over an object already there
-        lyr.n_edit_dimensions = 2
-        try:
-            lyr.selected_label = int(np.asarray(lyr.data).max()) + 1
-        except Exception:
-            pass
-        try:                                     # ~1/40 of the tile: a few strokes cover a cell
-            lyr.brush_size = max(3, int(min(np.asarray(lyr.data).shape[:2]) / 40))
-        except Exception:
-            pass
-        active_mode = None
-        try:
-            lyr.mode = "paint"
-            active_mode = str(lyr.mode)
-        except (ValueError, KeyError, AttributeError):
-            pass
-        draw_state["armed"] = False
-        highlight(btn_paint, "#b06a1f")
-        print(f"[annotate] PAINT -> label {getattr(lyr, 'selected_label', '?')}, "
-              f"mode {active_mode or 'NONE'}, brush {getattr(lyr, 'brush_size', '?')}",
-              flush=True)
-        if active_mode:
-            hint.setText(
-                f"<b>Drag over the object</b> to fill it in. This is object "
-                f"<b>#{getattr(lyr, 'selected_label', '?')}</b>.<br><br>"
-                "There is no <b>S</b> and no <b>C</b> here — what you paint is already the "
-                "answer.<br><br>"
-                "<i>Right-drag rubs out. <b>[</b> and <b>]</b> resize the brush. Press "
-                "<b>PAINT</b> again to start the NEXT object</i> — keep painting without it "
-                "and both objects share one label.")
-        else:
-            hint.setText("<b>Could not switch to the brush</b> — use ADD instead.")
-
     def set_delete():
         lyr = committed()
         if lyr is None:
@@ -522,7 +467,6 @@ def build_helper(viewer, manifest):
 
     btn_add.clicked.connect(set_add)
     btn_draw.clicked.connect(set_draw)
-    btn_paint.clicked.connect(set_paint)
     btn_del.clicked.connect(set_delete)
     btn_clear.clicked.connect(clear_prompts)
 

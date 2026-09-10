@@ -183,14 +183,12 @@ table on exit; relay that.
 >   then the same **S** and **C**. Use it when clicking keeps getting an object wrong. Loose is
 >   fine: the computer uses the box around your shape. Press the button again if the points
 >   won't stick — that swaps to drag-a-rectangle, same result.
-> - **🖌 PAINT an object** — drag to fill an object in by hand. No **S**, no **C**: what you
->   paint IS the answer. Press the button again to start the next object.
 > - **✖ DELETE objects** — click on anything outlined that shouldn't be.
 > - **⌫ CLEAR my clicks & boxes** — tidies away the dots and shapes; outlines are untouched.
 >
 > To fix a bad outline: **delete it, then add it again.** If ADD keeps getting the same object
 > wrong, **DRAW** round it instead — that says *where* the object is rather than what to click.
-> If nothing works, **PAINT** it. That's the whole workflow.
+> That's the whole workflow.
 > Don't use *Clear Annotations* (Shift+C) — deleting the one bad outline always works.
 >
 > When a square looks right, press **N** (or the blue *TILE DONE* button). **Press N on the last
@@ -382,8 +380,8 @@ CSV and overlay previews; the masks go straight into a `python_data_analyst` mea
     **✏ DRAW round objects** button helps on a badly-outlined *single* object — it says where
     the object is instead of what to click — but note that micro_sam reduces every shape in the
     `prompts` layer to its BOUNDING BOX, so on a clump the shape contains the neighbours however
-    tightly it was traced. There, either add an exclude point (**T**) or use **🖌 PAINT an
-    object**, which writes straight into `committed_objects` and never goes near SAM.
+    tightly it was traced. There the only lever is an exclude point (**T**), and sometimes the
+    honest answer is to leave that clump out.
 
     **Do not try to feed SAM a new KIND of prompt here.** Two attempts failed the same way: a
     traced polygon (napari Shapes) and a painted coarse mask (`mask_input` on the Labels
@@ -395,10 +393,6 @@ CSV and overlay previews; the masks go straight into a `python_data_analyst` mea
     rescue it. A rectangle is one press-drag-release with no state in between, which is why it
     is the fallback DRAW swaps to when its polygon points will not stick.
 
-    The distinction that matters: PAINT is **not** a prompt. It writes a label into
-    `committed_objects` — the layer stage 3 actually trains on — so nothing is handed to the
-    predictor and none of the above applies to it. Feeding SAM something new is the thing that
-    fails; annotating by hand is just annotating.
 22. **A folder that mixes grayscale and RGB files silently breaks the annotator.** The series
     annotator shows every tile in ONE napari image layer, so the first `(512,512,3)` tile after
     a `(512,512)` one is read as a 512-SLICE STACK: the canvas goes black, the committed masks
@@ -473,7 +467,7 @@ annotations, and the train-val split never sharing a source image), and
 | file | what it is |
 |---|---|
 | `WORKFLOW_FINETUNE_1_PREPARE.py` | tiles + pre-segmentation + `manifest.json` + generated human instructions |
-| `WORKFLOW_FINETUNE_2_ANNOTATE.py` | the annotator with the ADD/DRAW/PAINT/DELETE helper panel; blocks until the user is done, then reports |
+| `WORKFLOW_FINETUNE_2_ANNOTATE.py` | the annotator with the ADD/DRAW/DELETE helper panel; blocks until the user is done, then reports |
 | `WORKFLOW_FINETUNE_3_TRAIN.py` | validate → split → train → export → **stock vs fine-tuned on held-out tiles** → `evaluation.json` |
 | `WORKFLOW_FINETUNE_4_APPLY.py` | segment the folder with whichever model won, tiled at the training scale |
 | `SKILL.md` | the rest of micro_sam: automatic segmentation, the interactive annotator, the object classifier |
