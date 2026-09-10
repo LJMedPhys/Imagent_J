@@ -304,8 +304,7 @@ else:
 
 def m(name: str, role: str) -> str:
     if use_local:
-        env_model = os.getenv("LOCAL_LLM_MODEL", "").strip()
-        return env_model or config.local_model_for(role, "moonshotai/Kimi-K3")
+        return config.local_model_for(role)
     if use_openrouter:
         return name
     if name.startswith("openai/"):

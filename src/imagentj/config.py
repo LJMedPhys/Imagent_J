@@ -29,6 +29,13 @@ _log = logging.getLogger("imagentj.config")
 
 _TRUE = {"1", "true", "yes", "on"}
 
+#: The one place the local endpoint's model id is hardcoded. The
+#: ``LOCAL_LLM_MODEL`` env var and ``local_llm.model`` in imagentj_config.yaml
+#: both layer on top of it, so this is only reached when neither is set.
+#: When the node6 endpoint swaps models, this is the only Python literal to
+#: change — see :func:`local_model_for` for the full precedence.
+DEFAULT_LOCAL_LLM_MODEL = "GLM-5.3-Flash"
+
 
 def _candidate_paths() -> Iterator[Path]:
     env = os.environ.get("IMAGENTJ_CONFIG")
@@ -73,23 +80,39 @@ def model_for(role: str, default: str) -> str:
     return val if isinstance(val, str) and val.strip() else default
 
 
-def local_model_for(role: str, default: str = "moonshotai/Kimi-K3") -> str:
+def local_model_for(role: str, default: Optional[str] = None) -> str:
     """Return the model id exposed by the local OpenAI-compatible server.
 
-    ``local_llm.models.<role>`` can override individual roles; otherwise all
-    roles share ``local_llm.model``.  This is deliberately separate from the
-    cloud ``models`` mapping so enabling/disabling the local endpoint never
-    requires rewriting the user's OpenAI/OpenRouter choices.
+    Precedence, highest first:
+
+    1. ``local_llm.models.<role>`` in imagentj_config.yaml — an explicit
+       per-role choice, which a blanket env var must not silently override
+       (the same rule :func:`reasoning_effort_for` follows);
+    2. ``LOCAL_LLM_MODEL`` — the global switch. This is what .env and the
+       Compose overrides set, and the normal way to point every role at
+       whatever the endpoint currently serves;
+    3. ``local_llm.model`` — the YAML default shared by all roles;
+    4. ``default``, or :data:`DEFAULT_LOCAL_LLM_MODEL` when the caller passes
+       none.
+
+    This is deliberately separate from the cloud ``models`` mapping so
+    enabling/disabling the local endpoint never requires rewriting the user's
+    OpenAI/OpenRouter choices.
     """
     local = _CFG.get("local_llm") if isinstance(_CFG.get("local_llm"), dict) else {}
     models = local.get("models") if isinstance(local.get("models"), dict) else {}
     role_val = models.get(role)
     if isinstance(role_val, str) and role_val.strip():
         return role_val.strip()
+
+    env = os.environ.get("LOCAL_LLM_MODEL", "").strip()
+    if env:
+        return env
+
     common = local.get("model")
     if isinstance(common, str) and common.strip():
         return common.strip()
-    return default
+    return default if default is not None else DEFAULT_LOCAL_LLM_MODEL
 
 
 def local_api(default: str = "responses") -> str:

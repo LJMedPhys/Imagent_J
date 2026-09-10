@@ -11,6 +11,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
+from .. import config
 from .vector_stores import is_rag_available
 
 __all__ = ["rag_retrieve_docs"]
@@ -19,7 +20,9 @@ openrouter_key = os.getenv("OPEN_ROUTER_API_KEY")
 openai_key = os.getenv("OPENAI_API_KEY")
 local_llm_base_url = os.getenv("LOCAL_LLM_BASE_URL", "").strip()
 if local_llm_base_url:
-    _api_key, _base_url, _model = "local", local_llm_base_url, "moonshotai/Kimi-K3"
+    # Unused on this branch — get_expanded_queries() routes local runs through
+    # agents.llm_nano — but kept consistent so reviving it cannot pin a stale id.
+    _api_key, _base_url, _model = "local", local_llm_base_url, config.DEFAULT_LOCAL_LLM_MODEL
 elif openrouter_key:
     _api_key, _base_url, _model = openrouter_key, "https://openrouter.ai/api/v1", "openai/gpt-4o-mini"
 elif openai_key:

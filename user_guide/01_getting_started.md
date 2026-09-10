@@ -30,18 +30,20 @@ GMAIL_APP_PASSWORD=sntt iusy rddg mtoi
 |----------|----------|-------|
 | **OpenAI** | `OPENAI_API_KEY` | Direct access to GPT models. OpenAI-only setups use `gpt-5.6-luna` through the Responses API with high reasoning for the VLM Judge. |
 | **OpenRouter** | `OPEN_ROUTER_API_KEY` | Proxy that routes to many providers. The VLM Judge uses `google/gemini-3.5-flash`; this route takes priority when both keys are present. |
-| **Local Kimi K3** | `LOCAL_LLM_BASE_URL` | OpenAI-compatible vLLM/SGLang URL including `/v1`; takes priority over cloud keys and needs no real API key. |
+| **Local endpoint** | `LOCAL_LLM_BASE_URL` | OpenAI-compatible vLLM/SGLang URL including `/v1`; takes priority over cloud keys and needs no real API key. |
 
-For a Kimi server running on the Docker host:
+For a local server running on the Docker host:
 
 ```env
 LOCAL_LLM_BASE_URL=http://127.0.0.1:18000/v1
 LOCAL_LLM_API_KEY=EMPTY
-LOCAL_LLM_MODEL=moonshotai/Kimi-K3
+LOCAL_LLM_MODEL=GLM-5.3-Flash
 LOCAL_LLM_API=responses
 ```
 
-All local roles use `local_llm.model` from `imagentj_config.yaml`. The default
+`LOCAL_LLM_MODEL` is the global model switch — it repoints every local role
+at once and overrides `local_llm.model` in `imagentj_config.yaml`, which is the
+fallback when the env var is unset. The default
 reasoning budget is `max` for the supervisor and script-producing worker roles
 (ImageJ coder/debugger and Python data analyst), and `high` for every other role.
 When the server listens only on `127.0.0.1`, start Agentic-J with:

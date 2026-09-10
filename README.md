@@ -9,7 +9,7 @@ Prerequisites:
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or Docker Engine + Compose on Linux)
 - [Git](https://git-scm.com/downloads) **and** [Git LFS](https://git-lfs.com/) — the RAG vector database (`qdrant_data/**/storage.sqlite`) is stored via Git LFS, so a plain clone without LFS will give you stub files that won't work.
 - ~8 GB RAM and ~30 GB free disk
-- An OpenAI/OpenRouter API key, **or** a local OpenAI-compatible Kimi K3 endpoint
+- An OpenAI/OpenRouter API key, **or** a local OpenAI-compatible endpoint (e.g. GLM-5.3-Flash)
 
 > The optional VLM Judge uses `google/gemini-3.5-flash` when
 > `OPEN_ROUTER_API_KEY` is set (including when both keys are present). OpenAI-only
@@ -40,20 +40,27 @@ Then open <http://localhost:6080/vnc.html> in your browser. Fiji and the Agentic
 
 If no API key is set in `.env`, a setup wizard appears in the browser before Fiji launches.
 
-### Local Kimi K3
+### Local LLM endpoint
 
-Kimi K3 can replace all text and vision roles through a local vLLM/SGLang
-OpenAI-compatible endpoint. For a server listening on host loopback port 18000,
-put this in `.env` (the URL must include `/v1`):
+A local vLLM/SGLang OpenAI-compatible server can replace all text and vision
+roles. For one listening on host loopback port 18000, put this in `.env` (the
+URL must include `/v1`):
 
 ```env
 LOCAL_LLM_BASE_URL=http://127.0.0.1:18000/v1
 LOCAL_LLM_API_KEY=EMPTY
-LOCAL_LLM_MODEL=moonshotai/Kimi-K3
+LOCAL_LLM_MODEL=GLM-5.3-Flash
 LOCAL_LLM_API=responses
 ```
 
-`LOCAL_LLM_BASE_URL` takes priority if cloud keys are also present. The shipped
+`LOCAL_LLM_BASE_URL` takes priority if cloud keys are also present.
+
+**Changing the model** is a one-line edit: `LOCAL_LLM_MODEL` is the global
+switch and repoints every local agent role at once. It overrides
+`local_llm.model` in `imagentj_config.yaml`, which is the fallback when the env
+var is unset; `local_llm.models.<role>` pins one role and beats both. Only when
+all three are absent does the built-in `config.DEFAULT_LOCAL_LLM_MODEL` apply.
+The served id must match what the endpoint reports at `GET /v1/models`. The shipped
 configuration uses `max` reasoning for the supervisor and script-producing
 worker roles (ImageJ coder/debugger and Python data analyst); the remaining
 specialist/VLM roles use `high`. In local mode, documentation retrieval uses
@@ -61,8 +68,9 @@ the prebuilt BM25 sparse index and makes no cloud embedding calls.
 
 `LOCAL_LLM_API` selects one protocol for every local role, including the VLM.
 Use `chat_completions` instead if the server exposes only
-`/v1/chat/completions`; otherwise `responses` calls `/v1/responses`. Kimi K3
-image requests require an explicit `detail` level, which Agentic-J supplies.
+`/v1/chat/completions`; otherwise `responses` calls `/v1/responses`. Image
+requests on these endpoints require an explicit `detail` level, which Agentic-J
+supplies.
 
 Because a bridge-network container cannot reach a server bound only to the
 host's `127.0.0.1`, start this setup with the supplied host-network override:
@@ -71,8 +79,8 @@ host's `127.0.0.1`, start this setup with the supplied host-network override:
 docker compose -f docker-compose.yml -f docker-compose.local-kimi.yml up
 ```
 
-The UI remains at <http://localhost:6081/vnc.html>. If Kimi instead listens on
-`0.0.0.0:18000`, normal `docker compose up` also works by setting
+The UI remains at <http://localhost:6081/vnc.html>. If the server instead
+listens on `0.0.0.0:18000`, normal `docker compose up` also works by setting
 `LOCAL_LLM_BASE_URL=http://host.docker.internal:18000/v1`.
 
 The benchmark adapter uses an isolated bridge network rather than the

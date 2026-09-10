@@ -29,18 +29,27 @@ models:
   vlm:        "google/gemini-3.5-flash" # Vision judge (OpenRouter); on OpenAI-only
                                         # installs this falls back to gpt-5.6-luna
 
-# Model name exposed by a local OpenAI-compatible endpoint. LOCAL_LLM_BASE_URL
-# activates this profile and takes priority over cloud keys. This deployment
-# exposes the Hugging Face model id below. ``api`` is shared by all local roles,
-# including the VLM. Change it to chat_completions only for a conventional
-# vLLM/SGLang Chat Completions endpoint.
+# Local OpenAI-compatible endpoint. LOCAL_LLM_BASE_URL activates this profile
+# and takes priority over cloud keys.
+#
+# `model` is the global switch: every local role uses it unless overridden.
+# The env var LOCAL_LLM_MODEL (set in .env and the Compose overrides) wins over
+# it, so a deployment can repoint all roles without editing this file. Add an
+# optional `models:` block below to pin one role to a different id; a per-role
+# entry beats the env var, on the same rule as `reasoning_effort` further down.
+#
+# `api` is shared by all local roles, including the VLM. Change it to
+# chat_completions only for a conventional vLLM/SGLang Chat Completions
+# endpoint.
 local_llm:
   api: responses
-  model: "moonshotai/Kimi-K3"
+  model: "GLM-5.3-Flash"
+  # models:
+  #   vlm: "some-other-served-id"
 
 # ── Thinking budget per role ────────────────────────────────────────────────
-# Mirrors `models:` above. Values are endpoint-dependent; Kimi K3 supports
-# low/high/max as top-level reasoning_effort values. An explicit null sends no
+# Mirrors `models:` above. Values are endpoint-dependent; both Kimi K3 and
+# GLM-5.3-Flash accept low/high/max as top-level reasoning_effort values. An explicit null sends no
 # reasoning_effort. Per-role values take precedence over the blanket
 # IMAGENTJ_REASONING_EFFORT environment override.
 reasoning_effort:

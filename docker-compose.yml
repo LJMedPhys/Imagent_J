@@ -14,7 +14,7 @@ services:
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPEN_ROUTER_API_KEY=${OPEN_ROUTER_API_KEY:-}
-      # Local OpenAI-compatible LLM (e.g. Kimi K3 via vLLM/SGLang). When set,
+      # Local OpenAI-compatible LLM (e.g. GLM-5.3-Flash via vLLM/SGLang). When set,
       # this endpoint takes priority over the two cloud providers above.
       - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-}
       - LOCAL_LLM_API_KEY=${LOCAL_LLM_API_KEY:-}
@@ -93,7 +93,7 @@ services:
     networks:
       - imagent_net
 
-    # Lets a container reach a Kimi server bound on the Docker host on Linux;
+    # Lets a container reach a local LLM server bound on the Docker host on Linux;
     # Docker Desktop already provides this name and accepts the same mapping.
     extra_hosts:
       - "host.docker.internal:host-gateway"
