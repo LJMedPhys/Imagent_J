@@ -91,6 +91,122 @@ _MAX_HISTORY = 40          # tool calls kept per handle (bounded memory)
 _MAX_ARG_CHARS = 400       # per-call argument digest input
 
 
+# ---------------------------------------------------------------------------
+# Tier 3 — the user is not getting a segmentation they will accept
+# ---------------------------------------------------------------------------
+# The other tiers watch for a run that is BROKEN. This one watches for a run that
+# is working and still failing the user: the agent adjusts a threshold, the user
+# says it is still wrong, the agent adjusts it again. Nothing ends that loop,
+# because fine-tuning is only routed when the user asks for it BY NAME — so a user
+# who does not know the capability exists never gets offered it, however long they
+# go round.
+#
+# Unlike tiers 0-2 this is not a property of one turn, so it cannot live in
+# AgentHandle: the attempts are spread over many turns and survive compaction. It is
+# read from the project's state ledger instead — the log the supervisor already
+# writes after every step. Deterministic; no model judges it. The counter resets the
+# moment the user approves a result, so it measures consecutive dissatisfaction and
+# not volume of work.
+SEGMENTATION_RETRY_LIMIT = int(os.environ.get("IMAGENTJ_SEGMENTATION_RETRIES", "3"))
+
+# The segmenters this system actually routes to — the same vocabulary as
+# `state_ledger._MODALITY_TOOL_PRIORITY`. Deliberately NOT every segmentation tool
+# with a docs folder: ilastik and labkit have skills but no live route, so counting
+# them would only ever produce a false trigger.
+_SEG_WORDS = ("segment", "threshold", "cellpose", "stardist", "micro_sam", "microsam",
+              "watershed", "mask", "nuclei", "morpholibj")
+_APPROVAL_WORDS = ("approved", "accepted", "signed_off")
+# A crash-fix is not a failed attempt at the science, and the fine-tuning route's own
+# steps must never count towards the thing that recommends it.
+_NOT_AN_ATTEMPT = ("debug_fix", "finetune", "fine_tune", "fine-tune", "annotat")
+
+_project_root: Optional[str] = None
+_retry_announced: set = set()
+
+
+def note_project(project_root: str) -> None:
+    """Told by the state ledger where its log lives, so the watchdog can read it."""
+    global _project_root
+    if project_root:
+        _project_root = project_root
+
+
+def _entry_text(entry: dict) -> str:
+    return " ".join(str(entry.get(k, "")) for k in ("step", "details", "phase")).lower()
+
+
+def _is_segmentation_attempt(entry: dict) -> bool:
+    """One execution of a segmentation the user could have accepted or rejected."""
+    text = _entry_text(entry)
+    if any(w in text for w in _NOT_AN_ATTEMPT):
+        return False
+    # "awaiting_approval" and "skipped" are not tries: nothing was put in front of the
+    # user to reject, so counting them would trip the switch early.
+    if str(entry.get("status", "")).lower() not in ("completed", "failed", "rejected"):
+        return False
+    return any(w in text for w in _SEG_WORDS)
+
+
+def segmentation_attempts(project_root: Optional[str] = None) -> list:
+    """Segmentation attempts in this project since the last one the user approved."""
+    root = project_root or _project_root
+    if not root:
+        return []
+    try:
+        with open(os.path.join(root, "state_ledger.json"), "r", encoding="utf-8") as fh:
+            ledger = json.load(fh)
+    except Exception:
+        return []                       # no ledger yet, or unreadable: nothing to say
+    attempts = []
+    for entry in (ledger.get("completed_steps") or []):
+        if any(w in _entry_text(entry) for w in _APPROVAL_WORDS):
+            attempts = []               # the user was happy: the count starts again
+        elif _is_segmentation_attempt(entry):
+            attempts.append(entry)
+    return attempts
+
+
+def finetune_directive(project_root: Optional[str] = None) -> str:
+    """The switch, as text for the agent's context. Empty until the limit is reached."""
+    attempts = segmentation_attempts(project_root)
+    if len(attempts) < SEGMENTATION_RETRY_LIMIT:
+        return ""
+    tried = []
+    for e in attempts[-SEGMENTATION_RETRY_LIMIT:]:
+        params = e.get("parameters") or {}
+        what = ", ".join(f"{k}={v}" for k, v in list(params.items())[:4]) or e.get("details", "")
+        tried.append(f"    {e.get('step', '?')}: {what}"[:200])
+    return "\n".join([
+        f"⚠ WATCHDOG: {len(attempts)} SEGMENTATION ATTEMPTS, NONE APPROVED BY THE USER:",
+        *tried,
+        "  → STOP TUNING PARAMETERS AND SWITCH TO FINE-TUNING. Three settings have failed;",
+        "    that is evidence about the MODEL, not about the settings, and a fourth is a",
+        "    worse use of the user's patience than teaching the model what they mean.",
+        "    Read skills/napari/micro_sam/FINETUNING.md and run its 'is fine-tuning even",
+        "    needed?' gate FIRST — no GPU, too few images, or data the stock model already",
+        "    covers all rule the run out in seconds, and then you say so and keep tuning.",
+        "    If the gate passes, tell the user what it costs (~20 min of their time",
+        "    annotating ~8 small tiles) and start at stage 1, which opens the tile picker",
+        "    and puts the decision in front of them anyway.",
+        "    This clears as soon as a result is approved — log that step with 'approved'",
+        "    in its name.",
+    ])
+
+
+def _check_segmentation_retries() -> None:
+    """Tell the USER once per project, so the switch is not only an agent-side event."""
+    root = _project_root
+    if not root or root in _retry_announced:
+        return
+    n = len(segmentation_attempts(root))
+    if n < SEGMENTATION_RETRY_LIMIT:
+        return
+    _retry_announced.add(root)
+    _notify(f"Segmentation has been through {n} rounds without one you accepted. "
+            f"Rather than tune the settings again, the assistant will look at "
+            f"fine-tuning the model on your own annotations.")
+
+
 class AgentAborted(RuntimeError):
     """Raised in the caller when the agent watchdog terminated an agent turn."""
 
@@ -295,6 +411,13 @@ def _supervise(handle: AgentHandle) -> None:
             _kill(handle, f"repeated the same '{tool}' call {repeats}× with identical "
                           f"arguments — spinning loop")
             return
+
+        # Tier 3 — working, but not producing anything the user accepts. Never kills:
+        # the turn is healthy, it is the STRATEGY that needs to change.
+        try:
+            _check_segmentation_retries()
+        except Exception:
+            log.debug("agent watchdog: retry check failed", exc_info=True)
 
         # Tier 1 — a tool that never returned.
         quiet = handle.quiet_for()
