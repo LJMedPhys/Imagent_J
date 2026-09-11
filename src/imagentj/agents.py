@@ -74,6 +74,7 @@ from .tools.learned_memory import (
 )
 from imagentj.tracker import UsageMetrics, MetricsSignalBridge, UsageTrackerCallback
 from imagentj.kimi_chat import KimiChatOpenAI
+from imagentj.local_responses_chat import LocalResponsesChatOpenAI
 from imagentj.artifact_validation import validate_script_artifact
 from imagentj.provider_errors import is_transient_provider_error
 
@@ -312,6 +313,53 @@ def m(name: str, role: str) -> str:
     raise ValueError(f"Model {name} not available on OpenAI direct; needs OpenRouter.")
 
 
+# ---------------------------------------------------------------------------
+# Structured handoffs for subagents that ALSO call tools (coder, debugger,
+# analyst, plugin_manager).
+#
+# Cloud (OpenAI / OpenRouter): ProviderStrategy. The schema travels as a native
+# response_format next to the tools; the provider lets the model pick a tool
+# call OR the final JSON on every turn, and no tool_choice is forced — the
+# per-agent notes below record why forcing stalled those endpoints.
+#
+# Local OpenAI-compatible server (vLLM, SGLang): that same request is broken.
+# The server compiles response_format into a grammar (xgrammar) that constrains
+# the WHOLE completion on EVERY turn, so the model physically cannot emit a
+# tool-call token — vLLM logs "Failed to advance FSM ... Please file an issue"
+# at the moment it tries. The model then does the only thing the grammar
+# allows: it returns the handoff JSON on turn 1 with success=true and a
+# script_path it never wrote. validate_script_artifact blanks the path, the
+# supervisor sees an empty handoff, retries, and finally gives up on the
+# specialist. Observed 2026-09-11 on GLM-5.3-Flash: nine consecutive "silent
+# file-persistence failures" across imagej_coder and python_data_analyst, every
+# one a single model turn with zero tool calls; with MTP speculative decoding
+# the grammar also drove a ~65k-token runaway into the watchdog.
+#
+# ToolStrategy sidesteps the grammar: the handoff is one more tool, emitted
+# through the server's ordinary tool-call parser. The tool_choice="any" it
+# binds is harmless on vLLM — vlm_judge and qa_reporter already run that way on
+# the same endpoint (qa_reporter: 8 turns, 13 real tool calls, then QAHandoff).
+#
+# IMAGENTJ_HANDOFF_STRATEGY=provider|tool overrides the automatic choice.
+# ---------------------------------------------------------------------------
+_HANDOFF_STRATEGY_OVERRIDE = os.environ.get("IMAGENTJ_HANDOFF_STRATEGY", "").strip().lower()
+if _HANDOFF_STRATEGY_OVERRIDE not in ("", "auto", "provider", "tool"):
+    raise ValueError(
+        "IMAGENTJ_HANDOFF_STRATEGY must be 'auto', 'provider' or 'tool' "
+        f"(got {_HANDOFF_STRATEGY_OVERRIDE!r})."
+    )
+
+
+def _handoff_strategy(schema, *, strict: bool = True):
+    """Structured-output strategy for a tool-using subagent (see note above)."""
+    choice = _HANDOFF_STRATEGY_OVERRIDE or "auto"
+    if choice == "auto":
+        choice = "tool" if use_local else "provider"
+    if choice == "tool":
+        return ToolStrategy(schema=schema, handle_errors=True)
+    return ProviderStrategy(schema=schema, strict=strict)
+
+
 def _agent_reasoning_kwargs(
     reasoning_effort: Optional[str] = None,
     local_api: Optional[str] = None,
@@ -408,11 +456,17 @@ def _seed_kwargs() -> dict:
     """`seed` only when explicitly opted into; otherwise send nothing."""
     return {"seed": _LLM_SEED} if _LLM_SEED is not None else {}
 
-_chat_model_class = (
-    KimiChatOpenAI
-    if use_local and local_llm_api == "chat_completions"
-    else ChatOpenAI
-)
+# Local endpoints get a thin ChatOpenAI subclass per wire format:
+#   chat_completions -> KimiChatOpenAI keeps reasoning fields round-tripping;
+#   responses        -> LocalResponsesChatOpenAI stamps `detail` onto image
+#                       inputs, which vLLM requires and OpenAI merely defaults.
+# Cloud providers use ChatOpenAI unchanged.
+if use_local and local_llm_api == "chat_completions":
+    _chat_model_class = KimiChatOpenAI
+elif use_local:
+    _chat_model_class = LocalResponsesChatOpenAI
+else:
+    _chat_model_class = ChatOpenAI
 
 llm_supervisor = _chat_model_class(
     model=m(config.model_for("supervisor", "openai/gpt-5.4"), "supervisor"),
@@ -557,7 +611,7 @@ def _make_coder_agent(model, name, system_prompt):
             inspect_folder_tree,   # lets agent survey /app/skills/ before reading
         ],
         system_prompt=system_prompt,
-        # ProviderStrategy, not ToolStrategy — see the note on _analyst_agent.
+        # Cloud: ProviderStrategy, not ToolStrategy — see the note on _analyst_agent.
         # ToolStrategy forces tool_choice="required" on every turn, and every
         # watchdog kill in the v3 benchmark run traced back to an agent built here
         # or by the analyst. ProviderStrategy binds no tool_choice and sends the
@@ -567,7 +621,11 @@ def _make_coder_agent(model, name, system_prompt):
         # treats the schema as advisory and the model replies with the schema
         # itself ({"properties": {...}}), which fails to parse. See
         # _strict_json_schema.
-        response_format=ProviderStrategy(schema=ScriptHandoff, strict=True),
+        #
+        # Local vLLM/SGLang: ToolStrategy instead — response_format there is a
+        # whole-output grammar that makes save_script uncallable. See
+        # _handoff_strategy.
+        response_format=_handoff_strategy(ScriptHandoff, strict=True),
         name=name,
         middleware=[
             ToolOutputLimitMiddleware(),
@@ -646,7 +704,11 @@ _analyst_agent = create_agent(
     # also binds the real tools in strict mode, and `edits: Optional[list]` emitted
     # `{"items": {}}`, which OpenAI rejects. A schema audit of all nine tools bound
     # here found that this was the only hard blocker.
-    response_format=ProviderStrategy(schema=AnalystHandoff, strict=True),
+    #
+    # All of the above is the CLOUD story. On a local vLLM/SGLang endpoint the
+    # same response_format is a whole-output grammar that blocks every tool call,
+    # so _handoff_strategy hands back a ToolStrategy there instead.
+    response_format=_handoff_strategy(AnalystHandoff, strict=True),
     name="python_data_analyst",
     middleware=[
         ToolOutputLimitMiddleware(),
@@ -731,7 +793,12 @@ _plugin_agent = create_agent(
     # instead. Verified on the wire: tool_choice absent, 5 real tools instead of 6,
     # and json_schema with strict=false — so the nested pipeline_steps model needs
     # no `extra="forbid"` rewrite to be accepted.
-    response_format=ProviderStrategy(schema=PluginRecommendation),
+    #
+    # On a local vLLM/SGLang endpoint _handoff_strategy swaps this for a
+    # ToolStrategy: response_format there is a whole-output grammar, so the
+    # manager could never call search_fiji_plugins / check_plugin_installed and
+    # answered from the task prose alone. Forced tool choice is fine on vLLM.
+    response_format=_handoff_strategy(PluginRecommendation, strict=False),
     name="plugin_manager",
     middleware=[
         ToolOutputLimitMiddleware(),

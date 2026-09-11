@@ -8,9 +8,11 @@ services:
       dockerfile: ${IMAGENTJ_DOCKERFILE:-Dockerfile}
       target: cpu
     ports:
-      # Bind to localhost only by default for security
-      # Change to "0.0.0.0:6080:6080" if you need network access (not recommended)
-      - "0.0.0.0:6080:6080"
+      # Both sides use NOVNC_PORT so the published port always matches what
+      # websockify listens on inside the container — the entrypoint reads the
+      # same variable through env_file. Set NOVNC_PORT in .env when you share
+      # this machine; the default 6080 collides with a colleague's session.
+      - "0.0.0.0:${NOVNC_PORT:-6080}:${NOVNC_PORT:-6080}"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPEN_ROUTER_API_KEY=${OPEN_ROUTER_API_KEY:-}

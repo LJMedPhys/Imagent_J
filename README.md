@@ -96,6 +96,89 @@ Place images you want to analyse in [`./data/`](data/) — the agent sees them a
 
 > **Verifying LFS worked:** after cloning, check that `qdrant_data/collection/BioimageAnalysisDocs/storage.sqlite` is several MB, not a ~130-byte text file starting with `version https://git-lfs.github.com/...`. If it's a stub, run `git lfs install && git lfs pull`.
 
+## Running alongside other sessions
+
+Several people run Agentic-J from their own checkouts on the same host, so a
+plain `docker compose up` collides with them. Each collision has its own knob;
+set them once in `.env`.
+
+| Collides on | Symptom | Knob | Default |
+|---|---|---|---|
+| Compose project name | Compose stops and recreates a *colleague's* container, because it believes it owns it | `COMPOSE_PROJECT_NAME` | the checkout's directory name |
+| Bridge subnet | `Pool overlaps with other one on this address space` | `IMAGENTJ_SUBNET` | `10.10.10.0/24` |
+| Published noVNC port | `Bind for 0.0.0.0:6080 failed: port is already allocated` | `NOVNC_PORT` | `6080` |
+
+`COMPOSE_PROJECT_NAME` matters most: two checkouts are often both named
+`Imagent_J`, and without it Compose treats a colleague's running container as
+yours and stops it. `NOVNC_PORT` drives *both* sides of the port mapping — the
+published host port and the port websockify binds inside the container — so the
+UI is always at `http://localhost:$NOVNC_PORT/vnc.html`.
+
+A working `.env` for a shared host:
+
+```env
+COMPOSE_PROJECT_NAME=imagentj_yourname
+IMAGENTJ_SUBNET=100.64.200.0/24
+NOVNC_PORT=7080
+```
+
+Check what is already taken before starting:
+
+```bash
+# published host ports
+docker ps --format '{{.Names}}\t{{.Ports}}'
+
+# subnets already in use
+for n in $(docker network ls --format '{{.Name}}'); do
+  echo "$n $(docker network inspect "$n" --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}')"
+done
+```
+
+Never stop a container you do not recognise. Ask who owns it first:
+
+```bash
+docker inspect <name> --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}'
+```
+
+### Host networking
+
+`docker-compose.local-kimi.yml` switches to `network_mode: host`, which sidesteps
+the subnet and port knobs entirely — but it also takes X display `:1` and VNC
+port 5900 globally. A second host-network session cannot start Xvfb, fluxbox or
+x11vnc and dies on startup. Use it only when nobody else is running one; the
+bridge setup above is the safe default on a shared machine.
+
+### Reaching a loopback LLM endpoint from the bridge
+
+`LOCAL_LLM_BASE_URL=http://127.0.0.1:18000/v1` is correct under host networking,
+but on the bridge `127.0.0.1` names the *container*. The entrypoint rewrites a
+loopback URL to `host.docker.internal` only when `BENCHMARK_MODE` is set, so for
+a normal `docker compose up` point it there yourself:
+
+```bash
+IMAGENTJ_SUBNET=100.64.200.0/24 \
+LOCAL_LLM_BASE_URL=http://host.docker.internal:18000/v1 \
+docker compose up -d
+```
+
+`host.docker.internal` maps to the `docker0` gateway address, not to your
+project network's own gateway. An SSH forward bound only to host `127.0.0.1` is
+therefore invisible to the container; bind a second one to the `docker0` address
+(`ip -4 addr show docker0`) and leave the private one alone:
+
+```bash
+ssh -fN -L 10.54.0.1:18000:127.0.0.1:8000 <llm-host>
+```
+
+Confirm the container can see it before launching the full app:
+
+```bash
+docker run --rm --add-host host.docker.internal:host-gateway alpine:3 \
+  wget -qO- http://host.docker.internal:18000/v1/models
+```
+
+That should print the served model id, which must match `LOCAL_LLM_MODEL`.
+
 ## GPU support (optional)
 
 By default the container runs on **CPU** (`docker compose up`). On an NVIDIA GPU host you can run the GPU build, which accelerates the deep-learning segmentation steps — **Cellpose** (v3 + Cellpose-SAM, PyTorch) and **StarDist** (TensorFlow).

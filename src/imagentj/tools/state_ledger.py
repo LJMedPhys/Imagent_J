@@ -366,6 +366,27 @@ def _load_ledger(project_root: str) -> dict:
         return {}
 
 
+def _reject_bad_project_root(project_root: str) -> Optional[str]:
+    """
+    Return an error message if `project_root` is outside /app/data, else None.
+
+    The supervisor sometimes guesses a path before setup_analysis_workspace is
+    called, or drops the /app prefix (/data/... is a real, writable mount, so
+    the path looks plausible). Hand that back as a normal tool error the model
+    can retry instead of letting _save_ledger raise: a ValueError escaping a
+    tool aborts the whole supervisor turn, discarding an otherwise healthy run.
+    """
+    if os.path.normpath(project_root).startswith("/app/data"):
+        return None
+    return (
+        f"ERROR: project_root '{project_root}' is outside /app/data — nothing "
+        "was recorded. Projects live under /app/data/projects/<name>; if you "
+        "meant the container's read-only image mount (/data), note it is a "
+        "different directory. Retry with the /app/data path, or call "
+        "setup_analysis_workspace first if the project folder does not exist yet."
+    )
+
+
 def _save_ledger(project_root: str, ledger: dict) -> None:
     # Guard: project_root must be inside /app/data to avoid writing to system paths.
     # The supervisor sometimes guesses a path before setup_analysis_workspace is called.
@@ -648,6 +669,10 @@ def update_state_ledger(
     # Some provider/tool-call paths encode a text argument as a list of content
     # blocks. Accept and normalize that representation instead of letting a
     # downstream string validator/regex abort the whole supervisor turn.
+    bad_root = _reject_bad_project_root(project_root)
+    if bad_root:
+        return bad_root
+
     details = _content_text(details).strip()
     ledger = _load_ledger(project_root)
 
@@ -797,6 +822,10 @@ def set_ledger_metadata(
         A one-line confirmation listing the fields that changed. Call
         read_state_ledger when you need the full project state.
     """
+    bad_root = _reject_bad_project_root(project_root)
+    if bad_root:
+        return bad_root
+
     ledger = _load_ledger(project_root)
     ledger.setdefault("project_root", project_root)
 
