@@ -472,6 +472,35 @@ def stop_headline(handle: RunHandle) -> str:
     )
 
 
+def note_wait_status() -> str:
+    """One line saying what a just-queued note is waiting for.
+
+    Notes are drained at the next MODEL turn (`interject.InterjectMiddleware`), and
+    while the graph sits inside a long `execute_script` there is no such turn — so a
+    note posted during a 20-minute Cellpose batch waits for that batch. Said as
+    "the agent will read this at its next step" that is indistinguishable from being
+    ignored, which is what it looked like. Naming the thing being waited on, how
+    long it has run and its last line of output turns a silence into a status.
+
+    Read-only: it snapshots live handles and never touches the agent graph.
+    """
+    runs = [h for h in active_runs() if getattr(h, "status", "") == "running"]
+    if not runs:
+        return "The agent will read it at its next step."
+    h = max(runs, key=lambda r: r.elapsed)            # the one actually blocking
+    what = (h.purpose or "").strip() or f"a {h.language} script"
+    mins, secs = divmod(int(h.elapsed), 60)
+    ran = f"{mins}m {secs:02d}s" if mins else f"{secs}s"
+    line = f"Waiting on: {what} — running {ran}"
+    try:
+        tail = [l.strip() for l in (h.output_tail(400) or "").splitlines() if l.strip()]
+    except Exception:
+        tail = []
+    if tail:
+        line += f", last output: “{tail[-1][:90]}”"
+    return line + ". Your note is read when that finishes."
+
+
 def stop_guidance(handle: RunHandle) -> str:
     """Tell the agent what a stopped run means and what to do about it."""
     if handle.killed_by == "user":

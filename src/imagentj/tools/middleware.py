@@ -714,6 +714,11 @@ class InterjectMiddleware(AgentMiddleware):
         if not notes:
             return None
         _log.info("delivering %d queued user note(s) to the agent", len(notes))
+        interject._notify(
+            f"Your note{'s' if len(notes) > 1 else ''} reached the agent just now — "
+            f"it will take {'them' if len(notes) > 1 else 'it'} into account before "
+            f"the next step."
+        )
         return {
             "messages": [
                 HumanMessage(content=(
