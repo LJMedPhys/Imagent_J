@@ -967,6 +967,9 @@ class ImageJAgentGUI(QWidget):
 
         self.status_label = QLabel("Agent is ready to help")
         self.status_label.setStyleSheet("color: green; font-weight: bold;")
+        # Ignored horizontally: the label may report any width it likes and the layout
+        # will not grow to fit it, so appending the process name cannot resize the chat.
+        self.status_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self._base_status = "Ready"
         # Ticks the elapsed time of any detached run. One second, and it only ever
         # rewrites a label, so it costs nothing when nothing is running.
@@ -1209,16 +1212,36 @@ class ImageJAgentGUI(QWidget):
         except Exception:
             pass
         if runs:
-            oldest = runs[0]
-            mins, secs = divmod(int(time.time() - oldest["started"]), 60)
-            elapsed = f"{mins}m {secs:02d}s" if mins else f"{secs}s"
-            label += f"  ·  ⏳ still running: {oldest['label']} ({elapsed})"
+            name = runs[0]["label"]
+            if len(name) > 24:                 # bounded, so the line cannot widen the window
+                name = name[:23] + "…"
+            label += f"  ·  Process: {name}"
             if len(runs) > 1:
-                label += f" +{len(runs) - 1} more"
+                label += f" +{len(runs) - 1}"
             color = "#b26a00"
 
         self.status_label.setText(label)
         self.status_label.setStyleSheet(f"color: {color}; font-weight: bold;")
+        self._sync_stop_button()
+
+    def _sync_stop_button(self):
+        """Stop follows the agent OR a detached run — either is something to stop.
+
+        `run_control.terminate_all` already kills a detached script (it owns the
+        process), so the only thing missing was the button being live once the agent
+        itself had gone idle.
+        """
+        try:
+            bg = bool(detached.active())
+        except Exception:
+            bg = False
+        stoppable = bool(getattr(self, "_busy", False)) or bg
+        self.stop_button.setEnabled(stoppable)
+        self.stop_button.setStyleSheet(
+            "background-color: #e74c3c; color: white; font-weight: bold; padding: 8px;"
+            if stoppable else
+            "background-color: #bdc3c7; color: #7f8c8d; font-weight: bold; padding: 8px;"
+        )
 
     def set_ui_busy(self, busy: bool):
         self._busy = busy
@@ -1249,6 +1272,9 @@ class ImageJAgentGUI(QWidget):
             self.send_button.setStyleSheet(
                 "background-color: #3498db; color: white; font-weight: bold; padding: 8px; border:none;"
             )
+        # Last word on Stop: the branches above only know about the agent, and a
+        # detached script outlives it.
+        self._sync_stop_button()
 
     # ------------------------------------------------------------------
     # Agent options
@@ -1329,15 +1355,15 @@ class ImageJAgentGUI(QWidget):
         """A run outlasted the wait and was handed back — say so in the transcript."""
         self.chat_scroll.add_message(
             'system',
-            f"⏳ “{label}” is taking a while, so it now runs in the background. "
-            f"You can keep chatting — the result will come back here when it finishes."
+            f"Process “{label}” moved to the background — keep chatting, the result "
+            f"comes back here. Stop still ends it."
         )
         self._render_status()
 
     def on_detached_done(self, label: str, result: str):
         """A long script the agent did not wait for has finished."""
         self.chat_scroll.add_message(
-            'system', f"✓ “{label}” finished — handing the result to the agent."
+            'system', f"Process “{label}” finished."
         )
         self._render_status()          # drop it from the status line immediately
         # Submitted as an ordinary prompt, so it is picked up by the same worker loop
