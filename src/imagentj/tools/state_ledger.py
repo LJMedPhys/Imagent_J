@@ -687,12 +687,9 @@ def update_state_ledger(
     # attempts the user has not approved and, past its limit, switches the run to
     # fine-tuning — see agent_watchdog. Doing it here means the pointer is set by the
     # act of writing a step, so there is nothing extra for the supervisor to remember.
-    # The one line per ledger write that makes the counter observable in `docker logs`:
-    # the running total, and whether THIS step counted and why not.
     try:
-        from ..agent_watchdog import note_project, retry_status_line
+        from ..agent_watchdog import note_project
         note_project(project_root)
-        print(retry_status_line(project_root, entry), flush=True)
     except Exception:
         pass
 

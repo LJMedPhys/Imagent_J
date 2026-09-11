@@ -27,6 +27,11 @@ Three tiers, cheapest first — the same shape as the script watchdog:
   and rules CONTINUE or KILL, for the runaway that is neither repetitive nor
   stalled, merely endless.
 
+  Tier 3 (free, deterministic) — the odd one out: the turn is HEALTHY and the
+  user is still not getting a segmentation they accept. It never kills; it
+  switches the strategy to fine-tuning. Read from the usage log rather than the
+  tool history, because the evidence is the user's own words across many turns.
+
 Bias is toward CONTINUE, for the same reason as the script watchdog: a slow
 subagent is normal, and killing good work is worse than waiting. Every failure
 path (no LLM, parse error, missing handle) resolves to "leave it alone".
@@ -37,6 +42,7 @@ the Stop button does via `stop_signal`. The caller then returns its graceful
 """
 
 import contextvars
+import glob
 import hashlib
 import json
 import logging
@@ -101,145 +107,164 @@ _MAX_ARG_CHARS = 400       # per-call argument digest input
 # who does not know the capability exists never gets offered it, however long they
 # go round.
 #
-# Unlike tiers 0-2 this is not a property of one turn, so it cannot live in
-# AgentHandle: the attempts are spread over many turns and survive compaction. It is
-# read from the project's state ledger instead — the log the supervisor already
-# writes after every step. Deterministic; no model judges it. The counter resets the
-# moment the user approves a result, so it measures consecutive dissatisfaction and
-# not volume of work.
+# THE SOURCE IS THE USAGE LOG, NOT THE STATE LEDGER. The first version of this read
+# `state_ledger.json`, which was wrong in practice: the ledger is written only when
+# the supervisor remembers to call `update_state_ledger`, and measured on a real
+# session it does NOT record separate retries of the same thresholding step. A
+# counter resting on a habit the model may not keep reads zero exactly when it
+# matters. `logs/usage_log.json` (and the per-chat `usage_stats.json`) is written by
+# the tracker on EVERY query with no model involvement, and it carries the one thing
+# that actually defines this problem: the user's own words.
+#
+# So the count is consecutive user turns expressing dissatisfaction with a
+# segmentation. Measured over 194 real chats / 704 queries in this deployment it
+# fires on 2, both genuine — e.g. "this is not correct, the nuclei are not detected
+# well" -> "but it's not better, there are a lot more nuceli actually" -> "now it's
+# finding too many extra compartments". No false positives in that sample.
 SEGMENTATION_RETRY_LIMIT = int(os.environ.get("IMAGENTJ_SEGMENTATION_RETRIES", "3"))
 
-# The segmenters this system actually routes to — the same vocabulary as
-# `state_ledger._MODALITY_TOOL_PRIORITY`. Deliberately NOT every segmentation tool
-# with a docs folder: ilastik and labkit have skills but no live route, so counting
-# them would only ever produce a false trigger.
-_SEG_WORDS = ("segment", "threshold", "cellpose", "stardist", "micro_sam", "microsam",
-              "watershed", "mask", "nuclei", "morpholibj")
-_APPROVAL_WORDS = ("approved", "accepted", "signed_off")
-# A crash-fix is not a failed attempt at the science, and the fine-tuning route's own
-# steps must never count towards the thing that recommends it.
-_NOT_AN_ATTEMPT = ("debug_fix", "finetune", "fine_tune", "fine-tune", "annotat")
+# The segmenters and targets this system actually routes to. Deliberately NOT every
+# tool with a docs folder: ilastik and labkit have skills but no live route, so
+# counting them could only ever produce a false trigger.
+_SEG_WORDS = ("segment", "threshold", "mask", "cellpose", "stardist", "micro_sam",
+              "microsam", "watershed", "nuclei", "nucleus", "cells", "detect",
+              "outline", "label")
+
+# Phrases taken from the logged prompts of real dissatisfied sessions rather than
+# invented. Kept literal for that reason — a cleverer generalisation ("no", "not")
+# matches ordinary answers like "no time lapse" and fires on the first turn.
+_UNHAPPY = ("not correct", "incorrect", "not better", "not good", "not detected",
+            "not reasonable", "not all", "too many", "too few", "left out",
+            "over-represent", "over represent", "not right", "is wrong", "are wrong",
+            "still not", "still wrong", "doesn't work", "does not work", "not enough",
+            "these are not", "i want not", "not being detected", "getting counted",
+            "being counted", "try again", "not well", "not properly")
+_HAPPY = ("works", "worked", "perfect", "looks good", "that's it", "thanks",
+          "correct now", "that works", "good now")
 
 _project_root: Optional[str] = None
 _retry_announced: set = set()
+_last_reported: Optional[int] = None
 
 
 def note_project(project_root: str) -> None:
-    """Told by the state ledger where its log lives, so the watchdog can read it."""
+    """Told by the state ledger where the project is, to aim at the right usage log."""
     global _project_root
     if project_root:
         _project_root = project_root
 
 
-def _entry_text(entry: dict) -> str:
-    return " ".join(str(entry.get(k, "")) for k in ("step", "details", "phase")).lower()
+def _usage_log_path() -> Optional[str]:
+    """The project's usage log, else the most recently touched chat's.
 
-
-def _is_segmentation_attempt(entry: dict) -> bool:
-    """One execution of a segmentation the user could have accepted or rejected."""
-    text = _entry_text(entry)
-    if any(w in text for w in _NOT_AN_ATTEMPT):
-        return False
-    # "awaiting_approval" and "skipped" are not tries: nothing was put in front of the
-    # user to reject, so counting them would trip the switch early.
-    if str(entry.get("status", "")).lower() not in ("completed", "failed", "rejected"):
-        return False
-    return any(w in text for w in _SEG_WORDS)
-
-
-def segmentation_attempts(project_root: Optional[str] = None) -> list:
-    """Segmentation attempts in this project since the last one the user approved."""
-    root = project_root or _project_root
-    if not root:
-        return []
+    Deliberately discoverable without being told: the ledger hook that sets
+    `_project_root` is itself a model-dependent call, and Tier 3 exists precisely
+    because those cannot be relied on.
+    """
+    if _project_root:
+        p = os.path.join(_project_root, "logs", "usage_log.json")
+        if os.path.exists(p):
+            return p
+    base = os.environ.get("CHAT_DATA_PATH", "/app/data/chats")
     try:
-        with open(os.path.join(root, "state_ledger.json"), "r", encoding="utf-8") as fh:
-            ledger = json.load(fh)
+        found = glob.glob(os.path.join(base, "*", "usage_stats.json"))
+        return max(found, key=os.path.getmtime) if found else None
     except Exception:
-        return []                       # no ledger yet, or unreadable: nothing to say
-    attempts = []
-    for entry in (ledger.get("completed_steps") or []):
-        if any(w in _entry_text(entry) for w in _APPROVAL_WORDS):
-            attempts = []               # the user was happy: the count starts again
-        elif _is_segmentation_attempt(entry):
-            attempts.append(entry)
-    return attempts
+        return None
 
 
-def finetune_directive(project_root: Optional[str] = None) -> str:
+def _classify(text: str, prev_was_segmentation: bool) -> str:
+    """One user turn: 'happy', 'unhappy', 'seg' or 'other'.
+
+    A complaint counts only in a segmentation context — either it names something
+    segmentation-related itself, or the turn before it did. "but it's not better"
+    carries no vocabulary of its own and is the most common shape of the second and
+    third complaint, so without the carried context the streak never reaches three.
+    """
+    t = (text or "").lower()
+    if any(w in t for w in _HAPPY):
+        return "happy"
+    seg = any(w in t for w in _SEG_WORDS)
+    if any(w in t for w in _UNHAPPY) and (seg or prev_was_segmentation):
+        return "unhappy"
+    return "seg" if seg else "other"
+
+
+def unhappy_streak(path: Optional[str] = None) -> tuple:
+    """(streak, the prompts in it) — consecutive dissatisfied segmentation turns."""
+    path = path or _usage_log_path()
+    if not path:
+        return 0, []
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            queries = (json.load(fh) or {}).get("queries") or []
+    except Exception:
+        return 0, []                    # no log yet, or mid-write: say nothing
+    streak, prompts, prev_seg = 0, [], False
+    for q in queries:
+        text = (q.get("prompt_preview") or "").strip()
+        if not text:
+            continue
+        kind = _classify(text, prev_seg)
+        if kind == "happy":
+            streak, prompts = 0, []     # the user accepted something: start again
+        elif kind == "unhappy":
+            streak += 1
+            prompts.append(text)
+        if kind in ("seg", "unhappy"):
+            prev_seg = True
+    return streak, prompts
+
+
+def finetune_directive(path: Optional[str] = None) -> str:
     """The switch, as text for the agent's context. Empty until the limit is reached."""
-    attempts = segmentation_attempts(project_root)
-    if len(attempts) < SEGMENTATION_RETRY_LIMIT:
+    streak, prompts = unhappy_streak(path)
+    if streak < SEGMENTATION_RETRY_LIMIT:
         return ""
-    tried = []
-    for e in attempts[-SEGMENTATION_RETRY_LIMIT:]:
-        params = e.get("parameters") or {}
-        what = ", ".join(f"{k}={v}" for k, v in list(params.items())[:4]) or e.get("details", "")
-        tried.append(f"    {e.get('step', '?')}: {what}"[:200])
+    said = [f"    “{p[:120]}”" for p in prompts[-SEGMENTATION_RETRY_LIMIT:]]
     return "\n".join([
-        f"⚠ WATCHDOG: {len(attempts)} SEGMENTATION ATTEMPTS, NONE APPROVED BY THE USER:",
-        *tried,
+        f"⚠ WATCHDOG: the user has rejected this segmentation {streak} times running:",
+        *said,
         "  → STOP TUNING PARAMETERS AND SWITCH TO FINE-TUNING. Three settings have failed;",
-        "    that is evidence about the MODEL, not about the settings, and a fourth is a",
-        "    worse use of the user's patience than teaching the model what they mean.",
+        "    that is evidence about the MODEL, not the settings, and a fourth is a worse use",
+        "    of the user's patience than teaching the model what they mean.",
         "    Read skills/napari/micro_sam/FINETUNING.md and run its 'is fine-tuning even",
         "    needed?' gate FIRST — no GPU, too few images, or data the stock model already",
-        "    covers all rule the run out in seconds, and then you say so and keep tuning.",
-        "    If the gate passes, tell the user what it costs (~20 min of their time",
-        "    annotating ~8 small tiles) and start at stage 1, which opens the tile picker",
-        "    and puts the decision in front of them anyway.",
-        "    This clears as soon as a result is approved — log that step with 'approved'",
-        "    in its name.",
+        "    covers all rule it out in seconds, and then you say so and keep tuning.",
+        "    If the gate passes, tell the user the cost (~20 min of their time annotating",
+        "    ~8 small tiles) and start at stage 1, which opens the tile picker and puts the",
+        "    decision in front of them anyway.",
+        "    This clears as soon as the user says a result is right.",
     ])
 
 
-def explain_entry(entry: dict) -> str:
-    """Why one ledger step did or did not count. The total alone is not debuggable.
-
-    Every branch of `_is_segmentation_attempt` gets a phrase here, so a step that was
-    expected to count and did not says which test rejected it — rather than leaving the
-    reader to guess between a vocabulary miss, a status, and an exclusion.
-    """
-    text = _entry_text(entry)
-    if any(w in text for w in _APPROVAL_WORDS):
-        return "APPROVED -> count reset to 0"
-    if any(w in text for w in _NOT_AN_ATTEMPT):
-        return "not counted (debug fix, or a fine-tuning/annotation step)"
-    status = str(entry.get("status", "")).lower()
-    if status not in ("completed", "failed", "rejected"):
-        return f"not counted (status {status!r} — nothing was shown to the user yet)"
-    if not any(w in text for w in _SEG_WORDS):
-        return "not counted (no segmentation word in step/details)"
-    return "COUNTED as a segmentation attempt"
-
-
-def retry_status_line(project_root: Optional[str] = None, entry: Optional[dict] = None) -> str:
-    """One line for the container log, printed on every ledger write."""
-    attempts = segmentation_attempts(project_root)
-    n = len(attempts)
-    verdict = f" | {explain_entry(entry)}" if entry else ""
-    last = attempts[-1].get("step", "?") if attempts else "-"
-    tail = "  *** LIMIT REACHED -> switching to fine-tuning ***" if n >= SEGMENTATION_RETRY_LIMIT else ""
-    return (f"[retry-watch] unapproved segmentation attempts: {n}/{SEGMENTATION_RETRY_LIMIT}"
-            f" (last counted: {last}){verdict}{tail}")
+def retry_status_line(path: Optional[str] = None) -> str:
+    """One line for the container log, so the counter is observable while it runs."""
+    streak, prompts = unhappy_streak(path)
+    last = f' last: "{prompts[-1][:70]}"' if prompts else ""
+    tail = ("  *** LIMIT REACHED -> switching to fine-tuning ***"
+            if streak >= SEGMENTATION_RETRY_LIMIT else "")
+    return (f"[retry-watch] consecutive rejected segmentations: "
+            f"{streak}/{SEGMENTATION_RETRY_LIMIT}{last}{tail}")
 
 
 def _check_segmentation_retries() -> None:
-    """Tell the USER once per project, so the switch is not only an agent-side event."""
-    root = _project_root
-    if not root or root in _retry_announced:
+    """Poll-loop hook: log every change, tell the user once."""
+    global _last_reported
+    streak, _ = unhappy_streak()
+    if streak != _last_reported:
+        _last_reported = streak
+        print(retry_status_line(), flush=True)
+    if streak < SEGMENTATION_RETRY_LIMIT:
         return
-    n = len(segmentation_attempts(root))
-    if n < SEGMENTATION_RETRY_LIMIT:
+    key = _project_root or _usage_log_path() or "?"
+    if key in _retry_announced:
         return
-    _retry_announced.add(root)
-    _notify(f"Segmentation has been through {n} rounds without one you accepted. "
+    _retry_announced.add(key)
+    _notify(f"Segmentation has been through {streak} rounds you were not happy with. "
             f"Rather than tune the settings again, the assistant will look at "
             f"fine-tuning the model on your own annotations.")
 
-
-class AgentAborted(RuntimeError):
-    """Raised in the caller when the agent watchdog terminated an agent turn."""
 
 
 # GUI hook — set by gui_runner so an agent-watchdog kill surfaces in the chat.
