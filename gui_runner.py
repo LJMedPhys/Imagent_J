@@ -738,6 +738,7 @@ class AgentWorker(QObject):
     stop_report = Signal(int, int)
     # Watchdog verdicts, surfaced in the chat rather than buried in the log.
     watchdog_notice = Signal(str)
+    note_delivered  = Signal(str)
     # Notes the user posted after the agent's final model turn; re-submitted as a
     # prompt rather than silently dropped. Carries how many.
     notes_requeued = Signal(int)
@@ -1016,10 +1017,15 @@ class ImageJAgentGUI(QWidget):
         self.worker.error.connect(self.on_agent_error)
         self.worker.stop_report.connect(self.on_stop_report)
         self.worker.watchdog_notice.connect(self.on_watchdog_notice)
+        self.worker.note_delivered.connect(self.on_note_delivered)
         self.worker.notes_requeued.connect(self.on_notes_requeued)
         # The watchdog fires from its own thread; hop onto the GUI thread via the
         # worker's signal rather than touching widgets directly.
         watchdog.set_notifier(self.worker.watchdog_notice.emit)
+        # Same cross-thread route: the middleware drains notes on the agent worker
+        # thread, and only the GUI thread may touch widgets. Its own signal, not
+        # watchdog_notice — that slot sets the status to "Watchdog intervened".
+        interject.set_notifier(self.worker.note_delivered.emit)
         self.thread.start()
 
         self._current_status_bubble = None
@@ -1270,6 +1276,10 @@ class ImageJAgentGUI(QWidget):
         self.chat_scroll.add_message('system', message)
         self.set_status("Watchdog intervened")
 
+    def on_note_delivered(self, message: str):
+        self.chat_scroll.add_message('system', message)
+        self.set_status_busy_with_notes()      # the queue just shrank; recount
+
     def on_agent_finished(self):
         log.debug("on_agent_finished called")
         try:
@@ -1329,11 +1339,11 @@ class ImageJAgentGUI(QWidget):
             return
 
         self.chat_scroll.add_message("user", text)
-        self.chat_scroll.add_message(
-            "system",
-            "Queued — the agent will read this at its next step. A long-running "
-            "script has to finish first."
-        )
+        try:
+            waiting = run_control.note_wait_status()
+        except Exception:
+            waiting = "The agent will read it at its next step."
+        self.chat_scroll.add_message("system", f"Queued. {waiting}")
         self.input_line.clear()
         self.history_manager.touch_thread(self.current_thread_id)
         self.set_status_busy_with_notes()

@@ -36,7 +36,7 @@ from typing import Dict, List
 
 __all__ = [
     "post", "drain", "pending", "peek",
-    "bind_thread", "active_thread", "clear",
+    "bind_thread", "active_thread", "clear", "set_notifier",
 ]
 
 _LOCK = threading.Lock()
@@ -47,6 +47,31 @@ _ACTIVE: str = ""
 # reaches another model turn) from accumulating an unbounded backlog that would
 # then all land at once and bury the actual task.
 MAX_PENDING = 20
+
+
+# GUI hook, set by gui_runner, so delivery is VISIBLE.
+#
+# Without it the useful case is the silent one: a note posted during a long script
+# is drained at the supervisor's next model turn, merged into the thread history and
+# acted on — with nothing said in the chat. The agent then carries on narrating the
+# work it was already doing, so from the user's side the note simply vanished, and
+# the only path that DID report itself was the failure path (`notes_requeued`, when
+# the run ended before any model turn). Saying "delivered" closes that loop.
+_notifier = None
+
+
+def set_notifier(fn) -> None:
+    global _notifier
+    _notifier = fn
+
+
+def _notify(message: str) -> None:
+    if _notifier is None:
+        return
+    try:
+        _notifier(message)
+    except Exception:
+        pass                    # a chat bubble must never break delivery
 
 
 def bind_thread(thread_id: str) -> None:
