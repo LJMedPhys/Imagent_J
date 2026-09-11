@@ -2,6 +2,8 @@ import json
 import logging
 import os
 import re
+from dataclasses import dataclass
+from typing import Any, Callable, Optional
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ToolCallRequest, AgentState
@@ -204,30 +206,52 @@ except ImportError:  # pragma: no cover
     from typing_extensions import NotRequired
 
 
+# ── mode helpers ────────────────────────────────────────────────────────────
+# The supervisor runs in one of several modes (advanced | quick | education),
+# stored per-chat in graph state. "advanced" (or unset) is the full pipeline.
+
+DEFAULT_MODE = "advanced"
+
+
+def _state_mode(state) -> str:
+    """Read the active mode from an agent state dict/object; default advanced."""
+    if state is None:
+        return DEFAULT_MODE
+    if isinstance(state, dict):
+        return state.get("mode") or DEFAULT_MODE
+    return getattr(state, "mode", None) or DEFAULT_MODE
+
+
+def _request_mode(request) -> str:
+    return _state_mode(getattr(request, "state", None))
+
+
+def _tool_name(t) -> str:
+    """Best-effort name of a tool object / schema dict."""
+    n = getattr(t, "name", None)
+    if isinstance(n, str) and n:
+        return n
+    if isinstance(t, dict):
+        return t.get("name") or (t.get("function") or {}).get("name") or ""
+    return ""
+
+
 class NarrationReminderMiddleware(AgentMiddleware):
     # Keeps the narration rule in the most-recent position on every turn so it
     # doesn't drift out of attention as tool history grows. Not persisted to state.
+    # Only meaningful for the full pipeline, so it no-ops outside advanced mode.
     REMINDER = (
-        """Reminder: before this turn's tool call(s), emit ONE short 
-        biologist-friendly sentence describing your intent. If a tool just 
-        returned, briefly acknowledge what came back in the same sentence 
+        """Reminder: before this turn's tool call(s), emit ONE short
+        biologist-friendly sentence describing your intent. If a tool just
+        returned, briefly acknowledge what came back in the same sentence
         (combine result + next intent — don't add a separate after-message)."""
     )
 
     def wrap_model_call(self, request, handler):
+        if _request_mode(request) != "advanced":
+            return handler(request)
         request = request.override(messages=list(request.messages) + [SystemMessage(content=self.REMINDER)])
         return handler(request)
-
-
-def _tool_name(tool) -> str:
-    """Return a tool name from a LangChain tool object or tool-schema dict."""
-    name = getattr(tool, "name", None)
-    if isinstance(name, str) and name:
-        return name
-    if isinstance(tool, dict):
-        return tool.get("name") or (tool.get("function") or {}).get("name") or ""
-    return ""
-
 
 class VisionOptionState(AgentState):
     """Per-chat Vision Judge setting persisted by the graph checkpointer."""
@@ -309,6 +333,86 @@ class VisionOptionMiddleware(AgentMiddleware):
         return handler(request.override(**overrides))
 
 
+# ── Multi-mode routing ──────────────────────────────────────────────────────
+
+class AgentModeState(AgentState):
+    """State fields for multi-mode operation, persisted per-chat (thread)."""
+    mode: NotRequired[str]                 # "advanced" | "quick" | "education"
+    course_plan: NotRequired[list]         # education: ordered chapter-id playlist
+    course_progress: NotRequired[dict]     # education: {current, completed, notes}
+
+
+@dataclass
+class ModeSpec:
+    """How one mode differs from the base graph. Any field left None is kept as-is.
+
+    prompt: a system-prompt string, or a callable(state)->str (so the prompt can
+            embed live state, e.g. the student's progress). None => keep the
+            deep-agent-composed prompt (used by "advanced").
+    tools:  the exact tool subset to expose this turn. None => keep the full
+            registered tool set. Tools MUST be registered on the graph at build;
+            this only narrows what the model is offered.
+    model:  an alternate chat model for this mode. None => keep the default.
+    """
+    prompt: Optional[Callable[[dict], str] | str] = None
+    tools: Optional[list] = None
+    model: Any = None
+    # Tool NAMES to drop from whatever is offered this turn, WITHOUT replacing the
+    # whole set — so deepagents-injected tools (todos, filesystem, skills) and every
+    # other tool are preserved. Used by "advanced" to hide the education tools while
+    # keeping its own tools + builtins. Ignored when `tools` is also set.
+    exclude_tools: Optional[list] = None
+
+
+class ModeMiddleware(AgentMiddleware):
+    """Routes each model call to a ModeSpec based on state['mode'].
+
+    Sits in the user-middleware slot, which is *inner* to the deep-agent's
+    prompt-composing base middleware — so overriding `system_message` here
+    replaces the composed prompt for non-advanced modes, and overriding `tools`
+    narrows the offered tools. "advanced" (the default) typically passes through
+    untouched, preserving the current behaviour exactly.
+    """
+
+    state_schema = AgentModeState
+
+    def __init__(self, modes: dict[str, ModeSpec], default: str = DEFAULT_MODE):
+        super().__init__()
+        self.modes = modes
+        self.default = default
+
+    def wrap_model_call(self, request, handler):
+        mode = _request_mode(request)
+        spec = self.modes.get(mode) or self.modes.get(self.default)
+        if spec is None:
+            return handler(request)
+
+        overrides: dict = {}
+        if spec.prompt is not None:
+            state = getattr(request, "state", {}) or {}
+            prompt = spec.prompt(state) if callable(spec.prompt) else spec.prompt
+            if prompt:
+                overrides["system_message"] = SystemMessage(content=prompt)
+        if spec.tools is not None:
+            overrides["tools"] = spec.tools
+        if spec.model is not None:
+            overrides["model"] = spec.model
+
+        # Name-based exclusion: filter the CURRENTLY offered tools instead of
+        # replacing them, so builtins and everything else survive. If the offered
+        # list can't be read (empty), skip rather than blanking the toolset.
+        if spec.exclude_tools and spec.tools is None:
+            current = list(getattr(request, "tools", None) or [])
+            drop = set(spec.exclude_tools)
+            kept = [t for t in current if _tool_name(t) not in drop]
+            if kept and len(kept) != len(current):
+                overrides["tools"] = kept
+
+        if overrides:
+            request = request.override(**overrides)
+        return handler(request)
+
+
 class SafeToolLoggerMiddleware(AgentMiddleware):
      def wrap_tool_call(self, request: ToolCallRequest, handler):
         print(f"[TOOL LOG] Calling tool: {request.tool_call['name']}")
@@ -385,18 +489,15 @@ class PhaseGuardMiddleware(AgentMiddleware):
 
     _PHASE_RE = re.compile(r"CURRENT PHASE:\s*([0-9a-z]+)", re.IGNORECASE)
 
-    _TRACK_RE = re.compile(r"TRACK:\s*([a-z]+)", re.IGNORECASE)
-
     def before_model(self, state, runtime=None):
+        # Numbered pipeline phases only exist in the full analysis pipeline;
+        # stay silent in quick/education modes. This single mode check replaces
+        # the old fast/full "track" gate: a single self-contained operation is
+        # quick mode now, so it never reaches this middleware at all.
+        if _state_mode(state) != "advanced":
+            return None
         msgs = list(state.get("messages", []))
         already = list(state.get("phase_reminders_sent") or [])
-
-        # Fast track has no numbered phases, so the phase-file nag is pure
-        # overhead there. Stay silent while the most recent track signal is
-        # "fast"; the guard re-engages automatically if the request is later
-        # escalated to "full" (which restores numbered phase signals).
-        if self._on_fast_track(msgs):
-            return None
 
         # Credit EVERY phase whose file was read in the recent window — including
         # a read-ahead for a phase not entered yet. Keying "handled" on the read
@@ -426,27 +527,6 @@ class PhaseGuardMiddleware(AgentMiddleware):
         ))
         # Mark handled in the SAME update so the reminder fires exactly once.
         return {"messages": [reminder], "phase_reminders_sent": handled + [active_phase]}
-
-    def _on_fast_track(self, msgs):
-        """True if the most recent track signal is 'fast'.
-
-        Looks at the same bounded window as phase detection. A
-        set_ledger_metadata(track=...) tool call or a "TRACK: <x>" line in any
-        ledger output counts; the most recent wins so an escalation to "full"
-        (which re-sets track) cleanly re-enables the guard.
-        """
-        for msg in reversed(msgs[-self.LOOKBACK:]):
-            if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
-                for tc in msg.tool_calls:
-                    if tc.get("name") == "set_ledger_metadata":
-                        t = tc.get("args", {}).get("track")
-                        if t:
-                            return str(t).strip().lower() == "fast"
-            if isinstance(msg, ToolMessage) and msg.content:
-                m = self._TRACK_RE.search(str(msg.content))
-                if m and not m.group(1).startswith("not"):
-                    return m.group(1).strip().lower() == "fast"
-        return False
 
     def _detect_phase(self, msgs):
         """Most recent ledger phase signal wins. Skips '[not set]' sentinels."""
@@ -479,6 +559,126 @@ class PhaseGuardMiddleware(AgentMiddleware):
                 if phase_filename in str(msg.content):
                     return True
         return False
+
+
+class NapariComputeGuardMiddleware(AgentMiddleware):
+    """
+    Reject heavy compute sent to napari's ``execute_code`` before it runs.
+
+    ``mcp__napari_mcp__execute_code`` runs its payload on napari's MAIN Qt THREAD,
+    wrapped in a hard IMAGENTJ_MCP_TOOL_TIMEOUT_SECONDS (90 s) timeout. Putting a
+    model build, an embedding precompute, or a segmentation in there fails twice
+    over: the event loop stalls (viewer AND the whole VNC desktop freeze, with no
+    progress bar), and the call dies with TimeoutError while the work keeps running
+    invisibly inside the server — leaving, e.g., a half-written checkpoint.
+
+    The same code in python_data_analyst with ``# imagentj-env: napari-mcp`` runs in
+    a supervised subprocess: IMAGENTJ_SCRIPT_HARD_TIMEOUT (7200 s), plus stop-button
+    and memory-watchdog coverage. Same conda env, so identical models and results.
+
+    The skills document this rule, but documentation is advice. This guard makes it
+    an actual constraint: the offending call never reaches the viewer, and the model
+    gets back a ToolMessage naming the correct two-step route instead of a 90-second
+    hang it cannot learn from.
+
+    Deliberately narrow — it blocks only the known-heavy micro_sam entry points, so
+    display work (add_image / add_labels / list_layers / screenshot) is untouched.
+    Opening an annotator is allowed IF it passes ``embedding_path=`` (embeddings then
+    load from the cache instead of being computed on the Qt thread).
+
+    Escape hatch, matching this codebase's other magic-comment overrides
+    (``# imagentj-env:``, ``// imagentj-exec:``)::
+
+        # imagentj-allow-heavy: <why this is safe here>
+    """
+
+    # mcp_host_tools namespaces MCP tools as mcp__<server>__<tool>, so the napari
+    # server's code-exec tool is mcp__napari_mcp__execute_code. Match loosely so a
+    # renamed server ("napari", "napari-mcp", …) is still covered.
+    _TARGET_TOOL_RE = re.compile(r"napari.*execute_code", re.IGNORECASE)
+
+    _OVERRIDE_RE = re.compile(r"^\s*#\s*imagentj-allow-heavy:", re.IGNORECASE | re.MULTILINE)
+
+    # Always heavy: each one downloads weights, builds a model, or runs per-pixel
+    # inference. None of these belong on the GUI thread under any circumstances.
+    _ALWAYS_HEAVY = {
+        "get_predictor_and_segmenter": "builds/downloads a SAM model",
+        "automatic_instance_segmentation": "runs full instance segmentation",
+        "precompute_state": "computes image embeddings",
+        "get_sam_model": "builds/downloads a SAM model",
+        "train_sam": "trains a model",
+        "get_trainable_sam_model": "builds a trainable model",
+        "train_instance_segmentation": "trains a model",
+    }
+
+    # Heavy only when it would compute embeddings inline, i.e. no embedding_path.
+    _ANNOTATORS = ("annotator_2d", "annotator_3d", "annotator_tracking",
+                   "image_series_annotator", "image_folder_annotator")
+
+    def _code_from(self, args) -> str:
+        """Concatenate the string args — the payload key varies across MCP servers."""
+        if isinstance(args, str):
+            return args
+        if not isinstance(args, dict):
+            return ""
+        # Prefer the conventional keys, but fall back to every string value so a
+        # server using an unexpected parameter name is still inspected.
+        for key in ("code", "python_code", "script", "source"):
+            value = args.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+        return "\n".join(v for v in args.values() if isinstance(v, str))
+
+    def _violation(self, code: str):
+        """Return (symbol, why) for the first heavy call found, else None."""
+        for symbol, why in self._ALWAYS_HEAVY.items():
+            # Match a call, not a bare mention, so an explanatory comment or a
+            # string naming the function doesn't trip the guard.
+            if re.search(rf"\b{re.escape(symbol)}\s*\(", code):
+                return symbol, why
+        for symbol in self._ANNOTATORS:
+            if re.search(rf"\b{re.escape(symbol)}\s*\(", code) and "embedding_path" not in code:
+                return symbol, "computes embeddings inline (no embedding_path= given)"
+        return None
+
+    def wrap_tool_call(self, request: ToolCallRequest, handler):
+        tool_name = request.tool_call.get("name", "") or ""
+        if not self._TARGET_TOOL_RE.search(tool_name):
+            return handler(request)
+
+        code = self._code_from(request.tool_call.get("args"))
+        if not code or self._OVERRIDE_RE.search(code):
+            return handler(request)
+
+        found = self._violation(code)
+        if not found:
+            return handler(request)
+
+        symbol, why = found
+        print(f"[NAPARI GUARD] blocked {symbol}() in {tool_name} — {why}")
+        return ToolMessage(
+            content=(
+                f"BLOCKED: `{symbol}()` {why}, and this tool runs on napari's main Qt "
+                f"thread under a 90 s timeout. Running it here freezes the viewer and "
+                f"the whole VNC desktop, then times out while the work continues "
+                f"invisibly in the server.\n\n"
+                f"Route it through python_data_analyst instead — same conda env, "
+                f"7200 s limit, stop-button and memory-watchdog covered:\n\n"
+                f"  STEP 1 (python_data_analyst, first line `# imagentj-env: napari-mcp`):\n"
+                f"    do the compute and WRITE THE RESULT TO DISK — a label TIFF for\n"
+                f"    segmentation, or an embedding cache via\n"
+                f"    micro_sam.precompute_state.precompute_state(..., output_path=...).\n\n"
+                f"  STEP 2 (this tool, once step 1 finishes):\n"
+                f"    load that file and display it — tifffile.imread(...) then\n"
+                f"    viewer.add_labels(...). To open the annotator, pass\n"
+                f"    embedding_path=<the cache from step 1> so it loads instead of computes.\n\n"
+                f"See skills/napari/micro_sam/SKILL.md -> Backend B for both patterns. "
+                f"If this really must run in-viewer, add a first line "
+                f"`# imagentj-allow-heavy: <reason>` to override."
+            ),
+            tool_call_id=request.tool_call.get("id", ""),
+            status="error",
+        )
 
 
 class TodoDisplayMiddleware(TodoListMiddleware):

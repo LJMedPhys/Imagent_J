@@ -142,10 +142,29 @@ def _md_to_html(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 class _BubbleLabel(QLabel):
-    """QLabel that lets its parent layout freely constrain its width."""
+    """QLabel that lets its parent layout freely constrain its width.
+
+    Also pads its reported height by a few px: QLabel's own heightForWidth()/
+    sizeHint() for word-wrapped rich text can undercount by a couple of pixels,
+    most visibly on a wrapped line that mixes bold and plain spans (e.g. markdown
+    **bold**, common in these messages) — Qt's own document layout renders that
+    line slightly taller than the hint it reports. Since a widget always clips
+    its own painting to its allotted rect, the shortfall clips that line's
+    descenders against the bubble's bottom edge. A small fixed safety margin
+    absorbs the discrepancy regardless of its exact per-line cause.
+    """
+    _HEIGHT_SLACK = 6  # px
+
     def minimumSizeHint(self):
         sh = super().minimumSizeHint()
-        return QSize(1, sh.height())
+        return QSize(1, sh.height() + self._HEIGHT_SLACK)
+
+    def heightForWidth(self, width):
+        return super().heightForWidth(width) + self._HEIGHT_SLACK
+
+    def sizeHint(self):
+        sh = super().sizeHint()
+        return QSize(sh.width(), sh.height() + self._HEIGHT_SLACK)
 
 
 class MessageBubble(QFrame):
@@ -204,6 +223,11 @@ class MessageBubble(QFrame):
             self._label.setText(f'<div align="right">{content}</div>')
         else:
             self._label.setText(content)
+        # Streamed updates keep replacing this same label's text as tokens arrive;
+        # force the layout to re-check its size hint each time rather than trust
+        # a cached one from an earlier, shorter version of this bubble.
+        self._label.updateGeometry()
+        self.updateGeometry()
 
 
 class ChatScrollArea(QWidget):
@@ -767,6 +791,20 @@ class AgentWorker(QObject):
             self._run_prompt(prompt)
 
     def _run_prompt(self, user_input: str):
+        # The agent watchdog counts consecutive turns where the user rejects a
+        # segmentation, and past its limit tells the agent to switch to fine-tuning.
+        # It is done HERE because this is the only place every mode passes through:
+        # the ledger-context route it used before needs a project workspace, which a
+        # quick job in fast mode may never create.
+        content = user_input
+        try:
+            from imagentj.agent_watchdog import note_prompt, pending_directive
+            note_prompt(user_input)
+            directive = pending_directive()
+            if directive:
+                content = f"{directive}\n\n---\n\n{user_input}"
+        except Exception:
+            pass                     # monitoring must never break the send path
         try:
             # InterjectMiddleware has no way to learn which chat is running —
             # Runtime carries no config — so tell it explicitly, here, on the
@@ -777,7 +815,7 @@ class AgentWorker(QObject):
                 "callbacks":    [self.tracker_callback],
             }
             gen = self.supervisor.stream(
-                {"messages": [{"role": "user", "content": user_input}]},
+                {"messages": [{"role": "user", "content": content}]},
                 config=config,
                 stream_mode="updates",
             )
@@ -1528,7 +1566,7 @@ class ImageJAgentGUI(QWidget):
             "rag_retrieve_docs":         "Searching ImageJ documentation…",
             "rag_retrieve_mistakes":     "Checking past lessons learned…",
             "inspect_all_ui_windows":    "Listing open ImageJ windows…",
-            "capture_plugin_dialog":     "Reading plugin dialog (taking screenshot)…",
+            "capture_ui_window":         "Reading what's on screen (taking screenshot)…",
             "extract_image_metadata":    "Reading image metadata & calibration…",
             "setup_analysis_workspace":  "Creating project workspace…",
             "search_fiji_plugins":       "Searching Fiji plugin registry…",

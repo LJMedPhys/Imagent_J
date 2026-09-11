@@ -76,6 +76,34 @@ def _resolve_interpreter(env: str) -> tuple[str | None, str | None]:
         )
     return interpreter, None
 
+
+# Environment variables that name a python-version-specific directory and MUST NOT be
+# inherited by a subprocess running a *different* interpreter.
+#
+# The one that bites: importing cv2 (opencv-python) sets QT_QPA_PLATFORM_PLUGIN_PATH to its
+# own bundled Qt plugin folder, and cv2 is pulled in transitively the moment this module is
+# imported. os.environ mutations propagate to children, so every script the analyst launches
+# inherits main-env cv2's Qt plugins. In the main env that is harmless. In `napari-mcp`
+# (python 3.11 vs the main env's 3.13, a different Qt build) Qt finds those plugins, refuses
+# to load them, and aborts before any window appears:
+#     Could not load the Qt platform plugin "xcb" in ".../cv2/qt/plugins" even though it
+#     was found. This application failed to start because no Qt platform plugin could be
+#     initialized.
+# The script never runs and the traceback points at napari, not at the real cause. Stripping
+# these for non-main envs makes Qt fall back to the target env's own bundled plugins.
+_ENV_VARS_NOT_INHERITED = ("QT_QPA_PLATFORM_PLUGIN_PATH", "QT_PLUGIN_PATH")
+
+
+def _child_env(env: str) -> dict:
+    """The environment to hand a script subprocess: this process's, minus what cannot cross
+    an interpreter boundary. Returned as a plain dict so `os.environ` itself is untouched."""
+    child = dict(os.environ)
+    if env != _DEFAULT_ENV:
+        for var in _ENV_VARS_NOT_INHERITED:
+            child.pop(var, None)
+    return child
+
+
 @tool
 def inspect_csv_header(file_path: str):
     """
@@ -385,9 +413,14 @@ def summarize_deliverables(
                                   f"measurement is not what the user asked for."))
 
     if input_dir and os.path.isdir(input_dir):
-        _IMG = (".tif", ".tiff", ".png", ".jpg", ".jpeg", ".nd2", ".czi", ".lif")
-        in_paths = [p for p in _glob.glob(os.path.join(input_dir, "**", "*"), recursive=True)
-                    if os.path.isfile(p)]
+        _IMG = {
+            ".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp",
+            ".nd2", ".czi", ".lif", ".lsm", ".svs", ".ics", ".ids",
+        }
+        in_paths = []
+        for root, _dirs, files in os.walk(input_dir):
+            for fn in files:
+                in_paths.append(os.path.join(root, fn))
         in_names = {os.path.basename(p) for p in in_paths}
         in_images = [p for p in in_paths if os.path.splitext(p)[1].lower() in _IMG]
 
@@ -582,6 +615,7 @@ def run_python_code(code: str, output_directory: str, purpose: str = ""):
     try:
         run = run_control.SupervisedProcess(
             [interpreter, script_path], language="python", code=code, purpose=purpose,
+            env=_child_env(env),
         )
     except Exception as e:
         return f"SYSTEM ERROR: {str(e)}"

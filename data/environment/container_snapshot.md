@@ -518,7 +518,7 @@ Generated from `pip list --format=freeze | sed 's/ @ .*//'` on 2026-04-30.
 
 ### conda env `napari-mcp` — Python 3.11.15 (micro_sam + in-container napari MCP viewer)
 
-Added after the original 2026-04-30 snapshot (versions captured 2026-07-16). Hosts
+Added after the original 2026-04-30 snapshot (versions re-checked 2026-09-03). Hosts
 `micro_sam` ("Segment Anything for Microscopy") for both the interactive napari viewer
 (backend `napari`, driven via `mcp__napari_mcp__*`) and the headless batch route
 (`# imagentj-env: napari-mcp`). On the GPU build, torch/torchvision are swapped to the
@@ -529,13 +529,13 @@ cu126 CUDA wheels so micro_sam uses the A100 (`cuda_build 12.6`, verified).
 | micro_sam | 1.8.2 |
 | torch | 2.11.0+cu126 |
 | torchvision | 0.26.0+cu126 |
-| torch_em | 0.10.0 |
+| torch_em | 0.10.1 |
 | python-elf | 0.9.2 |
 | segment-anything-py | 1.0.1 |
 | mobile_sam | 1.0 |
 | timm | 1.0.27 |
 | huggingface_hub | 1.23.0 |
-| napari | 0.7.1 |
+| napari | 0.8.0 |
 | napari-mcp | 0.1.0 |
 | napari-console | 0.1.4 |
 | napari-plugin-engine | 0.2.1 |
@@ -557,9 +557,32 @@ cu126 CUDA wheels so micro_sam uses the A100 (`cuda_build 12.6`, verified).
 | ImageIO | 2.37.3 |
 | pillow | 12.2.0 |
 | zarr | 3.1.6 |
-| pandas | 3.0.3 |
+| pandas | 3.0.5 |
 | xarray | 2026.7.0 |
 | pooch | 1.9.0 |
+
+
+### conda env `brainglobe` — Python 3.12.13 (whole-brain registration and atlases)
+
+Selected with `# imagentj-env: brainglobe` from python_data_analyst. Holds the BrainGlobe
+stack for atlas-based work — registering a sample brain to a reference atlas and querying
+anatomical regions. Versions captured 2026-09-03. Do NOT use this env for anything the main
+env can do; it exists for the atlas tooling only.
+
+| Package | Version |
+|---------|---------|
+| brainglobe-atlasapi | 2.3.1 |
+| brainglobe-utils | 0.11.2 |
+| brainglobe-space | 1.0.3 |
+| brainglobe-segmentation | 1.3.3 |
+| brainreg | 1.0.15 |
+| napari | 0.8.0 |
+| numpy | 2.4.6 |
+| scipy | 1.18.0 |
+| scikit-image | 0.26.0 |
+| tifffile | 2026.7.14 |
+| pandas | 3.0.5 |
+| dask | 2026.7.1 |
 
 ---
 

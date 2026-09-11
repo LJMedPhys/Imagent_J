@@ -106,11 +106,37 @@ def set_detach_notifier(fn: Optional[Callable[[str], None]]) -> None:
 
 
 def wants_detach(code: str) -> Optional[str]:
-    """The reason from a `# imagentj-detach: <reason>` header, or None."""
+    """The reason from a `imagentj-detach: <reason>` header, or None."""
     for line in (code or "").splitlines()[:5]:
         m = _DETACH_RE.match(line.strip())
-        if m:
+        if m and m.group(1).strip().lower() != "never":
             return m.group(1)
+    return None
+
+
+def never_detach(code: str) -> Optional[str]:
+    """Why this script must be waited for however long it takes, or None.
+
+    An INTERACTIVE script is the case the clock gets wrong. Stage 2 of fine-tuning
+    blocks on `napari.run()` for as long as the human annotates — that block IS the
+    result, because the script returning is the signal that they finished. Detach it
+    at ten seconds and the agent is told "still running", carries on without the
+    annotations, and the whole workflow silently proceeds on nothing.
+
+    Two ways to be safe, because relying on either alone has failed before: an
+    explicit `imagentj-detach: never` header, and a scan for the calls that mean "a
+    window is open and a person is using it". The scan covers scripts nobody
+    remembered to annotate — which, on the evidence of this project, is most of them.
+    """
+    for line in (code or "").splitlines()[:5]:
+        m = _DETACH_RE.match(line.strip())
+        if m and m.group(1).strip().lower() == "never":
+            return "declared `imagentj-detach: never`"
+    lowered = (code or "").lower()
+    for marker in ("napari.run(", "run_picker(", "image_series_annotator(",
+                   "annotator_2d(", "annotator_3d(", "input(", "plt.show("):
+        if marker in lowered:
+            return f"interactive: waits for the user ({marker.rstrip('(')})"
     return None
 
 
