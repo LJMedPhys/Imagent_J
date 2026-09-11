@@ -56,20 +56,22 @@ hyperparameters**. The scripts handle that themselves: `ensure_right_env()` re-e
 other env when the requested model lives there, printing what it is doing. Stage 4 reads the
 version out of `evaluation.json`, so it follows whatever stage 3 trained without being told.
 
-**Pick the starting model by CONTRAST MECHANISM, not by name.** `nuclei` sounds right for a
-nucleus task and is usually wrong for brightfield: it was trained on *fluorescent* nuclei —
-bright objects on a dark ground — while a stained brightfield slide is the opposite. Measured on
-the CD177 May-Grünwald neutrophils, **segmenting whole CELLS**: stock `nuclei` returns 0 objects
-on most tiles (mSA 0.020) while stock `cpsam` scores 0.545. Fine-tuning rescues `nuclei` there
-(0.020 → 0.744) but it starts from far behind, so `cpsam` is the better base.
+**Pick the starting model by CONTRAST MECHANISM, not by name.** `nuclei` sounds right for any
+nucleus task; whether it is depends on what it was trained on. It learned *fluorescent* nuclei —
+bright objects on a dark ground — so on a stained brightfield slide, where the contrast is
+inverted, it can return nothing at all while a generalist trained across modalities still finds
+the objects. The name is not evidence.
 
-**Read the target, not just the dataset.** Those numbers are the whole-cell task. On the SAME
-images asked for the NUCLEI instead, both stock models score **0.000** — the 0.020-vs-0.545
-contrast says nothing about that task, and quoting it as if it did is a mistake a real run made.
-The nucleus numbers are: fine-tuned `cpsam` **0.274**, fine-tuned `nuclei` **0.000**. cpsam is
-still the right base, for a different reason — it recovers from a useless start and the v3
-nucleus model does not. Every figure below is labelled with the target it was measured on;
-match BOTH the modality and the object before reusing one.
+**Read the target, not just the modality.** The same images asked for the NUCLEI and asked for
+whole CELLS are two different problems with two different answers, and a model that wins one can
+score zero on the other. A number measured for one target says nothing about the other — quoting
+one as if it covered both is a mistake a real run made.
+
+**So measure, do not guess.** Run the two or three candidates STOCK on a handful of your own
+tiles, look at the overlays, and let YOUR numbers decide; it costs minutes. Stage 3 measures
+again on held-out tiles afterwards, so a wrong guess is caught rather than shipped. A model that
+starts from nothing can still end up the best base — see below — which is exactly why the
+starting ranking is not the decision.
 
 **Three things differ on v3 and they all matter:**
 
@@ -95,22 +97,26 @@ match BOTH the modality and the object before reusing one.
 
 Fine-tune whichever model is **already closest** on this data, and set `SEGMENT_BACKEND` to
 match so the user corrects that model's mistakes. Run both stock first and look at the overlays;
-it costs minutes and decides the rest of the workflow. On the CD177 neutrophils, stock
-`vit_b_lm` rejects debris that stock `cyto3` counts — but stock cpsam fine-tuned from
-0.545 to 0.831 mSA on the same tiles (whole CELLS), so "which is better stock" and "which
-fine-tunes better" are different questions — as are "which target".
+it costs minutes and decides the rest of the workflow.
+
+**"Which is better stock" and "which fine-tunes better" are different questions**, and they have
+been measured disagreeing: the model that best rejected debris out of the box was not the model
+that gained most from fine-tuning. A backbone that can MOVE beats one that is already close, so
+judge the starting ranking as a hint and let stage 3's held-out measurement decide. "Which
+target" is a third question again — see above.
 
 ## Pitfalls
 
 1. **A tile the user annotated is the user's work — do not silently drop it.** cellpose's
    `train_seg` defaults `min_train_masks=5` and prints *"removing from train set"* for anything
-   below it; micro_sam's sampler needs >= 2. On a real CD177 set that is **9 of 23 tiles gone**.
-   Two cases hide behind one number and they are not the same:
-   - **Sparse** (1–4 objects): real annotations. `MIN_TRAIN_MASKS=0` keeps them. Measured with
-     a FIXED validation set, varying only the training set: dense-only 0.865 vs dense+sparse
-     0.835 — better on 2 of 4 held-out tiles, worse on 2, i.e. **no reliable difference**.
-     Keeping them is therefore not an accuracy argument, it is a "do not throw away what the
-     user did" argument, and it costs nothing measurable.
+   below it; micro_sam's sampler needs >= 2. On a real annotation set that can be a large
+   fraction of the tiles the user spent their evening on. Two cases hide behind one number and
+   they are not the same:
+   - **Sparse** (1–4 objects): real annotations. `MIN_TRAIN_MASKS=0` keeps them. Tested with a
+     FIXED validation set, varying only the training set, keeping them was better on some
+     held-out tiles and worse on others — **no reliable difference** either way. Keeping them is
+     therefore not an accuracy argument, it is a "do not throw away what the user did" argument,
+     and it costs nothing measurable.
    - **Empty** (0 objects): the file EXISTS, so the user opened the tile and confirmed
      micro_sam's *"Nothing is segmented yet"* dialog. On a field of pure debris that is the
      correct answer and a deliberate NEGATIVE example — "none of this is a cell". Reporting it
@@ -126,9 +132,9 @@ fine-tunes better" are different questions — as are "which target".
 
    **mSA is not comparable across different `MIN_TRAIN_MASKS` settings.** The held-out set is
    drawn from whatever passed validation, so keeping sparse tiles puts sparse tiles in the TEST
-   set too, and they score lower. Measured on CD177: the same data reports 0.955 held out on 4
-   dense tiles and 0.574 held out on 6 mixed ones. The second number is the more honest one —
-   it is not a regression. Compare runs only within one setting.
+   set too, and they score lower. The SAME data and the SAME model can therefore report a much
+   higher score on a few dense held-out tiles than on a mixed set — the lower number is the more
+   honest one, and it is not a regression. Compare runs only within one setting.
 2. **Fine-tuning can make a good model WORSE, and the wrong learning rate is the usual
    reason.** The gate catches it — stage 3 refuses to promote a model that scores below the
    baseline — but the user has already spent their annotation time and is told "fine-tuning
@@ -165,25 +171,3 @@ fine-tunes better" are different questions — as are "which target".
    folder prepared with the other backend it trains anyway (the annotations are portable) but
    says so. The annotations are still valid; what is lost is the active-learning property that
    the user's time went on *this* model's remaining errors.
-
-## Verified end-to-end, 2026-09-03
-
-On 23 CD177 neutrophil tiles (1024 px RGB, brightfield, May-Grünwald) annotated in stage 2:
-
-| step (target) | result |
-|---|---|
-| stage 3, `CP_MODEL="nuclei"` (v3, env hop) — whole CELLS | diameter measured 67.1 px, learned 67.3; stock **0.020** → fine-tuned **0.744** |
-| stage 3, `cpsam` — **NUCLEI** (labels derived from the hematoxylin stain inside the known cell masks, so approximate) | stock **0.000** → fine-tuned **0.274**; measured diameter 28.7 px vs 67.1 for cells |
-| stage 3, `nuclei` (v3) — **NUCLEI** | stock **0.000** → fine-tuned **0.000**: on brightfield the v3 nucleus model does not recover |
-| stage 3, round 2 on top of round 1 | **0.831 → 0.932** (+12.1 %), baseline exactly matching round 1 |
-| stage 1, `SEGMENT_BACKEND="cellpose"` | worker up on GPU, probe + 4 tiles pre-segmented by cpsam, manifest written |
-| stage 1, `SEGMENT_BACKEND="micro_sam"` | unchanged behaviour (regression check) |
-| stage 3 validation | 14 of 23 tiles usable, 9 rejected below `min_train_masks=5` with reasons |
-| stage 3 split | 10 train tiles from 9 source images; 4 held out from 3 |
-| stage 3 training | 20 epochs, **1.4 min** on an A100 |
-| **stage 3 measurement** (whole CELLS) | **mSA 0.545 → 0.831 (+52.6 %)** on the held-out tiles |
-| stage 4 | 23 images segmented in 0.3 min, 151 objects, 34 lines of output |
-
-The mSA implementation was checked against `elf.evaluation.mean_segmentation_accuracy` on the
-same data before any of this was trusted; the first version disagreed by up to 0.85 mSA because
-gaps in hand-edited label ids became phantom objects.

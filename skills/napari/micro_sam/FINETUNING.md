@@ -328,13 +328,13 @@ CSV and overlay previews; the masks go straight into a `python_data_analyst` mea
     resumes at the first tile with no annotation saved. The instructions no longer mention
     Shift+C at all — deleting the one bad outline works in every state.
 15. **An automatic content score cannot tell a cell from debris — this is why the user picks.**
-    Measured on a real May-Grünwald neutrophil slide: the tile the blob-count heuristic ranked
-    *highest* (score 132, 78 pre-segmentation objects) was a field of stain precipitate with
-    **zero cells** in it; another was out-of-focus haze with one object. Of ten auto-picked
-    tiles, two were actively poisonous and only two were good. Nothing about a 2 um speck and a
-    12 um nucleus separates them at the level of "how many connected components are in this
-    square" — and pre-segmentation object count does not save you either, because the stock
-    model segments the specks too. `PICK_MODE="interactive"` exists for this. If you ever run
+    On a stained brightfield slide the tile the blob-count heuristic ranked *highest* was a
+    field of stain precipitate with **zero cells** in it; the runner-up was out-of-focus haze.
+    Most of what an automatic ranking picked there was unusable and some of it was actively
+    poisonous — a tile of pure debris annotated as cells teaches exactly the wrong thing.
+    Nothing about a 2 um speck and a 12 um nucleus separates them at the level of "how many
+    connected components are in this square" — and pre-segmentation object count does not save
+    you either, because the stock model segments the specks too. `PICK_MODE="interactive"` exists for this. If you ever run
     `"auto"`, look at `previews/`.
 16. **Otsu picks the wrong side of the histogram on brightfield.** `sm > thr` means "objects are
     bright", which is true for fluorescence and false for every brightfield / histology stain,

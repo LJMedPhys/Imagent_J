@@ -269,8 +269,8 @@ def version_defaults(major):
     # lr 1e-4 -> 0.942. The promotion gate refuses the collapsed model, so nothing broken ever
     # ships — but the user has already spent their annotation time and is told "fine-tuning did
     # not help", which is a FALSE NEGATIVE caused by the hyperparameter, not by their labels.
-    # The cost is small where the base model is useless: on CD177 brightfield (stock 0.020)
-    # lr 0.005 reached 0.744 and lr 5e-4 reaches 0.661 — still a 33x gain.
+    # Where the base model starts out useless the safer rate gives up a little headroom, and
+    # that is the right trade: a smaller gain beats a collapsed network reported as a failure.
     return dict(n_epochs=300, lr=5e-4, weight_decay=1e-5, batch_size=8, bsize=224)
 
 
