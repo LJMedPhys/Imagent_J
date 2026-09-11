@@ -2066,10 +2066,16 @@ def execute_script(directory: str, filename: str) -> str:
     # mutating — and nothing owns it well enough to kill it either.
     detach_ignored = None
     try:
-        from ..detached import wants_detach, run_or_detach
+        from ..detached import wants_detach, never_detach, run_or_detach
     except Exception:
-        wants_detach, run_or_detach = None, None
-    if run_or_detach is not None:
+        wants_detach, never_detach, run_or_detach = None, None, None
+    # An interactive script is waited for however long it takes: it is blocking ON THE
+    # USER, and its return is the signal that they are done. Detaching one would have
+    # the agent carry on as though the annotation session had produced nothing.
+    interactive = never_detach(code_content) if never_detach else None
+    if interactive:
+        log.info("not detachable (%s): %s", interactive, filename)
+    if run_or_detach is not None and not interactive:
         header_reason = wants_detach(code_content)      # "detach immediately", if present
         work = None
         if filename.endswith('.py'):
