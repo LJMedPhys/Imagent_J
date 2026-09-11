@@ -19,11 +19,28 @@ Step 3 reuses what the GUI already does for undelivered notes (`AgentWorker.task
 so turns stay SERIALISED — one graph run at a time. The script runs beside the graph,
 never inside it, and two `supervisor.stream()` calls never overlap on one thread_id.
 
+Detaching is MEASURED, not predicted
+------------------------------------
+Nothing can know a run will be long before running it: 20 images is seconds on a GPU
+and ten minutes on a CPU, from the same template. So the gate is not an estimate in a
+header — it is the clock. Every run starts normally and is waited on for
+DETACH_AFTER_SECONDS; if it finishes inside that window the caller gets the output and
+nothing about the run was different. Only a run that is STILL GOING at the deadline is
+detached, and it is detached because it demonstrably needed to be.
+
+The wait matters. Detaching a three-second script would make it slower and dearer, not
+faster: one tool call becomes two model turns (a receipt, then the result). Waiting
+first spends that only where it buys a conversation the user can actually use.
+
+The cost at a short deadline is real and worth knowing: with a 10 s window most genuine
+image-processing steps detach, so a multi-step pipeline pays roughly one extra model
+turn per step. That is the trade — responsiveness against turns.
+
 Scope, deliberately narrow
 --------------------------
-* **Opt-in per script**, via a `# imagentj-detach:` header — the same convention as
-  `# imagentj-env:` (`tools/analyst_tools.py`). Every existing workflow assumes
-  `execute_script` returns its result, so the default cannot change.
+* A `imagentj-detach: <reason>` header (`#` or `//`, same 5-line window as
+  `# imagentj-env:` in `tools/analyst_tools.py`) means "do not even wait the window —
+  detach immediately", for a script already known to be long, like stage-3 training.
 * **Subprocess runs only** — which is not the same as "Python only". Python always
   runs as a subprocess, and so does a self-contained batch Groovy script, which gets
   its own Fiji process (`_should_run_in_subprocess` in tools/script_tools.py). Both are
@@ -39,14 +56,21 @@ Scope, deliberately narrow
 
 from __future__ import annotations
 
+import os
 import re
 import threading
 import time
 from typing import Callable, Dict, Optional
 
 __all__ = [
-    "wants_detach", "start", "active", "set_completion_notifier", "DETACH_HEADER",
+    "wants_detach", "run_or_detach", "active", "set_completion_notifier",
+    "DETACH_HEADER", "DETACH_AFTER_SECONDS",
 ]
+
+# How long to wait before handing the run back and freeing the conversation. Short
+# enough that a human is never left staring at a blocked chat; long enough that the
+# ordinary quick script never pays for a second model turn.
+DETACH_AFTER_SECONDS = float(os.environ.get("IMAGENTJ_DETACH_AFTER", "10"))
 
 DETACH_HEADER = "imagentj-detach:"
 
@@ -87,47 +111,72 @@ def active() -> list:
         return [dict(v) for v in sorted(_ACTIVE.values(), key=lambda d: d["started"])]
 
 
-def start(label: str, reason: str, work: Callable[[], str]) -> str:
-    """Run `work()` on a daemon thread; return the message the agent gets NOW.
+def _took(seconds: float) -> str:
+    mins, secs = divmod(int(seconds), 60)
+    return f"{mins}m {secs:02d}s" if mins else f"{secs}s"
 
-    `work` is the ordinary blocking execution — the same call the non-detached path
-    makes — so a detached run and a waited one differ only in who holds the result.
+
+def run_or_detach(label: str, work: Callable[[], str],
+                  wait: Optional[float] = None, reason: str = "") -> str:
+    """Run `work()`, waiting up to `wait` seconds; detach it if it outlasts that.
+
+    Returns either the real output (finished in time — the caller cannot tell this
+    module was involved) or a receipt, with the output delivered later through the
+    completion notifier.
+
+    `work` is the ordinary blocking execution the non-detached path would have made,
+    so a detached run and a waited one do the same thing; only the waiting moves.
     """
-    run_id = next(_ids)
+    wait = DETACH_AFTER_SECONDS if wait is None else wait
     started = time.time()
-    with _LOCK:
-        _ACTIVE[run_id] = {"id": run_id, "label": label, "reason": reason,
-                           "started": started}
+    box: Dict[str, str] = {}
+    done = threading.Event()
 
     def _run():
         try:
-            output = work()
+            box["out"] = work()
         except Exception as exc:                # never let a worker thread die silently
-            output = (f"SUMMARY: ERROR — the detached run raised before it could "
-                      f"report: {type(exc).__name__}: {exc}\nSTATUS: ERROR")
+            box["out"] = (f"SUMMARY: ERROR — the run raised before it could report: "
+                          f"{type(exc).__name__}: {exc}\nSTATUS: ERROR")
         finally:
-            with _LOCK:
-                _ACTIVE.pop(run_id, None)
-        mins, secs = divmod(int(time.time() - started), 60)
-        took = f"{mins}m {secs:02d}s" if mins else f"{secs}s"
+            done.set()
+
+    threading.Thread(target=_run, name=f"run-{label[:24]}", daemon=True).start()
+
+    if done.wait(wait):
+        return box.get("out", "")               # finished in time: nothing changed
+
+    # Still going. Hand the conversation back and let a waiter deliver the result.
+    run_id = next(_ids)
+    with _LOCK:
+        _ACTIVE[run_id] = {"id": run_id, "label": label,
+                           "reason": reason or f"still running after {_took(wait)}",
+                           "started": started}
+
+    def _deliver():
+        done.wait()
+        with _LOCK:
+            _ACTIVE.pop(run_id, None)
         if _completion_notifier is None:
             return
         try:
             _completion_notifier(
                 label,
-                f"[DETACHED RUN FINISHED] {label} — took {took}.\n"
+                f"[DETACHED RUN FINISHED] {label} — took {_took(time.time() - started)}.\n"
                 f"This is the result of the script you started earlier and did not "
-                f"wait for. Carry on from here.\n\n{output}"
+                f"wait for. Carry on from here.\n\n{box.get('out', '')}"
             )
         except Exception:
             pass
 
-    threading.Thread(target=_run, name=f"detached-{run_id}", daemon=True).start()
+    threading.Thread(target=_deliver, name=f"deliver-{run_id}", daemon=True).start()
 
+    why = reason or (f"it was still running after {_took(wait)}, so the conversation "
+                     f"was handed back to you rather than left blocked")
     return (
-        f"SUMMARY: STARTED (detached) — {label}\n"
+        f"SUMMARY: STILL RUNNING (detached) — {label}\n"
         f"STATUS: RUNNING\n"
-        f"Reason this run is detached: {reason}\n\n"
+        f"Why you are seeing this instead of the result: {why}.\n\n"
         f"The script is running in its own process and you are NOT waiting for it. "
         f"Its full output will arrive as a new message when it finishes.\n"
         f"Do NOT re-run it, do not poll for it, and do not guess at its results. "
