@@ -2056,13 +2056,22 @@ def execute_script(directory: str, filename: str) -> str:
     # subprocess; a self-contained Groovy batch gets its own Fiji process and is equally
     # safe. An IN-PROCESS Groovy run is not: it shares the app's JVM and its live windows,
     # and cannot be reliably killed either — the same property decides both.
+    # Every run we OWN THE PROCESS FOR goes through the clock: waited on normally, and
+    # handed back only if it is still going after the deadline — at which point the
+    # agent is freed to talk to the user and the output arrives as a later turn. A
+    # quick script finishes inside the window and nothing about it changes.
+    #
+    # An IN-PROCESS Groovy run is excluded at any duration: it shares the app's JVM and
+    # its live windows, so the agent could act on ImageJ state a script is still
+    # mutating — and nothing owns it well enough to kill it either.
     detach_ignored = None
     try:
-        from ..detached import wants_detach, start as start_detached
-        reason = wants_detach(code_content)
+        from ..detached import wants_detach, run_or_detach
     except Exception:
-        reason = None
-    if reason:
+        wants_detach, run_or_detach = None, None
+    if run_or_detach is not None:
+        header_reason = wants_detach(code_content)      # "detach immediately", if present
+        work = None
         if filename.endswith('.py'):
             work = lambda: _post_execution(                       # noqa: E731
                 run_python_code(code_content, directory, purpose=purpose),
@@ -2070,19 +2079,17 @@ def execute_script(directory: str, filename: str) -> str:
         elif filename.endswith('.groovy') and _should_run_in_subprocess(code_content)[0]:
             work = lambda: _post_execution(                       # noqa: E731
                 _run_groovy_subprocess(code_content, purpose), directory, filename)
-        else:
-            # Header present but this run cannot be detached. Run it the normal blocking
-            # way rather than refusing, and say why — silently ignoring the header would
-            # leave the author thinking it worked.
-            work = None
-            why = ("this Groovy script needs the app's own Fiji (live windows), so it "
-                   "runs in-process and cannot be detached"
-                   if filename.endswith('.groovy') else
-                   f"{filename} is not a detachable script type")
-            log.info("imagentj-detach ignored for %s: %s", filename, why)
-            detach_ignored = why
+        elif header_reason:
+            # A header that cannot be honoured must say so in the RESULT, not just the
+            # log: a silently ignored header is how a template ends up claiming to
+            # detach for the rest of its life.
+            detach_ignored = ("this Groovy script needs the app's own Fiji (live "
+                              "windows), so it runs in-process and cannot be detached")
+            log.info("imagentj-detach ignored for %s: %s", filename, detach_ignored)
         if work is not None:
-            return start_detached(label=purpose, reason=reason, work=work)
+            return run_or_detach(label=purpose, work=work,
+                                 wait=0 if header_reason else None,
+                                 reason=header_reason or "")
 
     # Route based on extension
     if filename.endswith('.py'):
