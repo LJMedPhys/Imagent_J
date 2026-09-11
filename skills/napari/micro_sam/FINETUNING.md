@@ -222,6 +222,14 @@ The status table tells you what to do next: **3+ usable tiles** → stage 3. Few
 
 Set `TASK_DIR`. Everything else has a sensible default; `N_EPOCHS=10` is right for 5-10 tiles.
 
+> **This stage is DETACHED** (`# imagentj-detach:` on line 2). `execute_script` returns a
+> receipt — `SUMMARY: STARTED (detached)` — within seconds, and the training output arrives
+> later as a separate `[DETACHED RUN FINISHED]` message. That receipt is NOT a failure and
+> NOT an empty result: do not re-run the stage, do not poll for it, and do not report a
+> score you have not seen. Tell the user training is running and roughly how long it takes,
+> then answer whatever they ask next — the point of detaching is that they can talk to you
+> during the 10-20 minutes instead of waiting on a blocked turn.
+
 It validates every annotation (shape, dtype, ≥2 objects ≥25 px), holds out ~25 % of the tiles —
 **whole source images where possible**, so the score is not inflated by tiles cut from the same
 field — trains, exports the checkpoint, then segments the held-out tiles with **both** the stock

@@ -15,6 +15,13 @@ Only training and inference are Cellpose-specific.
 `WORKFLOW_FINETUNE_CP_SEGMENT_WORKER.py` is not a stage — it is the subprocess stage 1 uses to
 reach Cellpose from the napari env.
 
+> **Stage 3 is DETACHED** (`# imagentj-detach:` on line 2). `execute_script` returns
+> `SUMMARY: STARTED (detached)` within seconds and the training output arrives later as a
+> separate `[DETACHED RUN FINISHED]` message. That receipt is not a failure and not an empty
+> result: do not re-run the stage, do not poll, and do not report a score you have not seen.
+> Say training is running and how long it takes, then keep talking to the user — being able
+> to do that during the run is the whole point of detaching it.
+
 ## Why the split, and why a subprocess
 
 The two envs are disjoint and cannot be merged: `napari-mcp` has napari, micro_sam, skimage and

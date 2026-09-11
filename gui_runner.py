@@ -29,6 +29,7 @@ from imagentj.imagej_context import get_ij
 from imagentj.chat_history import ChatHistoryManager
 import imagentj.stop_signal as stop_signal
 from imagentj import interject
+from imagentj import detached
 from imagentj import run_control
 from imagentj import watchdog
 from imagentj.safety_filter import is_bio_refusal
@@ -763,6 +764,7 @@ class AgentWorker(QObject):
     # Watchdog verdicts, surfaced in the chat rather than buried in the log.
     watchdog_notice = Signal(str)
     note_delivered  = Signal(str)
+    detached_done   = Signal(str, str)      # (label, result-as-prompt)
     # Notes the user posted after the agent's final model turn; re-submitted as a
     # prompt rather than silently dropped. Carries how many.
     notes_requeued = Signal(int)
@@ -1056,6 +1058,7 @@ class ImageJAgentGUI(QWidget):
         self.worker.stop_report.connect(self.on_stop_report)
         self.worker.watchdog_notice.connect(self.on_watchdog_notice)
         self.worker.note_delivered.connect(self.on_note_delivered)
+        self.worker.detached_done.connect(self.on_detached_done)
         self.worker.notes_requeued.connect(self.on_notes_requeued)
         # The watchdog fires from its own thread; hop onto the GUI thread via the
         # worker's signal rather than touching widgets directly.
@@ -1064,6 +1067,9 @@ class ImageJAgentGUI(QWidget):
         # thread, and only the GUI thread may touch widgets. Its own signal, not
         # watchdog_notice — that slot sets the status to "Watchdog intervened".
         interject.set_notifier(self.worker.note_delivered.emit)
+        # A detached script finishes on its own worker thread. Hand the result back
+        # through a signal so it is submitted on the GUI thread like any other prompt.
+        detached.set_completion_notifier(self.worker.detached_done.emit)
         self.thread.start()
 
         self._current_status_bubble = None
@@ -1318,6 +1324,16 @@ class ImageJAgentGUI(QWidget):
         self.chat_scroll.add_message('system', message)
         self.set_status_busy_with_notes()      # the queue just shrank; recount
 
+    def on_detached_done(self, label: str, result: str):
+        """A long script the agent did not wait for has finished."""
+        self.chat_scroll.add_message(
+            'system', f"“{label}” finished — handing the result to the agent."
+        )
+        # Submitted as an ordinary prompt, so it is picked up by the same worker loop
+        # and runs as one more serialised turn. If the agent is mid-turn right now it
+        # simply queues behind it; two graph runs never overlap on one thread.
+        self.worker.submit(result)
+
     def on_agent_finished(self):
         log.debug("on_agent_finished called")
         try:
@@ -1377,11 +1393,11 @@ class ImageJAgentGUI(QWidget):
             return
 
         self.chat_scroll.add_message("user", text)
-        try:
-            waiting = run_control.note_wait_status()
-        except Exception:
-            waiting = "The agent will read it at its next step."
-        self.chat_scroll.add_message("system", f"Queued. {waiting}")
+        self.chat_scroll.add_message(
+            "system",
+            "Queued — the agent will read this at its next step. A long-running "
+            "script has to finish first."
+        )
         self.input_line.clear()
         self.history_manager.touch_thread(self.current_thread_id)
         self.set_status_busy_with_notes()
