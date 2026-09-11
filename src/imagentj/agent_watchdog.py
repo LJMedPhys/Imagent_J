@@ -193,6 +193,37 @@ def finetune_directive(project_root: Optional[str] = None) -> str:
     ])
 
 
+def explain_entry(entry: dict) -> str:
+    """Why one ledger step did or did not count. The total alone is not debuggable.
+
+    Every branch of `_is_segmentation_attempt` gets a phrase here, so a step that was
+    expected to count and did not says which test rejected it — rather than leaving the
+    reader to guess between a vocabulary miss, a status, and an exclusion.
+    """
+    text = _entry_text(entry)
+    if any(w in text for w in _APPROVAL_WORDS):
+        return "APPROVED -> count reset to 0"
+    if any(w in text for w in _NOT_AN_ATTEMPT):
+        return "not counted (debug fix, or a fine-tuning/annotation step)"
+    status = str(entry.get("status", "")).lower()
+    if status not in ("completed", "failed", "rejected"):
+        return f"not counted (status {status!r} — nothing was shown to the user yet)"
+    if not any(w in text for w in _SEG_WORDS):
+        return "not counted (no segmentation word in step/details)"
+    return "COUNTED as a segmentation attempt"
+
+
+def retry_status_line(project_root: Optional[str] = None, entry: Optional[dict] = None) -> str:
+    """One line for the container log, printed on every ledger write."""
+    attempts = segmentation_attempts(project_root)
+    n = len(attempts)
+    verdict = f" | {explain_entry(entry)}" if entry else ""
+    last = attempts[-1].get("step", "?") if attempts else "-"
+    tail = "  *** LIMIT REACHED -> switching to fine-tuning ***" if n >= SEGMENTATION_RETRY_LIMIT else ""
+    return (f"[retry-watch] unapproved segmentation attempts: {n}/{SEGMENTATION_RETRY_LIMIT}"
+            f" (last counted: {last}){verdict}{tail}")
+
+
 def _check_segmentation_retries() -> None:
     """Tell the USER once per project, so the switch is not only an agent-side event."""
     root = _project_root
