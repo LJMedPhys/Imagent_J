@@ -741,6 +741,7 @@ class AgentWorker(QObject):
     watchdog_notice = Signal(str)
     note_delivered  = Signal(str)
     detached_done   = Signal(str, str)      # (label, result-as-prompt)
+    detached_started = Signal(str)          # (label) — handed back, still running
     # Notes the user posted after the agent's final model turn; re-submitted as a
     # prompt rather than silently dropped. Carries how many.
     notes_requeued = Signal(int)
@@ -966,6 +967,12 @@ class ImageJAgentGUI(QWidget):
 
         self.status_label = QLabel("Agent is ready to help")
         self.status_label.setStyleSheet("color: green; font-weight: bold;")
+        self._base_status = "Ready"
+        # Ticks the elapsed time of any detached run. One second, and it only ever
+        # rewrites a label, so it costs nothing when nothing is running.
+        self._bg_ticker = QTimer(self)
+        self._bg_ticker.timeout.connect(self._render_status)
+        self._bg_ticker.start(1000)
 
         btn_row = QHBoxLayout()
         btn_row.addWidget(self.send_button, stretch=4)
@@ -1021,6 +1028,7 @@ class ImageJAgentGUI(QWidget):
         self.worker.watchdog_notice.connect(self.on_watchdog_notice)
         self.worker.note_delivered.connect(self.on_note_delivered)
         self.worker.detached_done.connect(self.on_detached_done)
+        self.worker.detached_started.connect(self.on_detached_started)
         self.worker.notes_requeued.connect(self.on_notes_requeued)
         # The watchdog fires from its own thread; hop onto the GUI thread via the
         # worker's signal rather than touching widgets directly.
@@ -1032,6 +1040,7 @@ class ImageJAgentGUI(QWidget):
         # A detached script finishes on its own worker thread. Hand the result back
         # through a signal so it is submitted on the GUI thread like any other prompt.
         detached.set_completion_notifier(self.worker.detached_done.emit)
+        detached.set_detach_notifier(self.worker.detached_started.emit)
         self.thread.start()
 
         self._current_status_bubble = None
@@ -1176,9 +1185,39 @@ class ImageJAgentGUI(QWidget):
         return getattr(self, "_busy", False)
 
     def set_status(self, text: str):
+        # Remembered, because a detached script keeps running after the agent goes
+        # idle: the status line has to say BOTH things, and only this knows the first.
+        self._base_status = text
+        self._render_status()
+
+    def _render_status(self):
+        """Compose the agent's own state with anything still running in the background.
+
+        Without this the window looks completely idle the moment a run detaches — the
+        agent says "Ready", and a script that will take another twenty minutes is
+        invisible. The amber wins over the green on purpose: something IS running, and
+        that is the more important of the two facts.
+        """
+        text = getattr(self, "_base_status", "Ready")
         colors = {"Ready": "green", "Thinking...": "blue", "Stopping...": "#e74c3c"}
         color  = colors.get(text, "black")
-        self.status_label.setText("Agent is ready to help" if text == "Ready" else text)
+        label  = "Agent is ready to help" if text == "Ready" else text
+
+        runs = []
+        try:
+            runs = detached.active()
+        except Exception:
+            pass
+        if runs:
+            oldest = runs[0]
+            mins, secs = divmod(int(time.time() - oldest["started"]), 60)
+            elapsed = f"{mins}m {secs:02d}s" if mins else f"{secs}s"
+            label += f"  ·  ⏳ still running: {oldest['label']} ({elapsed})"
+            if len(runs) > 1:
+                label += f" +{len(runs) - 1} more"
+            color = "#b26a00"
+
+        self.status_label.setText(label)
         self.status_label.setStyleSheet(f"color: {color}; font-weight: bold;")
 
     def set_ui_busy(self, busy: bool):
@@ -1286,11 +1325,21 @@ class ImageJAgentGUI(QWidget):
         self.chat_scroll.add_message('system', message)
         self.set_status_busy_with_notes()      # the queue just shrank; recount
 
+    def on_detached_started(self, label: str):
+        """A run outlasted the wait and was handed back — say so in the transcript."""
+        self.chat_scroll.add_message(
+            'system',
+            f"⏳ “{label}” is taking a while, so it now runs in the background. "
+            f"You can keep chatting — the result will come back here when it finishes."
+        )
+        self._render_status()
+
     def on_detached_done(self, label: str, result: str):
         """A long script the agent did not wait for has finished."""
         self.chat_scroll.add_message(
-            'system', f"“{label}” finished — handing the result to the agent."
+            'system', f"✓ “{label}” finished — handing the result to the agent."
         )
+        self._render_status()          # drop it from the status line immediately
         # Submitted as an ordinary prompt, so it is picked up by the same worker loop
         # and runs as one more serialised turn. If the agent is mid-turn right now it
         # simply queues behind it; two graph runs never overlap on one thread.
