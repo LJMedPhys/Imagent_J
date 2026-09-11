@@ -145,6 +145,10 @@ _HAPPY = ("works", "worked", "perfect", "looks good", "that's it", "thanks",
 _project_root: Optional[str] = None
 _retry_announced: set = set()
 _last_reported: Optional[int] = None
+# Live count, fed by note_prompt as each turn arrives; None until seeded from the log.
+_live_streak: Optional[int] = None
+_live_prompts: list = []
+_prev_seg: bool = False
 
 
 def note_project(project_root: str) -> None:
@@ -190,8 +194,13 @@ def _classify(text: str, prev_was_segmentation: bool) -> str:
     return "seg" if seg else "other"
 
 
-def unhappy_streak(path: Optional[str] = None) -> tuple:
-    """(streak, the prompts in it) — consecutive dissatisfied segmentation turns."""
+def unhappy_streak(path: Optional[str] = None, force_log: bool = False) -> tuple:
+    """(streak, the prompts in it) — consecutive dissatisfied segmentation turns.
+
+    Prefers the live count fed by `note_prompt`, which is a turn ahead of the log.
+    """
+    if not force_log and path is None and _live_streak is not None:
+        return _live_streak, list(_live_prompts)
     path = path or _usage_log_path()
     if not path:
         return 0, []
@@ -248,13 +257,49 @@ def retry_status_line(path: Optional[str] = None) -> str:
             f"{streak}/{SEGMENTATION_RETRY_LIMIT}{last}{tail}")
 
 
-def _check_segmentation_retries() -> None:
-    """Poll-loop hook: log every change, tell the user once."""
-    global _last_reported
+def note_prompt(text: str) -> str:
+    """Called with each user turn AS IT ARRIVES. Returns the classification.
+
+    The usage log alone is always one turn behind: `finish_query` writes the record
+    when the turn ENDS, so anything polling it during a turn sees only the turns
+    before it — the count lagged, the log line appeared on some turns and not others,
+    and the third complaint could not trip anything until the fourth had started.
+    Feeding the prompt in at `start_query` removes the lag, and gets the FULL text
+    rather than the 120-character preview the log stores.
+
+    The log is still read once, to seed the streak after a restart mid-conversation.
+    """
+    global _live_streak, _live_prompts, _prev_seg
+    if _live_streak is None:
+        _live_streak, _live_prompts = unhappy_streak(force_log=True)
+    kind = _classify(text, _prev_seg)
+    if kind == "happy":
+        _live_streak, _live_prompts = 0, []
+    elif kind == "unhappy":
+        _live_streak += 1
+        _live_prompts.append(text)
+    if kind in ("seg", "unhappy"):
+        _prev_seg = True
+    # One line per user turn, whatever the verdict. Printing only on change hid the
+    # turns that scored 'other', which are exactly the ones worth seeing when the
+    # count is not moving and you cannot tell whether the phrase list missed them.
+    print(f"[retry-watch] turn={kind:<7} streak={_live_streak}/{SEGMENTATION_RETRY_LIMIT}"
+          f"  :: {text[:80]!r}", flush=True)
+    _announce_if_due()
+    return kind
+
+
+def pending_directive() -> str:
+    """The directive to hand the agent, or empty. Works with no project and no ledger.
+
+    The ledger-context route only exists once a project workspace does, which in fast
+    mode on a quick threshold it may not. This is the channel that is always there.
+    """
+    return finetune_directive()
+
+
+def _announce_if_due() -> None:
     streak, _ = unhappy_streak()
-    if streak != _last_reported:
-        _last_reported = streak
-        print(retry_status_line(), flush=True)
     if streak < SEGMENTATION_RETRY_LIMIT:
         return
     key = _project_root or _usage_log_path() or "?"
@@ -264,6 +309,15 @@ def _check_segmentation_retries() -> None:
     _notify(f"Segmentation has been through {streak} rounds you were not happy with. "
             f"Rather than tune the settings again, the assistant will look at "
             f"fine-tuning the model on your own annotations.")
+
+
+def _check_segmentation_retries() -> None:
+    """Poll-loop hook. Only a backstop now — `note_prompt` does the real work."""
+    global _last_reported
+    streak, _ = unhappy_streak()
+    if streak != _last_reported:
+        _last_reported = streak
+    _announce_if_due()
 
 
 
