@@ -225,6 +225,15 @@ def _request_mode(request) -> str:
     return _state_mode(getattr(request, "state", None))
 
 
+# Read-only file access + search injected by the deep-agent backend and by
+# FilesystemFileSearchMiddleware. A mode that narrows the toolset must still
+# offer these: the skills catalogue points the model at /app/skills/** and
+# these are how it gets there.
+_BACKEND_FILE_TOOLS = frozenset({
+    "ls", "read_file", "glob", "grep", "glob_search", "grep_search",
+})
+
+
 def _tool_name(t) -> str:
     """Best-effort name of a tool object / schema dict."""
     n = getattr(t, "name", None)
@@ -393,7 +402,23 @@ class ModeMiddleware(AgentMiddleware):
             if prompt:
                 overrides["system_message"] = SystemMessage(content=prompt)
         if spec.tools is not None:
-            overrides["tools"] = spec.tools
+            # `tools` REPLACES the offered set, and the deep-agent builtins
+            # (file access + search) are constructed by the backend, so no
+            # mode's hand-written list can contain them. Replacing outright
+            # therefore dropped them — while the skills instructions every
+            # mode inherits still told the model to read /app/skills/** with
+            # exactly those tools. It obliged, the name was not in the
+            # offered list, and vLLM's parser left the call as raw markup in
+            # the reply instead of a tool call. Keep whichever of them the
+            # request already carries.
+            keep = [
+                t for t in (getattr(request, "tools", None) or [])
+                if _tool_name(t) in _BACKEND_FILE_TOOLS
+            ]
+            have = {_tool_name(t) for t in spec.tools}
+            overrides["tools"] = list(spec.tools) + [
+                t for t in keep if _tool_name(t) not in have
+            ]
         if spec.model is not None:
             overrides["model"] = spec.model
 
@@ -410,6 +435,123 @@ class ModeMiddleware(AgentMiddleware):
         if overrides:
             request = request.override(**overrides)
         return handler(request)
+
+
+_UNPARSED_TOOL_CALL_RE = re.compile(r"<tool_call>\s*([A-Za-z0-9_.\-]*)")
+
+
+def _message_text(msg) -> str:
+    """Flatten an AIMessage's content to plain text for markup scanning."""
+    content = getattr(msg, "content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and isinstance(block.get("text"), str):
+                parts.append(block["text"])
+        return "".join(parts)
+    return ""
+
+
+class UnparsedToolCallRetryMiddleware(AgentMiddleware):
+    """Recover when the server hands back a tool call as prose.
+
+    A tool call only reaches the agent as a tool call if the *server* parses it
+    out. vLLM's parser validates the emitted name against the tools the request
+    offered (``parser_engine._is_valid_tool_name``); a name it cannot find is
+    not an error — the markup is simply left in the assistant's text. The
+    result is an AIMessage carrying a literal
+    ``<tool_call>name<arg_key>...</arg_key></tool_call>`` with ``tool_calls``
+    and ``invalid_tool_calls`` both empty. Nothing raises, nothing retries, and
+    the agent ends its turn believing it has answered — the user sees raw
+    markup and the run stalls. A cloud provider instead returns the bad call as
+    an invalid tool call, which the agent can already see and correct, so this
+    failure is specific to a local endpoint.
+
+    Two causes are fixed at the source (the `rag_retrieve_docs` registration
+    name and the builtins `ModeMiddleware` used to drop), but any future
+    prompt/registration drift reintroduces it, so catch it here as well: tell
+    the model the name is not available and what it may call instead, and let
+    it choose again. If it still cannot, strip the markup and say so plainly
+    rather than passing unparsed tags to the user.
+
+    Mount inner to `ModeMiddleware` so `request.tools` is the narrowed list the
+    model actually saw.
+    """
+
+    def __init__(self, max_retries: int = 2):
+        super().__init__()
+        self.max_retries = max_retries
+
+    def wrap_model_call(self, request, handler):
+        response = handler(request)
+
+        for attempt in range(self.max_retries):
+            bad = self._leaked_name(response)
+            if bad is None:
+                return response
+            offered = sorted(
+                n for n in (_tool_name(t) for t in (getattr(request, "tools", None) or [])) if n
+            )
+            _log.warning(
+                "Model emitted an unparsed tool call for %r; not among the %d "
+                "offered tools. Retrying (%d/%d).",
+                bad, len(offered), attempt + 1, self.max_retries,
+            )
+            request = request.override(
+                messages=list(getattr(request, "messages", []) or [])
+                + [
+                    SystemMessage(content=(
+                        f"Your last reply tried to call a tool named '{bad}', which was "
+                        "not accepted — it is not one of the tools available on this "
+                        "turn, so the call was discarded and its markup was left in "
+                        "your message as plain text. Do not repeat that name.\n\n"
+                        f"Available tools this turn: {', '.join(offered) or '(none)'}\n\n"
+                        "Either call one of those, using the normal tool-call mechanism "
+                        "rather than writing the tags yourself, or answer directly if "
+                        "no tool fits."
+                    ))
+                ]
+            )
+            response = handler(request)
+
+        bad = self._leaked_name(response)
+        if bad is not None:
+            _log.error("Model kept emitting unparsed tool call %r; stripping markup.", bad)
+            self._strip(response, bad)
+        return response
+
+    @staticmethod
+    def _leaked_name(response) -> Optional[str]:
+        """Name in leftover markup on a message that produced no tool call."""
+        for msg in getattr(response, "result", None) or []:
+            if not isinstance(msg, AIMessage):
+                continue
+            if getattr(msg, "tool_calls", None) or getattr(msg, "invalid_tool_calls", None):
+                continue
+            m = _UNPARSED_TOOL_CALL_RE.search(_message_text(msg))
+            if m:
+                return m.group(1) or "<unnamed>"
+        return None
+
+    @staticmethod
+    def _strip(response, bad: str) -> None:
+        """Last resort: replace the raw tags with a statement of what happened."""
+        note = (
+            f"\n\n[Agentic-J: a tool call to '{bad}' could not be dispatched — that tool "
+            "is not available here. The step above did not run.]"
+        )
+        for msg in getattr(response, "result", None) or []:
+            if not isinstance(msg, AIMessage):
+                continue
+            text = _message_text(msg)
+            if "<tool_call>" not in text:
+                continue
+            cleaned = text.split("<tool_call>", 1)[0].rstrip()
+            msg.content = cleaned + note
 
 
 class SafeToolLoggerMiddleware(AgentMiddleware):

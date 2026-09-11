@@ -66,7 +66,7 @@ from .tools import (
     # multi-mode: tutor tools + mode routing
     list_curriculum, load_chapter, load_track, show_figure, list_sample_images,
     list_practicals, reveal_solution, update_course_progress, set_course_plan, set_mode,
-    ModeMiddleware, ModeSpec,
+    ModeMiddleware, ModeSpec, UnparsedToolCallRetryMiddleware,
 )
 from .tools.learned_memory import (
     register_pending_lesson, core_pitfalls, core_recipes, recall,
@@ -592,6 +592,9 @@ def _make_coder_agent(model, name, system_prompt):
                     ),
                 ],
             ),
+            # This agent reads /app/skills/ through the search middleware above,
+            # which is exactly where a name the server will not parse comes from.
+            UnparsedToolCallRetryMiddleware(),
             # Innermost — see BioRefusalRetryMiddleware. Must stay last.
             BioRefusalRetryMiddleware(),
         ],
@@ -1744,6 +1747,12 @@ def init_agent():
             enabled_prompt=vision_prompt,
             disabled_prompt=no_vision_prompt,
         ),
+        # Inner to ModeMiddleware on purpose: the tools it inspects must be the
+        # narrowed per-mode list the model was actually offered, not the full
+        # registered union. Catches a tool call the server refused to parse
+        # because the name was not on that list — on a local endpoint that
+        # arrives as prose, not as an error.
+        UnparsedToolCallRetryMiddleware(),
         # Last line before a provider biological-risk refusal unwinds the whole
         # supervisor loop. create_deep_agent inserts user middleware after its
         # own Skills/Filesystem/SubAgent stack, so this sees their injected

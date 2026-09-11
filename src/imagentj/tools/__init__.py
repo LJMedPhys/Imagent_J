@@ -22,6 +22,7 @@ from .middleware import (
     VisionOptionMiddleware,
     BioRefusalRetryMiddleware,
     ModeMiddleware, ModeSpec, AgentModeState,
+    UnparsedToolCallRetryMiddleware,
 )
 # Rebase note (2026-08-03): the educator branch had commented this block out with
 # "# VLM disabled". Keeping it ACTIVE — the VLM-as-judge work landed on main after
@@ -60,6 +61,7 @@ __all__ = [
     'search_fiji_plugins', 'install_fiji_plugin', 'check_plugin_installed',
     'SafeToolLoggerMiddleware', 'TodoDisplayMiddleware', 'NarrationReminderMiddleware', 'PhaseGuardMiddleware', 'ToolOutputLimitMiddleware', 'VisionOptionMiddleware',
     'ModeMiddleware', 'ModeSpec', 'AgentModeState',
+    'BioRefusalRetryMiddleware', 'UnparsedToolCallRetryMiddleware',
     'list_curriculum', 'load_chapter', 'load_track', 'show_figure', 'list_sample_images',
     'list_practicals', 'reveal_solution', 'update_course_progress', 'set_course_plan', 'set_mode',
     # get_vec_store_mistakes / get_vec_store_recipes were exported by the educator

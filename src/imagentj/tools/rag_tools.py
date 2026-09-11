@@ -58,7 +58,15 @@ def get_expanded_queries(query: str) -> list[str]:
     return list({query, *[v for v in cleaned if v]})
 
 
-@tool("rag_retrieve")
+# Registered name must match what the prompts tell the model to call.
+# prompts.py advertises `rag_retrieve_docs` in six places; registering it as
+# "rag_retrieve" meant every one of those calls arrived at the server under a
+# name that was not in the request's tool list. A cloud provider returns that
+# as an invalid tool call the agent can see and retry, but vLLM's parser
+# validates the name against the offered tools and, finding none, leaves the
+# raw <tool_call>...</tool_call> markup sitting in the assistant's text — no
+# tool call, no error, the turn just stops making sense.
+@tool("rag_retrieve_docs")
 def rag_retrieve_docs(query: str) -> list:
     """Retrieve relevant context from the documentation RAG (hybrid search + query expansion)."""
     if not is_rag_available():
