@@ -43,7 +43,8 @@ from .prompts import (
     vlm_judge_prompt,
 )
 from .tools import (
-    internet_search, inspect_all_ui_windows, capture_plugin_dialog, estimate_cellpose_diameter_manual, estimate_cellpose_diameter_auto,
+    capture_ui_window,
+    internet_search, inspect_all_ui_windows, estimate_cellpose_diameter_manual, estimate_cellpose_diameter_auto,
     merge_cellpose_diameter_runs,
     show_in_imagej_gui, close_imagej_windows,
     rag_retrieve_docs, recall_concepts, inspect_java_class,
@@ -53,8 +54,10 @@ from .tools import (
     check_plugin_installed, mkdir_copy, save_script, edit_script, copy_file, execute_script,
     get_script_info, load_script, get_script_history,
     setup_analysis_workspace, save_markdown,
+    VisionOptionMiddleware,
+    NapariComputeGuardMiddleware,
     NarrationReminderMiddleware, PhaseGuardMiddleware, ToolOutputLimitMiddleware,
-    VisionOptionMiddleware, BioRefusalRetryMiddleware,
+    BioRefusalRetryMiddleware, InterjectMiddleware,
     update_state_ledger, read_state_ledger, set_ledger_metadata, get_ledger_context,
     check_environment,
     set_dialog_vision_llm,
@@ -1445,7 +1448,7 @@ def init_agent():
         # supervisor's own tools
         internet_search,
         inspect_all_ui_windows,
-        capture_plugin_dialog,
+        capture_ui_window,
         # Rebase note (2026-09-07): these three landed on main after this branch
         # was cut (cellpose diameter estimation). advanced_tools replaces main's
         # explicit supervisor tool list, so they must be carried over here or the
@@ -1493,7 +1496,7 @@ def init_agent():
     # first. No pipeline tools (workspace/coder/plugin/ledger), so education can
     # demonstrate a concept but not run the student's analysis project.
     demo_tools = [save_script, execute_script, show_in_imagej_gui, inspect_all_ui_windows,
-                  capture_plugin_dialog, close_imagej_windows]
+                  capture_ui_window, close_imagej_windows]
 
     quick_tools = [
         imagej_coder, imagej_debugger, plugin_manager, execute_script, save_script, load_script,
@@ -1530,6 +1533,10 @@ def init_agent():
     }
 
     supervisor_middleware = [
+        # First, so a note the user typed mid-run is already in `messages` when
+        # every other middleware inspects them this turn (PhaseGuard's phase
+        # detection, the context editor's keep-window, the Vision prompt swap).
+        InterjectMiddleware(),
         ToolOutputLimitMiddleware(),
         ContextEditingMiddleware(
             edits=[
@@ -1552,6 +1559,11 @@ def init_agent():
         ),
         NarrationReminderMiddleware(),
         PhaseGuardMiddleware(),
+        # Blocks heavy micro_sam compute from reaching napari's execute_code, which
+        # runs on the Qt thread under a 90 s cap — the combination that freezes the
+        # viewer AND times out. Redirects the model to the supervised analyst path.
+        NapariComputeGuardMiddleware(),
+        # Innermost user middleware: per-chat final say on Vision prompt + tool exposure.
         # Rebase note (2026-08-03): main's VisionOptionMiddleware and the educator
         # branch's ModeMiddleware both claimed the "innermost, final say on the
         # system prompt" slot. Both are kept, in this order, because they compose:
@@ -1580,10 +1592,48 @@ def init_agent():
 
     supervisor = create_deep_agent(
         name="ImageJ_Supervisor",
-        # registered_tools is the deduped UNION of advanced + quick + education
-        # tools (the educator branch's structure). ModeMiddleware only narrows
-        # what each mode is offered, so the union must be registered here.
-        tools=registered_tools,
+        # _dedup: registered_tools is the superset the ModeMiddleware narrows
+        # from (see its note above); it overlaps the explicit entries below, and
+        # _dedup collapses them by identity.
+        tools=_dedup([
+            # ── subagents as tools (return typed JSON) ──────────────────────
+            *subagent_tools,
+            plugin_manager,
+            # ── supervisor's own tools ───────────────────────────────────────
+            internet_search,
+            inspect_all_ui_windows,
+            capture_ui_window,
+            estimate_cellpose_diameter_manual,
+            estimate_cellpose_diameter_auto,
+            merge_cellpose_diameter_runs,
+            show_in_imagej_gui,
+            close_imagej_windows,
+            rag_retrieve_docs,
+            recall_concepts,
+            recall,
+            inspect_folder_tree,
+            smart_file_reader,
+            extract_image_metadata,
+            mkdir_copy,
+            inspect_csv_header,
+            execute_script,
+            get_script_info,
+            setup_analysis_workspace,
+            save_markdown,
+            check_environment,
+            # ── dynamically-discovered MCP server tools (e.g. in-container ───
+            #    napari-mcp). Discovered at startup; the napari viewer itself
+            #    opens lazily on the first napari tool call. Discovery failures
+            #    are non-fatal (the adapter returns only diagnostics tools).
+            *get_mcp_tools(),
+            # ── state ledger (persistent project memory) ─────────────────────
+            update_state_ledger,
+            read_state_ledger,
+            set_ledger_metadata,
+            *registered_tools,
+        ]),
+
+        #tools=registered_tools,
         # Kept as main's vision-on prompt rather than the educator branch's plain
         # build_supervisor_prompt(enable_qa=True): VisionOptionMiddleware swaps this
         # exact string for its vision-off variant, so it must be the string that
