@@ -89,11 +89,20 @@ _ids = iter(range(1, 1 << 30))
 # can be submitted as a new turn. Unset outside the GUI (tests, benchmarks), where a
 # detached run simply completes and is logged.
 _completion_notifier: Optional[Callable[[str, str], None]] = None
+# Called with (label,) the moment a run is handed back, so the transcript records WHEN
+# it went to the background. The status line alone is not enough: it shows the present,
+# and a user scrolling back later has no idea why the agent suddenly stopped reporting.
+_detach_notifier: Optional[Callable[[str], None]] = None
 
 
 def set_completion_notifier(fn: Optional[Callable[[str, str], None]]) -> None:
     global _completion_notifier
     _completion_notifier = fn
+
+
+def set_detach_notifier(fn: Optional[Callable[[str], None]]) -> None:
+    global _detach_notifier
+    _detach_notifier = fn
 
 
 def wants_detach(code: str) -> Optional[str]:
@@ -170,6 +179,12 @@ def run_or_detach(label: str, work: Callable[[], str],
             pass
 
     threading.Thread(target=_deliver, name=f"deliver-{run_id}", daemon=True).start()
+
+    if _detach_notifier is not None:
+        try:
+            _detach_notifier(label)
+        except Exception:
+            pass
 
     why = reason or (f"it was still running after {_took(wait)}, so the conversation "
                      f"was handed back to you rather than left blocked")
