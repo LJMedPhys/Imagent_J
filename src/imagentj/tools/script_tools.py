@@ -2066,16 +2066,17 @@ def execute_script(directory: str, filename: str) -> str:
     # mutating — and nothing owns it well enough to kill it either.
     detach_ignored = None
     try:
-        from ..detached import wants_detach, never_detach, run_or_detach
+        from ..detached import (wants_detach, never_detach, interactive_reason,
+                                run_or_detach)
     except Exception:
-        wants_detach, never_detach, run_or_detach = None, None, None
-    # An interactive script is waited for however long it takes: it is blocking ON THE
-    # USER, and its return is the signal that they are done. Detaching one would have
-    # the agent carry on as though the annotation session had produced nothing.
-    interactive = never_detach(code_content) if never_detach else None
-    if interactive:
-        log.info("not detachable (%s): %s", interactive, filename)
-    if run_or_detach is not None and not interactive:
+        wants_detach = never_detach = interactive_reason = run_or_detach = None
+    blocked = never_detach(code_content) if never_detach else None
+    if blocked:
+        log.info("not detachable (%s): %s", blocked, filename)
+    # A window session detaches AT ONCE: the user will be in there for minutes, and
+    # the whole point is that they can ask questions while they work.
+    session = interactive_reason(code_content) if interactive_reason else None
+    if run_or_detach is not None and not blocked:
         header_reason = wants_detach(code_content)      # "detach immediately", if present
         work = None
         if filename.endswith('.py'):
@@ -2094,8 +2095,9 @@ def execute_script(directory: str, filename: str) -> str:
             log.info("imagentj-detach ignored for %s: %s", filename, detach_ignored)
         if work is not None:
             return run_or_detach(label=purpose, work=work,
-                                 wait=0 if header_reason else None,
-                                 reason=header_reason or "")
+                                 wait=0 if (header_reason or session) else None,
+                                 reason=header_reason or "",
+                                 interactive=session or "")
 
     # Route based on extension
     if filename.endswith('.py'):
