@@ -62,7 +62,7 @@ An unavailable visual call does not stop the core pipeline.
 
 ### Dialog window vision
 
-When you ask "What does this window do?" or similar, the agent uses a **GPT-4o-mini vision call** to capture a screenshot of the active Fiji dialog and explain each parameter in context. This is not a separate agent — it is a tool (`capture_plugin_dialog`) called directly by the supervisor. It works regardless of whether you use an OpenAI or OpenRouter key. For a successful screen capture, do make sure that the screen of interest is clearly visible in the display, i.e. it is not occluded or behind some other window. 
+When you ask "What does this window do?" or similar, the agent uses a **GPT-4o-mini vision call** to capture a screenshot of what you have on screen and explain each parameter in context. This is not a separate agent — it is a tool (`capture_ui_window`) called directly by the supervisor. It covers both Fiji plugin dialogs and the napari window (canvas, layer list, and any docked plugin panel such as micro_sam), picking whichever is open. It works regardless of whether you use an OpenAI or OpenRouter key. For a successful screen capture, do make sure that the screen of interest is clearly visible in the display, i.e. it is not occluded or behind some other window. 
 
 ---
 
@@ -76,7 +76,7 @@ When you ask "What does this window do?" or similar, the agent uses a **GPT-4o-m
 | **Extract image metadata** | Read pixel size, bit depth, dimensions, channel count, and calibration from image files without loading pixel data |
 | **Visual input/result review** | Inspect overall image quality at input and review each image-producing processing step; segmentation review uses a transparent mask overlay |
 | **List open Fiji windows** | Enumerate all currently open images and dialogs in the Fiji UI |
-| **Capture dialog screenshot** | Take a screenshot of the active Fiji plugin dialog and explain its parameters using a vision model |
+| **Capture on-screen window** | Take a screenshot of whatever is open — a Fiji plugin dialog, or the napari window with its layer list and docked plugin panel — and explain its fields using a vision model |
 | **Search & install plugins** | Search Fiji update sites by capability; check installation status; install plugins |
 | **Inspect Java classes** | Explore Fiji/ImageJ class APIs at runtime to find the correct method signatures for scripting |
 | **Read files** | Read scripts, CSVs, logs, and other text files from the mounted data volume |

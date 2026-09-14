@@ -603,7 +603,17 @@ def get_ledger_context(project_root: str) -> str:
     ledger = _load_ledger(project_root)
     if not ledger:
         return ""
-    return _format_ledger(ledger)
+    text = _format_ledger(ledger)
+    # The watchdog can only kill a turn or notify the user; it has no way to change
+    # what the agent does next. This is that channel: its directive rides in on the
+    # ledger context that is already injected everywhere, so the switch to fine-tuning
+    # reaches the agent without a new tool call or a new injection point.
+    try:
+        from ..agent_watchdog import finetune_directive
+        directive = finetune_directive(project_root)
+    except Exception:
+        directive = ""
+    return f"{directive}\n{text}" if directive else text
 
 
 # ---------------------------------------------------------------------------
@@ -672,6 +682,16 @@ def update_state_ledger(
 
     ledger["completed_steps"].append(entry)
     _save_ledger(project_root, ledger)
+
+    # Tell the watchdog which project's log to read. It counts the segmentation
+    # attempts the user has not approved and, past its limit, switches the run to
+    # fine-tuning — see agent_watchdog. Doing it here means the pointer is set by the
+    # act of writing a step, so there is nothing extra for the supervisor to remember.
+    try:
+        from ..agent_watchdog import note_project
+        note_project(project_root)
+    except Exception:
+        pass
 
     # Return a compact acknowledgement, NOT the full ledger. Echoing the whole
     # ledger after every step floods the supervisor's context and invites it to

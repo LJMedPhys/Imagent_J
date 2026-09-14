@@ -111,7 +111,6 @@ The full user guide lives in [`user_guide/`](user_guide/):
 | [04 Data, History & Reports](user_guide/04_data_history_and_reports.md) | File layout, chat history, issue reports |
 | [05 Security](user_guide/05_security.md) | Security model, network exposure, key handling |
 
-
 ## Project layout
 
 - [`src/imagentj/`](src/imagentj/) — main Python package (agents, tools, RAG)

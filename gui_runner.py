@@ -783,13 +783,27 @@ class AgentWorker(QObject):
             self._run_prompt(prompt)
 
     def _run_prompt(self, user_input: str):
+        # The agent watchdog counts consecutive turns where the user rejects a
+        # segmentation, and past its limit tells the agent to switch to fine-tuning.
+        # It is done HERE because this is the only place every mode passes through:
+        # the ledger-context route it used before needs a project workspace, which a
+        # quick job in fast mode may never create.
+        content = user_input
+        try:
+            from imagentj.agent_watchdog import note_prompt, pending_directive
+            note_prompt(user_input)
+            directive = pending_directive()
+            if directive:
+                content = f"{directive}\n\n---\n\n{user_input}"
+        except Exception:
+            pass                     # monitoring must never break the send path
         try:
             config = {
                 "configurable": {"thread_id": self.thread_id},
                 "callbacks":    [self.tracker_callback],
             }
             gen = self.supervisor.stream(
-                {"messages": [{"role": "user", "content": user_input}]},
+                {"messages": [{"role": "user", "content": content}]},
                 config=config,
                 stream_mode="updates",
             )
@@ -1367,7 +1381,7 @@ class ImageJAgentGUI(QWidget):
             "rag_retrieve_docs":         "Searching ImageJ documentation…",
             "rag_retrieve_mistakes":     "Checking past lessons learned…",
             "inspect_all_ui_windows":    "Listing open ImageJ windows…",
-            "capture_plugin_dialog":     "Reading plugin dialog (taking screenshot)…",
+            "capture_ui_window":         "Reading what's on screen (taking screenshot)…",
             "extract_image_metadata":    "Reading image metadata & calibration…",
             "setup_analysis_workspace":  "Creating project workspace…",
             "search_fiji_plugins":       "Searching Fiji plugin registry…",
