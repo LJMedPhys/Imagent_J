@@ -117,26 +117,40 @@ def wants_detach(code: str) -> Optional[str]:
 def never_detach(code: str) -> Optional[str]:
     """Why this script must be waited for however long it takes, or None.
 
-    An INTERACTIVE script is the case the clock gets wrong. Stage 2 of fine-tuning
-    blocks on `napari.run()` for as long as the human annotates — that block IS the
-    result, because the script returning is the signal that they finished. Detach it
-    at ten seconds and the agent is told "still running", carries on without the
-    annotations, and the whole workflow silently proceeds on nothing.
+    Only one thing genuinely qualifies: a script blocked on STDIN. Nobody can answer
+    `input()` once the conversation has moved on — the subprocess would wait for ever
+    with no way to reach it — so that one is waited for or not run at all.
 
-    Two ways to be safe, because relying on either alone has failed before: an
-    explicit `imagentj-detach: never` header, and a scan for the calls that mean "a
-    window is open and a person is using it". The scan covers scripts nobody
-    remembered to annotate — which, on the evidence of this project, is most of them.
+    A window session is NOT this case, though an earlier version of this function
+    treated it as one. See `interactive_reason`.
     """
     for line in (code or "").splitlines()[:5]:
         m = _DETACH_RE.match(line.strip())
         if m and m.group(1).strip().lower() == "never":
             return "declared `imagentj-detach: never`"
+    if "input(" in (code or "").lower():
+        return "blocked on stdin — nothing could answer it once detached"
+    return None
+
+
+def interactive_reason(code: str) -> Optional[str]:
+    """Why this script is a person working in a window, or None.
+
+    These detach IMMEDIATELY rather than after the usual wait: an annotation session
+    runs for twenty minutes by design, and ten seconds of that is nothing but a
+    blocked chat. The user is in a napari window; they are very likely to have
+    questions WHILE they work, and until now the agent could not hear them.
+
+    Detaching does not lose the "human is finished" signal — the script still exits
+    when they close the window, and its report still arrives as a turn. What it
+    changes is only who is waiting. The risk is the agent treating a receipt as a
+    finished stage, which is a wording problem, handled in the receipt itself.
+    """
     lowered = (code or "").lower()
     for marker in ("napari.run(", "run_picker(", "image_series_annotator(",
-                   "annotator_2d(", "annotator_3d(", "input(", "plt.show("):
+                   "annotator_2d(", "annotator_3d("):
         if marker in lowered:
-            return f"interactive: waits for the user ({marker.rstrip('(')})"
+            return f"a napari window is open and the user is working in it ({marker.rstrip('(')})"
     return None
 
 
@@ -152,7 +166,8 @@ def _took(seconds: float) -> str:
 
 
 def run_or_detach(label: str, work: Callable[[], str],
-                  wait: Optional[float] = None, reason: str = "") -> str:
+                  wait: Optional[float] = None, reason: str = "",
+                  interactive: str = "") -> str:
     """Run `work()`, waiting up to `wait` seconds; detach it if it outlasts that.
 
     Returns either the real output (finished in time — the caller cannot tell this
@@ -211,6 +226,24 @@ def run_or_detach(label: str, work: Callable[[], str],
             _detach_notifier(label)
         except Exception:
             pass
+
+    if interactive:
+        # A person is mid-task in a window. The failure to design against is the agent
+        # reading this as a finished stage and moving on to the next one, so say what
+        # has and has not happened in the plainest possible terms.
+        return (
+            f"SUMMARY: WAITING FOR THE USER (detached) — {label}\n"
+            f"STATUS: RUNNING\n"
+            f"{interactive}.\n\n"
+            f"NOTHING HAS BEEN PRODUCED YET. The user is working right now; the script "
+            f"saves their work itself and exits when they close the window, and only "
+            f"then does its report arrive here as a new message.\n"
+            f"Until that message arrives: do NOT start the next stage, do NOT re-run "
+            f"this, do NOT read its output files, and do NOT state how much is done — "
+            f"you cannot know.\n"
+            f"You were detached so the user can TALK TO YOU while they work. Expect "
+            f"questions about the task in front of them, and answer them."
+        )
 
     why = reason or (f"it was still running after {_took(wait)}, so the conversation "
                      f"was handed back to you rather than left blocked")
