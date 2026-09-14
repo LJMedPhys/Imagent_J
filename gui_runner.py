@@ -766,6 +766,10 @@ class AgentWorker(QObject):
     note_delivered  = Signal(str)
     detached_done   = Signal(str, str)      # (label, result-as-prompt)
     detached_started = Signal(str)          # (label) — handed back, still running
+    # Emitted when a prompt is actually DEQUEUED, whoever queued it. The GUI marks
+    # itself busy from here, because a turn can start without the user pressing Send:
+    # a detached script's result and re-queued notes both arrive through the queue.
+    turn_started = Signal(str)
     # Notes the user posted after the agent's final model turn; re-submitted as a
     # prompt rather than silently dropped. Carries how many.
     notes_requeued = Signal(int)
@@ -788,6 +792,7 @@ class AgentWorker(QObject):
                 break
             self._stop_requested = False
             stop_signal.clear()
+            self.turn_started.emit(prompt)
             self._run_prompt(prompt)
 
     def _run_prompt(self, user_input: str):
@@ -1070,6 +1075,7 @@ class ImageJAgentGUI(QWidget):
         self.worker.note_delivered.connect(self.on_note_delivered)
         self.worker.detached_done.connect(self.on_detached_done)
         self.worker.detached_started.connect(self.on_detached_started)
+        self.worker.turn_started.connect(self.on_turn_started)
         self.worker.notes_requeued.connect(self.on_notes_requeued)
         # The watchdog fires from its own thread; hop onto the GUI thread via the
         # worker's signal rather than touching widgets directly.
@@ -1408,6 +1414,28 @@ class ImageJAgentGUI(QWidget):
         # and runs as one more serialised turn. If the agent is mid-turn right now it
         # simply queues behind it; two graph runs never overlap on one thread.
         self.worker.submit(result)
+
+    def on_turn_started(self, prompt: str):
+        """A turn began that the GUI did not start itself.
+
+        `_execute_agent_query` marks the UI busy when the USER sends something, but it
+        is not the only way a turn begins: a detached script's result and re-queued
+        notes are both put straight on the worker's queue. Those turns used to run
+        with the window still looking idle — blue "Send" instead of purple "Send note",
+        the input in normal mode, and the history panel unlocked mid-run, which is the
+        one thing it is disabled to prevent.
+
+        Guarded on `_busy`, so the ordinary send path — which has already marked itself
+        busy by the time this arrives — does not start a second tracker query.
+        """
+        if getattr(self, "_busy", False):
+            return
+        try:
+            self._tracker_cb.start_query(prompt, thread_id=self.current_thread_id)
+        except Exception:
+            log.exception("start_query failed for a queued turn")
+        self.set_status("Thinking...")
+        self.set_ui_busy(True)
 
     def on_agent_finished(self):
         log.debug("on_agent_finished called")
