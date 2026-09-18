@@ -903,10 +903,17 @@ class ChatHistoryPanel(QWidget):
         layout.addWidget(header)
 
         self.btn_new = QPushButton("New Chat")
+        # The :disabled rule is the point. A stylesheet with a fixed background
+        # overrides Qt's disabled palette, so without it the button still looks
+        # bright green and clickable while the panel is disabled — it swallows the
+        # click and appears broken, rather than reading as unavailable. The panel is
+        # disabled whenever anything is running, including a detached script.
         self.btn_new.setStyleSheet(
-            "background-color: #2ecc71; color: white; font-weight: bold; "
-            "padding: 6px; border-radius: 4px;"
+            "QPushButton { background-color: #2ecc71; color: white; font-weight: bold; "
+            "padding: 6px; border-radius: 4px; }"
+            "QPushButton:disabled { background-color: #cfd8dc; color: #8f9ba1; }"
         )
+        self.btn_new.setToolTip("Disabled while a task is running in this chat")
         self.btn_new.clicked.connect(self.new_chat_requested)
         layout.addWidget(self.btn_new)
 
@@ -919,6 +926,9 @@ class ChatHistoryPanel(QWidget):
             "QListWidget::item:selected:active, "
             "QListWidget::item:selected:!active { background-color: #3498db; color: white; }"
             "QListWidget::item:hover:!selected { background-color: #e8f4fd; }"
+            # Same reason as the button: make "you cannot switch chats right now"
+            # visible rather than only enforced.
+            "QListWidget:disabled { background-color: #f4f6f7; color: #9aa4aa; }"
         )
         self.session_list.itemClicked.connect(self._on_item_clicked)
         layout.addWidget(self.session_list)
