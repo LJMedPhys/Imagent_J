@@ -1168,7 +1168,12 @@ class ImageJAgentGUI(QWidget):
 
     def new_chat(self):
         if self._agent_is_busy():
-            QMessageBox.warning(self, "Agent Busy", "Please wait for the current task to finish.")
+            QMessageBox.warning(
+                self, "Still running",
+                "A task is still running in this chat — its result will arrive here "
+                "when it finishes.\n\nStarting or switching chats now would deliver "
+                "it into the wrong conversation. Wait for it, or press Stop."
+            )
             return
         self._start_new_thread()
 
@@ -1176,7 +1181,12 @@ class ImageJAgentGUI(QWidget):
         if thread_id == self.current_thread_id:
             return
         if self._agent_is_busy():
-            QMessageBox.warning(self, "Agent Busy", "Please wait for the current task to finish.")
+            QMessageBox.warning(
+                self, "Still running",
+                "A task is still running in this chat — its result will arrive here "
+                "when it finishes.\n\nStarting or switching chats now would deliver "
+                "it into the wrong conversation. Wait for it, or press Stop."
+            )
             return
         self._load_thread(thread_id)
 
@@ -1229,7 +1239,18 @@ class ImageJAgentGUI(QWidget):
         # stays enabled while running so mid-run notes can be typed, so it no
         # longer distinguishes the two. Several callers depend on this being
         # right (the Vision/QA toggles and thread switching all refuse mid-run).
-        return getattr(self, "_busy", False)
+        #
+        # A DETACHED script counts as busy. The agent goes idle the moment a run is
+        # handed back, but the run is still going and its result will be delivered
+        # into THIS thread when it finishes. Starting or switching to another chat in
+        # the meantime drops that result into whatever conversation happens to be open
+        # — the context mix-up this predicate exists to prevent.
+        if getattr(self, "_busy", False):
+            return True
+        try:
+            return bool(detached.active())
+        except Exception:
+            return False
 
     def set_status(self, text: str):
         # Remembered, because a detached script keeps running after the agent goes
@@ -1266,26 +1287,30 @@ class ImageJAgentGUI(QWidget):
 
         self.status_label.setText(label)
         self.status_label.setStyleSheet(f"color: {color}; font-weight: bold;")
-        self._sync_stop_button()
+        self._sync_controls()
 
-    def _sync_stop_button(self):
-        """Stop follows the agent OR a detached run — either is something to stop.
+    def _sync_controls(self):
+        """Put every control that depends on "is something running" into one place.
 
-        `run_control.terminate_all` already kills a detached script (it owns the
-        process), so the only thing missing was the button being live once the agent
-        itself had gone idle.
+        `set_ui_busy` only knows about the AGENT, and a detached script outlives it:
+        the turn ends, `set_ui_busy(False)` re-enables everything, and a run with
+        twenty minutes left is left with a greyed Stop and an unlocked chat list.
+        Driving both from `_agent_is_busy()` — which now counts detached runs — keeps
+        them right, and the 1 s ticker calls this so the state also follows a run that
+        STARTS or FINISHES while the agent is idle, which no event would otherwise
+        report.
         """
-        try:
-            bg = bool(detached.active())
-        except Exception:
-            bg = False
-        stoppable = bool(getattr(self, "_busy", False)) or bg
-        self.stop_button.setEnabled(stoppable)
+        running = self._agent_is_busy()
+
+        self.stop_button.setEnabled(running)
         self.stop_button.setStyleSheet(
             "background-color: #e74c3c; color: white; font-weight: bold; padding: 8px;"
-            if stoppable else
+            if running else
             "background-color: #bdc3c7; color: #7f8c8d; font-weight: bold; padding: 8px;"
         )
+        # Switching or starting a chat while a detached run is in flight would deliver
+        # its result into the wrong conversation.
+        self.history_panel.setEnabled(not running)
 
     def set_ui_busy(self, busy: bool):
         self._busy = busy
@@ -1296,7 +1321,8 @@ class ImageJAgentGUI(QWidget):
         self.send_button.setEnabled(True)
         self.input_line.setEnabled(True)
         self.send_button.setText("Send note" if busy else "Send")
-        self.history_panel.setEnabled(not busy)
+        # History panel and Stop are both set by _sync_controls() at the end of this
+        # method, because a detached run keeps them locked after the agent goes idle.
 
         if busy:
             self.stop_button.setStyleSheet(
@@ -1318,7 +1344,7 @@ class ImageJAgentGUI(QWidget):
             )
         # Last word on Stop: the branches above only know about the agent, and a
         # detached script outlives it.
-        self._sync_stop_button()
+        self._sync_controls()
 
     # ------------------------------------------------------------------
     # Agent options
