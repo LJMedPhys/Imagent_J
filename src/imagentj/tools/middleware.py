@@ -3,7 +3,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Annotated, Any, Callable, Optional
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ToolCallRequest, AgentState
@@ -335,11 +335,29 @@ class VisionOptionMiddleware(AgentMiddleware):
 
 # ── Multi-mode routing ──────────────────────────────────────────────────────
 
+def _take_last(old, new):
+    """Reducer: last write wins, and an empty update never clears what is set.
+
+    Without a reducer these are LastValue channels, which refuse two writes in ONE
+    superstep — `InvalidUpdateError: At key "mode": Can receive only one value per
+    step`. That is reachable in normal use: `set_mode` returns a Command updating the
+    key, and if the model emits two `set_mode` calls in a single assistant message
+    (or a turn is stopped mid-flight and the replayed tool calls run alongside the
+    retry) ToolNode executes them in parallel and both write. The run then dies on a
+    mode switch — a bookkeeping detail — rather than on anything to do with the task.
+
+    Order between parallel writes is not guaranteed, so "last" is arbitrary among
+    them. That is fine here: any of the requested modes is a valid state, whereas
+    crashing is not.
+    """
+    return old if new is None else new
+
+
 class AgentModeState(AgentState):
     """State fields for multi-mode operation, persisted per-chat (thread)."""
-    mode: NotRequired[str]                 # "advanced" | "quick" | "education"
-    course_plan: NotRequired[list]         # education: ordered chapter-id playlist
-    course_progress: NotRequired[dict]     # education: {current, completed, notes}
+    mode: NotRequired[Annotated[str, _take_last]]           # advanced | quick | education
+    course_plan: NotRequired[Annotated[list, _take_last]]   # ordered chapter-id playlist
+    course_progress: NotRequired[Annotated[dict, _take_last]]  # {current, completed, notes}
 
 
 @dataclass
