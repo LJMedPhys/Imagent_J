@@ -78,6 +78,43 @@ from imagentj.tracker import UsageMetrics, MetricsSignalBridge, UsageTrackerCall
 
 
 # ---------------------------------------------------------------------------
+# Ablation: remove a disabled feature's tool from EVERY tool list
+# ---------------------------------------------------------------------------
+# Keyed by object identity, so it works wherever a list is built. It has to be
+# module-level and applied everywhere, because the same tool is registered in
+# several independent places: advanced_tools, quick_tools, each subagent's own
+# list, and — the one that defeated the first version of this — the explicit
+# `tools=` list the supervisor is constructed with. Filtering only the first two
+# left `rag_retrieve_docs` reachable, and a "no_rag" run still ran RRF searches.
+# Keyed by the tool's REGISTERED NAME, not by object identity. Identity fails
+# here for an ordinary reason: `plugin_manager` is defined further down this
+# module, so a dict built at import time cannot reference it — and a name also
+# survives a tool being wrapped or rebuilt on the way into a list.
+_ABLATABLE = {
+    "rag_retrieve":    "rag",
+    "recall_concepts": "concepts",
+    "recall":          "code_memory",   # learned recipes/pitfalls, read side
+    "plugin_manager":  "discovery",
+}
+
+
+def ablate(tools):
+    """Drop every tool whose feature is switched off. Safe to apply repeatedly."""
+    from imagentj import config
+    kept, dropped = [], []
+    for tool in tools:
+        name = getattr(tool, "name", None) or getattr(tool, "__name__", "")
+        feature = _ABLATABLE.get(name)
+        if feature is not None and not config.feature(feature):
+            dropped.append(name or feature)
+        else:
+            kept.append(tool)
+    if dropped:
+        print(f"[ablation] tools removed: {', '.join(sorted(set(dropped)))}", flush=True)
+    return kept
+
+
+# ---------------------------------------------------------------------------
 # Shared tracker
 # ---------------------------------------------------------------------------
 
@@ -478,7 +515,7 @@ _watchdog.install()
 def _make_coder_agent(model, name, system_prompt):
     return create_agent(
         model,
-        tools=[
+        tools=ablate([
             internet_search,
             inspect_java_class,
             copy_file,             # seed a new script from any existing file (returns its content)
@@ -489,7 +526,7 @@ def _make_coder_agent(model, name, system_prompt):
             smart_file_reader,
             recall,
             inspect_folder_tree,   # lets agent survey /app/skills/ before reading
-        ],
+        ]),
         system_prompt=system_prompt,
         # ProviderStrategy, not ToolStrategy — see the note on _analyst_agent.
         # ToolStrategy forces tool_choice="required" on every turn, and every
@@ -553,7 +590,7 @@ _analyst_agent = create_agent(
     # now enabled here too (surgical fixes/param tweaks + seeding a script from a template),
     # mirroring the coder. (get_script_info stays off — Supervisor-only verify tool.)
     llm_worker,
-    tools=[
+    tools=ablate([
         inspect_csv_header,
         copy_file,             # seed a new script from any existing file (returns its content)
         save_script,           # full write (from-scratch only)
@@ -565,7 +602,7 @@ _analyst_agent = create_agent(
         # SKILL.md on demand; it ships no reader of its own, so these two supply it.
         smart_file_reader,
         inspect_folder_tree,
-    ],
+    ]),
     system_prompt=python_analyst_prompt,
     # ProviderStrategy for the same reason as plugin_manager: ToolStrategy binds
     # tool_choice="required" on every turn (langchain factory.py, "Force tool use
@@ -1487,30 +1524,8 @@ def init_agent():
     ]
 
     # ── Ablation switches ────────────────────────────────────────────────────
-    # A disabled feature has its tool REMOVED, so the model cannot call it and is
-    # never told it existed. Applied to both tool sets below, because `quick` mode
-    # carries its own list and an ablation must hold in whichever mode the run uses.
-    _ABLATABLE = {
-        id(rag_retrieve_docs): "rag",
-        id(recall_concepts):   "concepts",
-        id(recall):            "code_memory",   # learned recipes/pitfalls, read side
-        id(plugin_manager):    "discovery",
-    }
-
-    def _enabled(tools):
-        kept, dropped = [], []
-        for t in tools:
-            name = _ABLATABLE.get(id(t))
-            if name is not None and not config.feature(name):
-                dropped.append(getattr(t, "name", name))
-            else:
-                kept.append(t)
-        if dropped:
-            print(f"[ablation] tools removed: {', '.join(sorted(set(dropped)))}", flush=True)
-        return kept
-
     print(f"[ablation] {config.features_summary()}", flush=True)
-    advanced_tools = _enabled(advanced_tools)
+    advanced_tools = ablate(advanced_tools)
 
     # ── Tool sets per mode ───────────────────────────────────────────────────
     tutor_tools = [
@@ -1531,15 +1546,19 @@ def init_agent():
         show_in_imagej_gui, close_imagej_windows, rag_retrieve_docs, mkdir_copy,
         check_environment, set_mode,
     ]
-    quick_tools = _enabled(quick_tools)
+    quick_tools = ablate(quick_tools)
     education_tools = tutor_tools + [set_mode] + demo_tools
 
     # Register the UNION of every mode's tools (deduped by identity). The
     # ModeMiddleware only NARROWS what each mode is offered — it cannot inject a
     # tool that isn't registered on the graph.
     def _dedup(tools):
+        # ablate() here as well as on the individual lists: this is the funnel that
+        # both `registered_tools` and the supervisor's explicit `tools=` list pass
+        # through, and the explicit list re-names every tool literally — which is how
+        # a "no_rag" run still reached rag_retrieve_docs.
         seen, out = set(), []
-        for t in tools:
+        for t in ablate(tools):
             if id(t) not in seen:
                 seen.add(id(t))
                 out.append(t)
