@@ -45,7 +45,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # Every switch, and the arm that removes it. "baseline" removes nothing.
-SWITCHES = ["rag", "concepts", "code_memory", "discovery", "vlm", "fast_mode"]
+# Capabilities the baseline HAS and each arm removes -> "no_<x>".
+REMOVABLE = ["rag", "concepts", "code_memory", "discovery", "vlm"]
+
+# Settings the baseline does NOT have and an arm turns ON. Named for what the arm
+# DOES, not for a removal: the baseline runs in advanced mode, so the fast-mode arm
+# switches fast mode on. Calling it "no_fast_mode" read exactly backwards — the arm
+# with that name was the one running in quick mode.
+ADDITIVE = {"fast_mode": {"fast_mode": True}}
+
+SWITCHES = REMOVABLE + list(ADDITIVE)
 
 
 def arms(only=None, baseline="last"):
@@ -57,7 +66,8 @@ def arms(only=None, baseline="last"):
     it shows is then partly ablation and partly running-order. Use
     --isolate-learned to remove the confound entirely.
     """
-    out = [(f"no_{s}", {s: False}) for s in SWITCHES]
+    out = [(f"no_{s}", {s: False}) for s in REMOVABLE]
+    out += [(name, dict(ov)) for name, ov in ADDITIVE.items()]
     out = ([("baseline", {})] + out) if baseline == "first" else (out + [("baseline", {})])
     if only:
         wanted = set(only)
@@ -98,10 +108,13 @@ def render_config(base_path: Path, overrides: dict) -> str:
 
     for key, value in overrides.items():
         if key == "fast_mode":
-            # "remove advanced mode" = run the whole arm in quick mode.
+            # fast_mode=True  -> quick mode (the arm)
+            # fast_mode=False -> advanced (the baseline; also what the file ships as)
+            target = "quick" if value else "advanced"
             for i, l in enumerate(lines):
                 if l.startswith("  mode:") and section_of(i) == "features":
-                    lines[i] = "  mode:        quick      # ablation arm: fast mode"
+                    lines[i] = f"  mode:        {target}".ljust(30) + \
+                               f"# ablation arm: fast mode {'ON' if value else 'off'}"
             continue
         want_key, want_section = TARGET[key]
         hits = 0
