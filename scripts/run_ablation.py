@@ -48,10 +48,17 @@ from pathlib import Path
 SWITCHES = ["rag", "concepts", "code_memory", "discovery", "vlm", "fast_mode"]
 
 
-def arms(only=None):
-    out = [("baseline", {})]
-    for s in SWITCHES:
-        out.append((f"no_{s}", {s: False}))
+def arms(only=None, baseline="last"):
+    """The seven arms, in run order.
+
+    Order is not cosmetic while the learned store is SHARED: every arm writes to
+    it, so a later arm starts with more memory than an earlier one. Putting the
+    baseline last therefore gives it the richest store of all, and any advantage
+    it shows is then partly ablation and partly running-order. Use
+    --isolate-learned to remove the confound entirely.
+    """
+    out = [(f"no_{s}", {s: False}) for s in SWITCHES]
+    out = ([("baseline", {})] + out) if baseline == "first" else (out + [("baseline", {})])
     if only:
         wanted = set(only)
         out = [a for a in out if a[0] in wanted]
@@ -207,6 +214,11 @@ def main():
                         "docker-compose.yml plus docker-compose.spark.yml when that "
                         "override exists — the same pair the normal launch uses.")
     p.add_argument("--only", nargs="+", help="run only these arms (e.g. baseline no_rag)")
+    p.add_argument("--baseline", choices=("first", "last"), default="last",
+                   help="where the all-on baseline runs (default: last)")
+    p.add_argument("--isolate-learned", action="store_true",
+                   help="give every arm its OWN copy of the learned store, so arms "
+                        "cannot see each other's memory and run order stops mattering")
     p.add_argument("--dry-run", action="store_true", help="print the commands and stop")
     args = p.parse_args()
     args.repo = repo
@@ -227,21 +239,34 @@ def main():
         print(f"learned store emptied: {learned}")
     learned.mkdir(parents=True, exist_ok=True)
 
-    selected = arms(args.only)
+    selected = arms(args.only, args.baseline)
     print(f"{len(selected)} arm(s): {', '.join(n for n, _ in selected)}")
-    print(f"learned store (shared, carried forward): {learned}")
+    print("learned store: " + (f"{learned} (a private COPY per arm)"
+          if args.isolate_learned else f"{learned} (SHARED, carried forward)"))
 
     records = []
     for name, overrides in selected:
-        records.append(run_arm(name, overrides, args, learned))
+        if args.isolate_learned:
+            # A private copy per arm, seeded from the same starting store, so no arm
+            # can see what another learned and running order stops mattering.
+            arm_learned = args.results / name / "learned"
+            if arm_learned.exists():
+                shutil.rmtree(arm_learned)
+            shutil.copytree(learned, arm_learned)
+        else:
+            arm_learned = learned
+        records.append(run_arm(name, overrides, args, arm_learned))
 
     summary = args.results / "summary.json"
     summary.write_text(json.dumps({
         "finished": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "instruction": str(args.instruction),
         "learned_root": str(learned),
-        "note": "arms share one learned store and are order-dependent; "
-                "the order below is the order run",
+        "learned_isolated": bool(args.isolate_learned),
+        "note": ("each arm had its own copy of the learned store; order does not matter"
+                 if args.isolate_learned else
+                 "arms SHARE one learned store and are order-dependent; "
+                 "the order below is the order run"),
         "arms": records,
     }, indent=2), encoding="utf-8")
     print(f"\nsummary: {summary}")
