@@ -210,7 +210,22 @@ except ImportError:  # pragma: no cover
 # The supervisor runs in one of several modes (advanced | quick | education),
 # stored per-chat in graph state. "advanced" (or unset) is the full pipeline.
 
-DEFAULT_MODE = "advanced"
+def _default_mode() -> str:
+    """The mode a chat starts in — "advanced" unless a config says otherwise.
+
+    Read from `features.mode` in imagentj_config.yaml so an ablation arm can run
+    the whole study in fast ("quick") mode without a human ticking anything. A
+    `set_mode` call during the run still wins, exactly as before; this only moves
+    the starting point.
+    """
+    try:
+        from .. import config
+        return config.start_mode("advanced")
+    except Exception:
+        return "advanced"
+
+
+DEFAULT_MODE = _default_mode()
 
 
 def _state_mode(state) -> str:

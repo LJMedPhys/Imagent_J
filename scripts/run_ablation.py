@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+"""Leave-one-out ablation runner: one `docker compose run` per arm, no human.
+
+Each arm is the full system with exactly ONE capability removed, plus an all-on
+baseline. Six switches therefore give seven arms, not the 64 a full factorial
+would need — the difference between roughly seven hours and three days.
+
+An arm is described entirely by a generated `imagentj_config.yaml`; nothing is
+ever commented in or out of the source. `config.py` resolves `$IMAGENTJ_CONFIG`
+before anything else, so pointing that at the generated file is all it takes.
+
+The prompt comes from `instruction.txt` in the arm's output directory, which is
+what the existing benchmark auto-pilot already reads (`benchmark_gui_hooks`).
+Nothing here needs a person: the container starts, works, writes `result.json`
+and exits.
+
+LEARNED MEMORY IS SHARED AND CARRIED FORWARD ON PURPOSE
+------------------------------------------------------
+`--learned-root` is one directory reused by every arm, so what one run learns is
+available to the next — the way the system actually behaves in use. Start it
+empty for the first study and it accumulates from there. Pass a fresh path (or
+`--fresh-learned`) when an arm must start from nothing.
+
+That makes arms ORDER-DEPENDENT, which is a real limitation and the reason the
+order actually run is recorded in `summary.json`. If you later want arms to be
+independent, give each one its own `--learned-root`.
+
+Usage
+-----
+    scripts/run_ablation.py --instruction task.txt --input-dir ./images \\
+                            --results ./ablation_results
+
+    # just one arm, e.g. re-run the baseline
+    scripts/run_ablation.py ... --only baseline
+"""
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+# Every switch, and the arm that removes it. "baseline" removes nothing.
+SWITCHES = ["rag", "concepts", "code_memory", "discovery", "vlm", "fast_mode"]
+
+
+def arms(only=None):
+    out = [("baseline", {})]
+    for s in SWITCHES:
+        out.append((f"no_{s}", {s: False}))
+    if only:
+        wanted = set(only)
+        out = [a for a in out if a[0] in wanted]
+        missing = wanted - {a[0] for a in out}
+        if missing:
+            sys.exit(f"unknown arm(s): {', '.join(sorted(missing))}")
+    return out
+
+
+def render_config(base_path: Path, overrides: dict) -> str:
+    """The shipped config with this arm's switches applied.
+
+    Edited as TEXT rather than rewritten from a parsed dict, so the file keeps
+    its comments — the generated config is the record of what an arm was, and a
+    bare dump of keys is much harder to read six weeks later.
+    """
+    # (key, section) — the SECTION matters. "vlm" appears three times in this file:
+    # the model name under `models:`, its thinking budget under `reasoning_effort:`,
+    # and the on/off flag under `agents:`. Matching on the key alone rewrote all
+    # three, so the no_vlm arm would have run with a corrupted models block.
+    TARGET = {
+        "rag":         ("rag",         "features"),
+        "concepts":    ("concepts",    "features"),
+        "code_memory": ("code_memory", "features"),
+        "discovery":   ("discovery",   "features"),
+        "vlm":         ("vlm",         "agents"),
+    }
+    lines = base_path.read_text(encoding="utf-8").split("\n")
+
+    def section_of(index: int) -> str:
+        """The nearest top-level `key:` above this line."""
+        for j in range(index, -1, -1):
+            l = lines[j]
+            if l and not l.startswith((" ", "\t", "#")) and l.rstrip().endswith(":"):
+                return l.split(":", 1)[0].strip()
+        return ""
+
+    for key, value in overrides.items():
+        if key == "fast_mode":
+            # "remove advanced mode" = run the whole arm in quick mode.
+            for i, l in enumerate(lines):
+                if l.startswith("  mode:") and section_of(i) == "features":
+                    lines[i] = "  mode:        quick      # ablation arm: fast mode"
+            continue
+        want_key, want_section = TARGET[key]
+        hits = 0
+        for i, l in enumerate(lines):
+            stripped = l.strip()
+            if not stripped.startswith(f"{want_key}:"):
+                continue
+            if section_of(i) != want_section:
+                continue
+            comment = l.split("#", 1)[1].strip() if "#" in l else ""
+            indent = l[:len(l) - len(l.lstrip())]
+            body = f"{indent}{want_key}:".ljust(len(indent) + 14) + \
+                   ("true" if value else "false")
+            lines[i] = f"{body.ljust(30)}# {comment}" if comment else body
+            hits += 1
+        if hits != 1:
+            # Never guess here: a miss means the arm silently ran unablated, and a
+            # double hit means something else was overwritten. Both invalidate it.
+            raise SystemExit(
+                f"config edit for {key!r} matched {hits} line(s) under "
+                f"{want_section!r} — expected exactly 1. Refusing to generate a "
+                f"config that may not mean what the arm name says."
+            )
+    return "\n".join(lines)
+
+
+def run_arm(name, overrides, args, learned_root: Path) -> dict:
+    out_dir = args.results / name
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # The auto-pilot reads the prompt from here.
+    shutil.copy(args.instruction, out_dir / "instruction.txt")
+
+    cfg_path = out_dir / "imagentj_config.yaml"
+    cfg_path.write_text(render_config(args.base_config, overrides), encoding="utf-8")
+
+    env = {
+        "IMAGENTJ_CONFIG":       "/benchmark/output/imagentj_config.yaml",
+        "BENCHMARK_MODE":        "true",
+        "BENCHMARK_INTERACTIVE": "false",
+        "BENCHMARK_INPUT_DIR":   "/benchmark/input",
+        "BENCHMARK_OUTPUT_DIR":  "/benchmark/output",
+        "LEARNED_ROOT":          "/app/data/learned",
+    }
+    cmd = ["docker", "compose", "run", "--rm"]
+    for k, v in env.items():
+        cmd += ["-e", f"{k}={v}"]
+    cmd += [
+        "-v", f"{args.input_dir.resolve()}:/benchmark/input:ro",
+        "-v", f"{out_dir.resolve()}:/benchmark/output",
+        "-v", f"{learned_root.resolve()}:/app/data/learned",
+        args.service,
+    ]
+
+    print(f"\n{'=' * 72}\n  ARM: {name}   "
+          f"({', '.join(f'{k}={v}' for k, v in overrides.items()) or 'nothing removed'})"
+          f"\n{'=' * 72}")
+    print("  " + " ".join(cmd))
+    if args.dry_run:
+        return {"arm": name, "skipped": "dry-run"}
+
+    started = time.time()
+    proc = subprocess.run(cmd, cwd=args.repo)
+    took = time.time() - started
+
+    result_file = out_dir / "result.json"
+    record = {
+        "arm": name,
+        "overrides": overrides,
+        "exit_code": proc.returncode,
+        "seconds": round(took, 1),
+        "started": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "result_json": result_file.exists(),
+    }
+    if result_file.exists():
+        try:
+            record["result"] = json.loads(result_file.read_text(encoding="utf-8"))
+        except Exception as exc:
+            record["result_error"] = str(exc)
+    else:
+        # Worth saying loudly: an arm with no result.json produced no measurement,
+        # and a study that quietly skips it is comparing different sample sizes.
+        print(f"  !! {name}: no result.json — this arm produced NO measurement")
+    print(f"  {name}: exit={proc.returncode} in {took / 60:.1f} min")
+    return record
+
+
+def main():
+    repo = Path(__file__).resolve().parents[1]
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--instruction", type=Path, required=True, help="the task prompt (a .txt)")
+    p.add_argument("--input-dir", type=Path, required=True, help="folder of input images")
+    p.add_argument("--results", type=Path, required=True, help="where arm folders are written")
+    p.add_argument("--base-config", type=Path, default=repo / "imagentj_config.yaml")
+    p.add_argument("--learned-root", type=Path, default=None,
+                   help="shared learned-memory store (default: <results>/learned)")
+    p.add_argument("--fresh-learned", action="store_true",
+                   help="empty the learned store before starting")
+    p.add_argument("--service", default="imagentj", help="docker compose service name")
+    p.add_argument("--only", nargs="+", help="run only these arms (e.g. baseline no_rag)")
+    p.add_argument("--dry-run", action="store_true", help="print the commands and stop")
+    args = p.parse_args()
+    args.repo = repo
+
+    for path in (args.instruction, args.input_dir, args.base_config):
+        if not path.exists():
+            sys.exit(f"not found: {path}")
+
+    learned = args.learned_root or (args.results / "learned")
+    if args.fresh_learned and learned.exists():
+        shutil.rmtree(learned)
+        print(f"learned store emptied: {learned}")
+    learned.mkdir(parents=True, exist_ok=True)
+
+    selected = arms(args.only)
+    print(f"{len(selected)} arm(s): {', '.join(n for n, _ in selected)}")
+    print(f"learned store (shared, carried forward): {learned}")
+
+    records = []
+    for name, overrides in selected:
+        records.append(run_arm(name, overrides, args, learned))
+
+    summary = args.results / "summary.json"
+    summary.write_text(json.dumps({
+        "finished": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "instruction": str(args.instruction),
+        "learned_root": str(learned),
+        "note": "arms share one learned store and are order-dependent; "
+                "the order below is the order run",
+        "arms": records,
+    }, indent=2), encoding="utf-8")
+    print(f"\nsummary: {summary}")
+
+    missing = [r["arm"] for r in records if not r.get("result_json") and "skipped" not in r]
+    if missing:
+        print(f"arms with NO result.json: {', '.join(missing)}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

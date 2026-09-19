@@ -126,3 +126,53 @@ def use_vlm() -> bool:
 def use_qa() -> bool:
     """True when the QA reporter should run (benchmark auto-pilot)."""
     return _agent_flag("qa", False)
+
+
+# ---------------------------------------------------------------------------
+# Feature switches — for ablation studies
+# ---------------------------------------------------------------------------
+# Each switch removes a capability from the agent, so one run of the study is
+# described entirely by a config file and nothing is ever commented in or out.
+#
+# They default to TRUE: a config without a `features:` block is the full system,
+# so normal use is unaffected and a typo'd key cannot silently disable something.
+#
+# The switch drops the TOOL from the agent's toolset rather than making the tool
+# refuse. A refusing tool still costs a turn, and puts "I tried X but it is
+# disabled" into the transcript — which is itself a change in behaviour, and the
+# wrong one to be measuring.
+
+def feature(name: str, default: bool = True) -> bool:
+    """True when feature ``name`` is enabled (default: on)."""
+    block = _CFG.get("features")
+    if not isinstance(block, dict):
+        return default
+    val = block.get(name, default)
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        return val.strip().lower() in _TRUE
+    return default
+
+
+def start_mode(default: str = "advanced") -> str:
+    """Mode the chat starts in: "advanced" (full pipeline) or "quick" (fast)."""
+    block = _CFG.get("features")
+    val = block.get("mode") if isinstance(block, dict) else None
+    if isinstance(val, str) and val.strip().lower() in ("advanced", "quick", "education"):
+        return val.strip().lower()
+    return default
+
+
+def features_summary() -> str:
+    """One line naming every switch and its value, for the run log.
+
+    Printed at startup so a result file can always be tied back to the exact
+    configuration that produced it — the thing that is easiest to lose track of
+    over a few dozen ablation runs.
+    """
+    names = ("rag", "concepts", "code_memory", "discovery")
+    parts = [f"{n}={'on' if feature(n) else 'OFF'}" for n in names]
+    parts.append(f"vlm={'on' if use_vlm() else 'OFF'}")
+    parts.append(f"mode={start_mode()}")
+    return "features: " + "  ".join(parts)

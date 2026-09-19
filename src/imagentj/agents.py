@@ -1486,6 +1486,32 @@ def init_agent():
         set_ledger_metadata,
     ]
 
+    # ── Ablation switches ────────────────────────────────────────────────────
+    # A disabled feature has its tool REMOVED, so the model cannot call it and is
+    # never told it existed. Applied to both tool sets below, because `quick` mode
+    # carries its own list and an ablation must hold in whichever mode the run uses.
+    _ABLATABLE = {
+        id(rag_retrieve_docs): "rag",
+        id(recall_concepts):   "concepts",
+        id(recall):            "code_memory",   # learned recipes/pitfalls, read side
+        id(plugin_manager):    "discovery",
+    }
+
+    def _enabled(tools):
+        kept, dropped = [], []
+        for t in tools:
+            name = _ABLATABLE.get(id(t))
+            if name is not None and not config.feature(name):
+                dropped.append(getattr(t, "name", name))
+            else:
+                kept.append(t)
+        if dropped:
+            print(f"[ablation] tools removed: {', '.join(sorted(set(dropped)))}", flush=True)
+        return kept
+
+    print(f"[ablation] {config.features_summary()}", flush=True)
+    advanced_tools = _enabled(advanced_tools)
+
     # ── Tool sets per mode ───────────────────────────────────────────────────
     tutor_tools = [
         list_curriculum, load_chapter, load_track, show_figure, list_sample_images,
@@ -1505,6 +1531,7 @@ def init_agent():
         show_in_imagej_gui, close_imagej_windows, rag_retrieve_docs, mkdir_copy,
         check_environment, set_mode,
     ]
+    quick_tools = _enabled(quick_tools)
     education_tools = tutor_tools + [set_mode] + demo_tools
 
     # Register the UNION of every mode's tools (deduped by identity). The

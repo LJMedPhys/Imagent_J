@@ -56,6 +56,26 @@ reasoning_effort:
 #             judgement calls that extra thinking would improve.
 # Both are now overridable here if you want to measure the effect.
 
+# ── Feature switches (ablation study) ───────────────────────────────────────
+# Every switch defaults to TRUE, so omitting this block — or mistyping a key —
+# gives the full system rather than silently disabling something.
+#
+# A disabled feature has its TOOL removed from the agent's toolset: the model
+# cannot call it and is never told it existed. A tool that merely refused would
+# still cost a turn and would narrate its own absence, which is a behaviour
+# change of its own and the wrong thing to be measuring.
+#
+# Note what these do NOT switch off. `code_memory: false` removes the recall
+# side; the Librarian still WRITES to LEARNED_ROOT after a green run. To start a
+# run from an empty store, point LEARNED_ROOT at a fresh directory — which is
+# what scripts/run_ablation.py does — rather than deleting anything.
+features:
+  rag:         true      # rag_retrieve_docs — documentation retrieval
+  concepts:    true      # recall_concepts — the concept database
+  code_memory: true      # recall — learned recipes / pitfalls
+  discovery:   true      # plugin_manager — plugin discovery + routing
+  mode:        advanced  # "advanced" (full pipeline) or "quick" (fast mode)
+
 # Optional agents. These drive BENCHMARK (auto-pilot) runs, where there is no
 # human to click the on-screen toggles. In an interactive GUI session the
 # "Vision Judge" / "QA Agent" checkboxes remain the live control.
