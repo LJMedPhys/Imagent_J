@@ -1177,7 +1177,7 @@ class ImageJAgentGUI(QWidget):
     # ------------------------------------------------------------------
 
     def new_chat(self):
-        if self._agent_is_busy():
+        if self._anything_running():
             QMessageBox.warning(
                 self, "Still running",
                 "A task is still running in this chat — its result will arrive here "
@@ -1190,7 +1190,7 @@ class ImageJAgentGUI(QWidget):
     def switch_thread(self, thread_id: str):
         if thread_id == self.current_thread_id:
             return
-        if self._agent_is_busy():
+        if self._anything_running():
             QMessageBox.warning(
                 self, "Still running",
                 "A task is still running in this chat — its result will arrive here "
@@ -1250,12 +1250,22 @@ class ImageJAgentGUI(QWidget):
         # longer distinguishes the two. Several callers depend on this being
         # right (the Vision/QA toggles and thread switching all refuse mid-run).
         #
-        # A DETACHED script counts as busy. The agent goes idle the moment a run is
-        # handed back, but the run is still going and its result will be delivered
-        # into THIS thread when it finishes. Starting or switching to another chat in
-        # the meantime drops that result into whatever conversation happens to be open
-        # — the context mix-up this predicate exists to prevent.
-        if getattr(self, "_busy", False):
+        # STRICTLY the agent's own loop. A detached script does NOT count: the agent
+        # is free, and `on_send` uses this to decide between answering and parking a
+        # note. Counting background runs here parked every message as a note that
+        # could not be read until the script finished — the exact opposite of what
+        # detaching is for. Use `_anything_running()` for "is anything in flight".
+        return getattr(self, "_busy", False)
+
+    def _anything_running(self) -> bool:
+        """The agent is mid-turn, OR a detached script is still going.
+
+        The wider question, and the one that matters for the chat LIST: a detached
+        run delivers its result into THIS thread when it finishes, so starting or
+        switching chats meanwhile drops it into whatever conversation is open. It is
+        also what keeps Stop live once the agent has gone idle.
+        """
+        if self._agent_is_busy():
             return True
         try:
             return bool(detached.active())
@@ -1305,12 +1315,12 @@ class ImageJAgentGUI(QWidget):
         `set_ui_busy` only knows about the AGENT, and a detached script outlives it:
         the turn ends, `set_ui_busy(False)` re-enables everything, and a run with
         twenty minutes left is left with a greyed Stop and an unlocked chat list.
-        Driving both from `_agent_is_busy()` — which now counts detached runs — keeps
+        Driving both from `_anything_running()` — which now counts detached runs — keeps
         them right, and the 1 s ticker calls this so the state also follows a run that
         STARTS or FINISHES while the agent is idle, which no event would otherwise
         report.
         """
-        running = self._agent_is_busy()
+        running = self._anything_running()
 
         self.stop_button.setEnabled(running)
         self.stop_button.setStyleSheet(
