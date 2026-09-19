@@ -139,7 +139,14 @@ def run_arm(name, overrides, args, learned_root: Path) -> dict:
         "BENCHMARK_OUTPUT_DIR":  "/benchmark/output",
         "LEARNED_ROOT":          "/app/data/learned",
     }
-    cmd = ["docker", "compose", "run", "--rm"]
+    # The -f files must come BEFORE the subcommand, and every one of them that the
+    # normal launch uses has to be here too: on the Spark the override carries the
+    # GPU reservation, the HOST_UID build args and the unattended settings, so
+    # leaving it out would quietly run a differently-configured container.
+    cmd = ["docker", "compose"]
+    for f in args.compose_file:
+        cmd += ["-f", str(f)]
+    cmd += ["run", "--rm"]
     for k, v in env.items():
         cmd += ["-e", f"{k}={v}"]
     cmd += [
@@ -195,12 +202,22 @@ def main():
     p.add_argument("--fresh-learned", action="store_true",
                    help="empty the learned store before starting")
     p.add_argument("--service", default="imagentj", help="docker compose service name")
+    p.add_argument("--compose-file", "-f", type=Path, action="append", default=None,
+                   help="compose file, repeatable and order-sensitive. Defaults to "
+                        "docker-compose.yml plus docker-compose.spark.yml when that "
+                        "override exists — the same pair the normal launch uses.")
     p.add_argument("--only", nargs="+", help="run only these arms (e.g. baseline no_rag)")
     p.add_argument("--dry-run", action="store_true", help="print the commands and stop")
     args = p.parse_args()
     args.repo = repo
 
-    for path in (args.instruction, args.input_dir, args.base_config):
+    if not args.compose_file:
+        args.compose_file = [repo / "docker-compose.yml"]
+        spark = repo / "docker-compose.spark.yml"
+        if spark.is_file():
+            args.compose_file.append(spark)
+
+    for path in (args.instruction, args.input_dir, args.base_config, *args.compose_file):
         if not path.exists():
             sys.exit(f"not found: {path}")
 
