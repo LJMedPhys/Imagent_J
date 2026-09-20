@@ -742,15 +742,12 @@ def _do_finish_in_background(gui, message: str = "", shutdown: bool = False,
             # so the container log at least records why the run ended.
             _log.exception("Benchmark: _collect_and_finish raised")
 
-        # Try to show completion message (may fail if widgets are gone)
-        try:
-            QTimer.singleShot(0, lambda: gui.chat_scroll.add_message(
-                "system",
-                "✅ Benchmark finished — outputs collected. "
-                "The container will shut down in a moment.",
-            ))
-        except (RuntimeError, Exception):
-            pass
+        # This runs on a timer thread, so it must not touch a widget. The QTimer that
+        # used to carry this message was armed from here and silently dropped — the
+        # chat line never appeared, and the attempt produced the cross-thread warning
+        # that made three stalls look like a Qt problem. Nobody is watching the GUI in
+        # an auto-pilot run anyway; the log is the audience.
+        _say("benchmark finished — outputs collected; shutting the container down")
 
         if shutdown:
             # Wait for result.json to flush to host filesystem, then clean up
@@ -846,12 +843,20 @@ def _hook_auto_finish(gui) -> None:
             )
             finish_message = "Auto-pilot session completed."
 
-        # Give the agent's last file writes a moment to flush
+        # Give the agent's last file writes a moment to flush.
+        #
+        # A threading.Timer, NOT QTimer.singleShot. The collect and the exit are plain
+        # Python — they never touch a widget — so nothing here needs the Qt event loop,
+        # and depending on it is a liability: a QTimer armed from a thread whose loop
+        # never spins is silently dropped, taking result.json with it. That is exactly
+        # how an arm came to print "collect scheduled in 10 s" and then sit for ever.
+        # A threading.Timer fires on whatever thread arms it.
         _say("collect scheduled in 10 s")
-        QTimer.singleShot(10000, lambda: _do_finish_in_background(
-            gui, finish_message, shutdown=True,
-            success=not had_error, error=error_msg,
-        ))
+        timer = threading.Timer(10.0, _do_finish_in_background, args=(gui, finish_message),
+                                kwargs={"shutdown": True, "success": not had_error,
+                                        "error": error_msg})
+        timer.daemon = True
+        timer.start()
 
     gui.on_agent_finished = _patched_on_finished
 

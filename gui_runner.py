@@ -1078,13 +1078,23 @@ class ImageJAgentGUI(QWidget):
 
         self.thread.started.connect(self.worker.start)
         self.worker.event_received.connect(self.handle_event)
-        # Late-bound on purpose. benchmark_gui_hooks.setup_benchmark_gui() REPLACES
+        # Late-bound on purpose, and a real SLOT rather than a lambda.
+        #
+        # Late-bound because benchmark_gui_hooks.setup_benchmark_gui() REPLACES
         # gui.on_agent_finished to schedule the collect that writes result.json, and it
         # runs after this line. Connecting the bound method here would capture the
         # original, so the patch never fired and a benchmark run produced no
-        # result.json at all — measured across seven ablation arms, every one exit 0
-        # after minutes of real work, none with a result file.
-        self.worker.finished.connect(lambda: self.on_agent_finished())
+        # result.json at all — measured across seven ablation arms.
+        #
+        # A slot rather than a lambda because a lambda has no receiver QObject, so Qt
+        # has no thread affinity to queue to and falls back to a DIRECT connection:
+        # the handler then runs on the WORKER thread, inside finished.emit(). That
+        # builds chat widgets on the wrong thread, and — the part that actually broke
+        # the benchmark — makes the QTimer the auto-finish arms belong to a thread
+        # that is parked in queue.get() and never spins an event loop, so the collect
+        # was scheduled and never ran. Binding to a method of `self` restores
+        # AutoConnection, which sees two threads and queues onto the GUI one.
+        self.worker.finished.connect(self._dispatch_agent_finished)
         self.worker.error.connect(self.on_agent_error)
         self.worker.stop_report.connect(self.on_stop_report)
         self.worker.watchdog_notice.connect(self.on_watchdog_notice)
@@ -1488,6 +1498,17 @@ class ImageJAgentGUI(QWidget):
             log.exception("start_query failed for a queued turn")
         self.set_status("Thinking...")
         self.set_ui_busy(True)
+
+    @Slot()
+    def _dispatch_agent_finished(self):
+        """Run whatever `on_agent_finished` currently is, on the GUI thread.
+
+        The indirection is what lets the attribute stay replaceable (the benchmark
+        hook swaps it after __init__) while the CONNECTION still points at a bound
+        method of this QObject — which is what makes Qt queue it. See the connect
+        site for what a lambda here cost.
+        """
+        self.on_agent_finished()
 
     def on_agent_finished(self):
         log.debug("on_agent_finished called")
