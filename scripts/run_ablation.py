@@ -158,6 +158,61 @@ def _writable(path: Path) -> Path:
     return path
 
 
+# Learned-memory files that are ACCUMULATED run history, emptied for every arm so
+# no study starts with what a previous one happened to learn. CORE is included at
+# the user's instruction: every arm begins with no learned floor at all.
+_EMPTY_FOR_EVERY_ARM = (
+    "learned/pitfalls/CORE.Groovy.md", "learned/pitfalls/CORE.Python.md",
+    "learned/recipes/CORE.Groovy.md",  "learned/recipes/CORE.Python.md",
+    "learned/pitfalls/Groovy.md",      "learned/pitfalls/Python.md",
+    "learned/recipes/Groovy.md",       "learned/recipes/Python.md",
+    "learned/log.md",
+)
+
+
+def seed_arm_data(arm_dir: Path, repo: Path) -> None:
+    """Give the arm a pristine /app/data, then empty the learned floor.
+
+    An EMPTY /app/data is not a clean slate — `data/` ships content the app reads:
+    `environment/container_snapshot.md` (699 lines) is what check_environment
+    returns, and `learned/concepts/library.md` (723 lines) is the FIXED, curated
+    concept library that recall_concepts retrieves from. Starting an arm with
+    neither silently disables the concepts feature in EVERY arm, which would make
+    the no_concepts comparison measure nothing, and leaves the agent unable to
+    discover what is installed.
+
+    So seed from the git-TRACKED data/ at HEAD — the shipped state, not the working
+    copy, which carries whatever previous runs accumulated — and then blank only the
+    learned floor. The concept library and the container snapshot stay.
+    """
+    tar = subprocess.run(["git", "archive", "HEAD", "data"], cwd=repo,
+                         capture_output=True)
+    if tar.returncode != 0:
+        sys.exit(f"could not read the tracked data/ skeleton: "
+                 f"{tar.stderr.decode('utf-8', 'replace')[:200]}")
+    extract = subprocess.run(["tar", "-x", "--strip-components=1", "-C", str(arm_dir)],
+                             input=tar.stdout, capture_output=True)
+    if extract.returncode != 0:
+        sys.exit(f"could not unpack the data/ skeleton: "
+                 f"{extract.stderr.decode('utf-8', 'replace')[:200]}")
+
+    emptied = 0
+    for rel in _EMPTY_FOR_EVERY_ARM:
+        f = arm_dir / rel
+        if f.exists():
+            f.write_text("", encoding="utf-8")
+            emptied += 1
+    _writable(arm_dir)
+    for sub in arm_dir.rglob("*"):
+        if sub.is_dir():
+            try:
+                sub.chmod(0o777)
+            except OSError:
+                pass
+    print(f"    seeded from tracked data/ (concept library + container snapshot kept; "
+          f"{emptied} learned file(s) emptied)")
+
+
 def run_arm(name, overrides, args, learned_root: Path) -> dict:
     # ONE directory per arm, serving as both /app/data and /benchmark/output. The
     # app needs /app/data for projects, chats and checkpoints, but nothing requires
@@ -168,6 +223,7 @@ def run_arm(name, overrides, args, learned_root: Path) -> dict:
     # one task reused the same workspace name and overwrote each other, leaving
     # three project folders for seven arms.
     out_dir = _writable(args.results / name)
+    seed_arm_data(out_dir, args.repo)
 
     # The auto-pilot reads the prompt from here.
     shutil.copy(args.instruction, out_dir / "instruction.txt")
@@ -190,7 +246,8 @@ def run_arm(name, overrides, args, learned_root: Path) -> dict:
     cmd = ["docker", "compose"]
     for f in args.compose_file:
         cmd += ["-f", str(f)]
-    cmd += ["run", "--rm"]
+    container = f"imagentj_abl_{name}"
+    cmd += ["run", "--rm", "--name", container]
     for k, v in env.items():
         cmd += ["-e", f"{k}={v}"]
     cmd += [
@@ -214,14 +271,28 @@ def run_arm(name, overrides, args, learned_root: Path) -> dict:
         return {"arm": name, "skipped": "dry-run"}
 
     started = time.time()
-    proc = subprocess.run(cmd, cwd=args.repo, env=run_env)
+    timed_out = False
+    try:
+        proc = subprocess.run(cmd, cwd=args.repo, env=run_env,
+                              timeout=args.arm_timeout * 60 if args.arm_timeout else None)
+        returncode = proc.returncode
+    except subprocess.TimeoutExpired:
+        # Killing the compose CLIENT does not stop the container it started, so the
+        # arm would keep running and the next one would contend for the same shared
+        # mounts. Remove it by name — which is why the run is named at all.
+        timed_out = True
+        returncode = None
+        print(f"  !! {name}: exceeded {args.arm_timeout} min — killing {container}")
+        subprocess.run(["docker", "rm", "-f", container],
+                       cwd=args.repo, capture_output=True)
     took = time.time() - started
 
     result_file = out_dir / "result.json"
     record = {
         "arm": name,
         "overrides": overrides,
-        "exit_code": proc.returncode,
+        "exit_code": returncode,
+        "timed_out": timed_out,
         "seconds": round(took, 1),
         "started": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "result_json": result_file.exists(),
@@ -235,7 +306,7 @@ def run_arm(name, overrides, args, learned_root: Path) -> dict:
         # Worth saying loudly: an arm with no result.json produced no measurement,
         # and a study that quietly skips it is comparing different sample sizes.
         print(f"  !! {name}: no result.json — this arm produced NO measurement")
-    print(f"  {name}: exit={proc.returncode} in {took / 60:.1f} min")
+    print(f"  {name}: exit={returncode}{' TIMED OUT' if timed_out else ''} in {took / 60:.1f} min")
     return record
 
 
@@ -262,6 +333,10 @@ def main():
     p.add_argument("--isolate-learned", action="store_true",
                    help="give every arm its OWN copy of the learned store, so arms "
                         "cannot see each other's memory and run order stops mattering")
+    p.add_argument("--arm-timeout", type=float, default=90,
+                   help="minutes before an arm is killed and the study moves on "
+                        "(0 = wait for ever). One wedged arm should not cost the "
+                        "whole run.")
     p.add_argument("--dry-run", action="store_true", help="print the commands and stop")
     args = p.parse_args()
     args.repo = repo
