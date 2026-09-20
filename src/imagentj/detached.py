@@ -72,6 +72,24 @@ __all__ = [
 # ordinary quick script never pays for a second model turn.
 DETACH_AFTER_SECONDS = float(os.environ.get("IMAGENTJ_DETACH_AFTER", "10"))
 
+# Benchmark mode waits instead of detaching (see `disabled`), and a wait needs two
+# things detaching gave it for free: a VOICE and an END.
+#
+# The voice is the heartbeat. A waited run prints nothing between "starting" and
+# "finished", so a 40-minute segmentation and a wedged subprocess produce byte-identical
+# container logs, and the only way to tell them apart is to attach to the container and
+# read /proc. That is how an arm came to sit for 20 minutes with nobody able to say
+# whether it was working.
+#
+# The end is the cap. run_control's own backstop is 2 h, deliberately generous because
+# it must not kill a legitimate overnight job in interactive use. An unattended ablation
+# is the opposite case: nobody is watching, every arm blocks the next one, and a run
+# that is genuinely going to need two hours has already invalidated the comparison. So
+# benchmark runs get their own, much tighter cap, and blowing it FAILS THE SCRIPT rather
+# than the whole arm — the agent is told what happened and can still finish and report.
+BENCHMARK_SCRIPT_TIMEOUT = float(os.environ.get("IMAGENTJ_BENCHMARK_SCRIPT_TIMEOUT", "1800"))
+BENCHMARK_HEARTBEAT = float(os.environ.get("IMAGENTJ_BENCHMARK_HEARTBEAT", "60"))
+
 
 def disabled() -> bool:
     """True when nothing may detach — a benchmark / auto-pilot run.
@@ -182,25 +200,12 @@ def _took(seconds: float) -> str:
     return f"{mins}m {secs:02d}s" if mins else f"{secs}s"
 
 
-def run_or_detach(label: str, work: Callable[[], str],
-                  wait: Optional[float] = None, reason: str = "",
-                  interactive: str = "") -> str:
-    """Run `work()`, waiting up to `wait` seconds; detach it if it outlasts that.
+def _spawn(label: str, work: Callable[[], str]) -> tuple[Dict[str, str], threading.Event]:
+    """Start `work()` on a daemon thread; returns its result box and done flag.
 
-    Returns either the real output (finished in time — the caller cannot tell this
-    module was involved) or a receipt, with the output delivered later through the
-    completion notifier.
-
-    `work` is the ordinary blocking execution the non-detached path would have made,
-    so a detached run and a waited one do the same thing; only the waiting moves.
+    The thread carries the run's label because a thread dump is how a stuck
+    container gets diagnosed, and "Thread-7" says nothing there.
     """
-    if disabled():
-        # Wait it out, exactly as before detaching existed.
-        print(f"[detach] benchmark mode — waiting for {label} instead of detaching",
-              flush=True)
-        return work()
-    wait = DETACH_AFTER_SECONDS if wait is None else wait
-    started = time.time()
     box: Dict[str, str] = {}
     done = threading.Event()
 
@@ -214,6 +219,98 @@ def run_or_detach(label: str, work: Callable[[], str],
             done.set()
 
     threading.Thread(target=_run, name=f"run-{label[:24]}", daemon=True).start()
+    return box, done
+
+
+def _live_progress() -> str:
+    """One line describing what the owned child processes are actually doing.
+
+    Distinguishes "slow" from "wedged", which is the whole question a heartbeat is
+    asked to answer: `silent_for` is the stuck-detector, and the tail is the evidence.
+    """
+    try:
+        from .run_control import active_runs
+        handles = active_runs()
+    except Exception:
+        return "no run registry"
+    if not handles:
+        return "no child process registered (work is in-process)"
+    bits = []
+    for h in handles:
+        try:
+            tail = (h.output_tail(200) or "").strip().replace("\n", " ⏎ ")
+            bits.append(f"run#{h.run_id} {h.language} elapsed={_took(h.elapsed)} "
+                        f"silent={_took(h.silent_for())} | …{tail[-160:]}")
+        except Exception:
+            bits.append(f"run#{getattr(h, 'run_id', '?')} (unreadable)")
+    return " ;; ".join(bits)
+
+
+def _wait_bounded(label: str, work: Callable[[], str]) -> str:
+    """Benchmark path: wait for `work()`, but talk while waiting and give up eventually."""
+    started = time.time()
+    box, done = _spawn(label, work)
+    print(f"[detach] benchmark mode — waiting for {label} instead of detaching "
+          f"(cap {_took(BENCHMARK_SCRIPT_TIMEOUT)}, heartbeat every "
+          f"{_took(BENCHMARK_HEARTBEAT)})", flush=True)
+
+    while not done.wait(BENCHMARK_HEARTBEAT):
+        elapsed = time.time() - started
+        print(f"[benchmark] still waiting on {label} — {_took(elapsed)} elapsed; "
+              f"{_live_progress()}", flush=True)
+        if elapsed < BENCHMARK_SCRIPT_TIMEOUT:
+            continue
+
+        # Over the cap. Kill the child process group and let `work()` unwind
+        # normally — it returns the run's own stopped-report, which is far more
+        # useful to the agent than anything synthesised here.
+        print(f"[benchmark] {label} exceeded the {_took(BENCHMARK_SCRIPT_TIMEOUT)} "
+              f"benchmark cap — terminating it", flush=True)
+        try:
+            from .run_control import terminate_all
+            terminate_all(reason=f"Exceeded the {int(BENCHMARK_SCRIPT_TIMEOUT)}s "
+                                 f"benchmark script cap", by="watchdog")
+        except Exception as exc:
+            print(f"[benchmark] terminate_all failed: {exc!r}", flush=True)
+
+        if done.wait(60):
+            return box.get("out", "")
+        # The worker did not come back even after the kill. Returning is still
+        # right: the agent gets a turn and the arm can finish and be measured,
+        # which is the whole point of having a cap.
+        print(f"[benchmark] {label} did not unwind after termination — "
+              f"reporting it as failed and moving on", flush=True)
+        return (
+            f"SUMMARY: FAILED (timed out) — {label}\n"
+            f"STATUS: ERROR\n"
+            f"The script ran for over {_took(BENCHMARK_SCRIPT_TIMEOUT)} without "
+            f"finishing and was terminated; it did not shut down cleanly, so its "
+            f"output is unavailable and any files it wrote may be incomplete.\n"
+            f"Do NOT re-run it unchanged — it will hit the same cap. Either fix "
+            f"what made it hang, reduce its scope, or report what you have."
+        )
+
+    return box.get("out", "")
+
+
+def run_or_detach(label: str, work: Callable[[], str],
+                  wait: Optional[float] = None, reason: str = "",
+                  interactive: str = "") -> str:
+    """Run `work()`, waiting up to `wait` seconds; detach it if it outlasts that.
+
+    Returns either the real output (finished in time — the caller cannot tell this
+    module was involved) or a receipt, with the output delivered later through the
+    completion notifier.
+
+    `work` is the ordinary blocking execution the non-detached path would have made,
+    so a detached run and a waited one do the same thing; only the waiting moves.
+    """
+    if disabled():
+        # Wait it out — but audibly, and not for ever.
+        return _wait_bounded(label, work)
+    wait = DETACH_AFTER_SECONDS if wait is None else wait
+    started = time.time()
+    box, done = _spawn(label, work)
 
     if done.wait(wait):
         return box.get("out", "")               # finished in time: nothing changed

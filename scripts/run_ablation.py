@@ -239,6 +239,16 @@ def run_arm(name, overrides, args, learned_root: Path) -> dict:
         "BENCHMARK_OUTPUT_DIR":  "/benchmark/output",
         "LEARNED_ROOT":          "/app/data/learned",
     }
+    # Two caps inside the container, both derived from --arm-timeout so there is one
+    # knob. They exist because `docker rm -f` from out here is the worst way for an arm
+    # to end: it produces no result.json, so the arm contributes nothing to the study
+    # even when the agent had already done most of the work. A container that ends
+    # ITSELF writes its numbers down first.
+    if args.arm_timeout:
+        # Comfortably inside the outer kill, so the self-ending path always wins.
+        env["IMAGENTJ_BENCHMARK_DEADLINE"] = str(int(args.arm_timeout * 60) - 300)
+    env["IMAGENTJ_BENCHMARK_SCRIPT_TIMEOUT"] = str(int(args.script_timeout * 60))
+    env["IMAGENTJ_BENCHMARK_HEARTBEAT"] = str(int(args.heartbeat))
     # The -f files must come BEFORE the subcommand, and every one of them that the
     # normal launch uses has to be here too: on the Spark the override carries the
     # GPU reservation, the HOST_UID build args and the unattended settings, so
@@ -300,6 +310,13 @@ def run_arm(name, overrides, args, learned_root: Path) -> dict:
     if result_file.exists():
         try:
             record["result"] = json.loads(result_file.read_text(encoding="utf-8"))
+            # A provisional sentinel means the collect was cut short — the file is
+            # there, so `result_json` is True, but the arm is NOT a clean measurement
+            # and must not be read as one.
+            if record["result"].get("metadata", {}).get("provisional"):
+                record["partial"] = True
+                print(f"  !! {name}: result.json is PROVISIONAL — output collection "
+                      f"was cut short, treat this arm as partial")
         except Exception as exc:
             record["result_error"] = str(exc)
     else:
@@ -336,7 +353,16 @@ def main():
     p.add_argument("--arm-timeout", type=float, default=90,
                    help="minutes before an arm is killed and the study moves on "
                         "(0 = wait for ever). One wedged arm should not cost the "
-                        "whole run.")
+                        "whole run. The container arms its own deadline 5 min inside "
+                        "this, so it can still write result.json before being killed.")
+    p.add_argument("--script-timeout", type=float, default=30,
+                   help="minutes any ONE script may run before it is terminated and "
+                        "reported to the agent as failed (default: 30). The agent "
+                        "keeps its turn and can still finish the task.")
+    p.add_argument("--heartbeat", type=float, default=60,
+                   help="seconds between 'still waiting' lines in the container log "
+                        "while a script runs (default: 60). These are what tell a slow "
+                        "run from a wedged one without attaching to the container.")
     p.add_argument("--dry-run", action="store_true", help="print the commands and stop")
     args = p.parse_args()
     args.repo = repo
@@ -393,6 +419,9 @@ def main():
     missing = [r["arm"] for r in records if not r.get("result_json") and "skipped" not in r]
     if missing:
         print(f"arms with NO result.json: {', '.join(missing)}")
+    partial = [r["arm"] for r in records if r.get("partial")]
+    if partial:
+        print(f"PARTIAL arms (collection cut short, not comparable): {', '.join(partial)}")
     return 0
 
 

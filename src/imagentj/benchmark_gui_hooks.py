@@ -33,6 +33,7 @@ import logging
 import os
 import re
 import shutil
+import sys
 import threading
 import time
 import traceback
@@ -449,6 +450,22 @@ def _collect_and_finish(gui, message: str = "", success: bool = True, error: str
     out = _output_dir()
     out.mkdir(parents=True, exist_ok=True)
 
+    # Drop a provisional sentinel BEFORE the expensive part. Everything below —
+    # the project copy above all — can block on a slow bind mount, and the finish
+    # failsafe will then hard-exit the container mid-copy. Without this the arm
+    # would leave no result.json at all and count as "no measurement", losing the
+    # token/cost/tool-call totals that were already known the moment the agent
+    # stopped. It is overwritten with the real verdict a few lines down.
+    try:
+        (out / "result.json").write_text(json.dumps({
+            "success": False,
+            "message": "Collect in progress — this file was overwritten if the run finished.",
+            "error": "Output collection did not complete; results are partial.",
+            "metadata": {"provisional": True},
+        }, indent=2), encoding="utf-8")
+    except Exception:
+        _log.exception("Benchmark: could not write provisional result.json")
+
     # Only copy project folder(s) created during this session
     proj_root = Path("/app/data/projects")
     before = getattr(gui, "_bench_projects_before", set())
@@ -570,10 +587,80 @@ def _collect_and_finish(gui, message: str = "", success: bool = True, error: str
         raise
 
 
+# Once the collect has started, the run is over either way — the only question left
+# is whether the container exits. Anything that can block in there (a copy over a slow
+# bind mount, a Qdrant lock that never clears, a C extension that never returns) would
+# otherwise hold the whole study, because the runner's next arm cannot start until this
+# container is gone. So the exit is put on a timer that nothing in the collect can stop.
+FINISH_HARD_EXIT_SECONDS = float(os.environ.get("IMAGENTJ_BENCHMARK_FINISH_TIMEOUT", "300"))
+
+# Wall-clock cap on one whole arm, measured from GUI start. The per-script cap in
+# detached.py bounds any single execution; this bounds everything else — a model that
+# loops, a retry chain, an agent that simply never decides it is done. Defaults to just
+# under the ablation runner's own 90-minute `--arm-timeout` so the container ends itself
+# and writes a result, rather than being killed from outside with nothing to show.
+ARM_DEADLINE_SECONDS = float(os.environ.get("IMAGENTJ_BENCHMARK_DEADLINE", "5100"))
+
+
+def _hard_exit(code: int, why: str) -> None:
+    """Leave the process now, without unwinding anything."""
+    _log.error("Benchmark: HARD EXIT (%s)", why)
+    try:
+        sys.stderr.write(f"[benchmark] hard exit: {why}\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(code)
+
+
+def _arm_deadline_watchdog(gui) -> None:
+    """Force the arm to end — with a result.json — if it overruns its wall clock."""
+    if ARM_DEADLINE_SECONDS <= 0:
+        return
+
+    def _fire():
+        if getattr(gui, "_bench_exited", False):
+            return
+        _log.error("Benchmark: ARM DEADLINE of %.0fs reached — forcing finish",
+                   ARM_DEADLINE_SECONDS)
+        sys.stderr.write(f"[benchmark] arm deadline of {ARM_DEADLINE_SECONDS:.0f}s "
+                         f"reached — collecting whatever exists and exiting\n")
+        sys.stderr.flush()
+        # Belt and braces: even this collect gets a hard cap, so a wedged copy
+        # cannot turn the deadline itself into another hang.
+        threading.Timer(FINISH_HARD_EXIT_SECONDS, _hard_exit,
+                        args=(2, "arm deadline collect did not finish")).start()
+        try:
+            _collect_and_finish(
+                gui, "Arm ended by the benchmark wall-clock deadline.",
+                success=False,
+                error=f"Arm exceeded IMAGENTJ_BENCHMARK_DEADLINE ({ARM_DEADLINE_SECONDS:.0f}s) "
+                      f"without the agent finishing.",
+            )
+        except Exception:
+            _log.exception("Benchmark: deadline collect failed")
+        _cleanup_qdrant_locks()
+        _hard_exit(2, "arm deadline")
+
+    timer = threading.Timer(ARM_DEADLINE_SECONDS, _fire)
+    timer.daemon = True
+    timer.start()
+    _log.info("Benchmark: arm deadline watchdog armed (%.0fs)", ARM_DEADLINE_SECONDS)
+
+
 def _do_finish_in_background(gui, message: str = "", shutdown: bool = False,
                               success: bool = True, error: str = "") -> None:
     """Run the collect in a background thread so the GUI stays responsive."""
     def _work():
+        if shutdown:
+            # Armed BEFORE the collect, so it covers the collect too. A daemon timer
+            # would be cancelled by interpreter shutdown; this one must not be.
+            failsafe = threading.Timer(
+                FINISH_HARD_EXIT_SECONDS, _hard_exit,
+                args=(3, f"finish path did not complete within "
+                         f"{FINISH_HARD_EXIT_SECONDS:.0f}s"))
+            failsafe.start()
+            _log.info("Benchmark: finish failsafe armed (%.0fs)", FINISH_HARD_EXIT_SECONDS)
         try:
             _collect_and_finish(gui, message, success=success, error=error)
         except Exception:
@@ -597,7 +684,7 @@ def _do_finish_in_background(gui, message: str = "", shutdown: bool = False,
             # Qdrant locks and force-kill the process. Must be unconditional:
             # the adapter polls for the container to exit, and a run that
             # failed to write result.json must still end, not hang forever.
-            import os as _os
+            gui._bench_exited = True
             _log.info("Shutdown scheduled — waiting 5 s for filesystem flush …")
             time.sleep(5)
 
@@ -605,7 +692,7 @@ def _do_finish_in_background(gui, message: str = "", shutdown: bool = False,
             _cleanup_qdrant_locks()
 
             _log.info("Exiting process.")
-            _os._exit(0)
+            _hard_exit(0, "benchmark finished normally")
 
     threading.Thread(target=_work, daemon=True).start()
 
@@ -795,6 +882,9 @@ def setup_benchmark_gui(gui) -> None:
     # ── Auto-pilot: hook on_agent_finished for auto-collect ──────────
     if is_autopilot():
         _hook_auto_finish(gui)
+        # Last line of defence. Everything else that ends an arm depends on the
+        # agent's turn ending; this one does not depend on anything.
+        _arm_deadline_watchdog(gui)
 
     # ── Auto-send the task after the GUI finishes rendering ──────────
     QTimer.singleShot(3000, lambda: _auto_send(gui))
