@@ -1078,7 +1078,13 @@ class ImageJAgentGUI(QWidget):
 
         self.thread.started.connect(self.worker.start)
         self.worker.event_received.connect(self.handle_event)
-        self.worker.finished.connect(self.on_agent_finished)
+        # Late-bound on purpose. benchmark_gui_hooks.setup_benchmark_gui() REPLACES
+        # gui.on_agent_finished to schedule the collect that writes result.json, and it
+        # runs after this line. Connecting the bound method here would capture the
+        # original, so the patch never fired and a benchmark run produced no
+        # result.json at all — measured across seven ablation arms, every one exit 0
+        # after minutes of real work, none with a result file.
+        self.worker.finished.connect(lambda: self.on_agent_finished())
         self.worker.error.connect(self.on_agent_error)
         self.worker.stop_report.connect(self.on_stop_report)
         self.worker.watchdog_notice.connect(self.on_watchdog_notice)
