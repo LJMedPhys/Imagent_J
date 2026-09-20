@@ -141,9 +141,33 @@ def render_config(base_path: Path, overrides: dict) -> str:
     return "\n".join(lines)
 
 
+def _writable(path: Path) -> Path:
+    """Create a directory the CONTAINER can write to.
+
+    It runs as `imagentj`, whose uid is baked at BUILD time from HOST_UID
+    (default 1000). If the image was built with a different uid than the host
+    user running this script, every bind mount is read-only to it — which is the
+    "permission denied on /benchmark/output" a run hits. These are local result
+    folders, so widening them beats rebuilding the image to match.
+    """
+    path.mkdir(parents=True, exist_ok=True)
+    try:
+        path.chmod(0o777)
+    except OSError:
+        pass
+    return path
+
+
 def run_arm(name, overrides, args, learned_root: Path) -> dict:
-    out_dir = args.results / name
-    out_dir.mkdir(parents=True, exist_ok=True)
+    # ONE directory per arm, serving as both /app/data and /benchmark/output. The
+    # app needs /app/data for projects, chats and checkpoints, but nothing requires
+    # it to be ./data — pointing it here means deliverables are written straight
+    # where they belong instead of depending on the collector to copy them out.
+    #
+    # It also stops arms colliding: they all shared ./data before, so seven runs of
+    # one task reused the same workspace name and overwrote each other, leaving
+    # three project folders for seven arms.
+    out_dir = _writable(args.results / name)
 
     # The auto-pilot reads the prompt from here.
     shutil.copy(args.instruction, out_dir / "instruction.txt")
@@ -176,6 +200,12 @@ def run_arm(name, overrides, args, learned_root: Path) -> dict:
         args.service,
     ]
 
+    # IMAGENTJ_APP_DATA_DIR is a COMPOSE-FILE variable — `${IMAGENTJ_APP_DATA_DIR:-./data}`
+    # in the volumes block — interpolated when compose parses the file, so it must be in
+    # the environment of the `docker compose` PROCESS. Passing it with -e would set it
+    # inside the container and leave the mount pointing at ./data.
+    run_env = {**os.environ, "IMAGENTJ_APP_DATA_DIR": str(out_dir.resolve())}
+
     print(f"\n{'=' * 72}\n  ARM: {name}   "
           f"({', '.join(f'{k}={v}' for k, v in overrides.items()) or 'nothing removed'})"
           f"\n{'=' * 72}")
@@ -184,7 +214,7 @@ def run_arm(name, overrides, args, learned_root: Path) -> dict:
         return {"arm": name, "skipped": "dry-run"}
 
     started = time.time()
-    proc = subprocess.run(cmd, cwd=args.repo)
+    proc = subprocess.run(cmd, cwd=args.repo, env=run_env)
     took = time.time() - started
 
     result_file = out_dir / "result.json"
@@ -250,7 +280,7 @@ def main():
     if args.fresh_learned and learned.exists():
         shutil.rmtree(learned)
         print(f"learned store emptied: {learned}")
-    learned.mkdir(parents=True, exist_ok=True)
+    _writable(learned)
 
     selected = arms(args.only, args.baseline)
     print(f"{len(selected)} arm(s): {', '.join(n for n, _ in selected)}")
@@ -266,6 +296,7 @@ def main():
             if arm_learned.exists():
                 shutil.rmtree(arm_learned)
             shutil.copytree(learned, arm_learned)
+            _writable(arm_learned)
         else:
             arm_learned = learned
         records.append(run_arm(name, overrides, args, arm_learned))
