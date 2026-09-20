@@ -64,13 +64,30 @@ from typing import Callable, Dict, Optional
 
 __all__ = [
     "wants_detach", "run_or_detach", "active", "set_completion_notifier",
-    "DETACH_HEADER", "DETACH_AFTER_SECONDS",
+    "DETACH_HEADER", "DETACH_AFTER_SECONDS", "disabled",
 ]
 
 # How long to wait before handing the run back and freeing the conversation. Short
 # enough that a human is never left staring at a blocked chat; long enough that the
 # ordinary quick script never pays for a second model turn.
 DETACH_AFTER_SECONDS = float(os.environ.get("IMAGENTJ_DETACH_AFTER", "10"))
+
+
+def disabled() -> bool:
+    """True when nothing may detach — a benchmark / auto-pilot run.
+
+    Detaching exists so a human can keep talking to the agent while a long script
+    runs. In BENCHMARK_MODE there is no human, so it buys nothing, and it actively
+    breaks the run: handing the tool back ends the agent's TURN while the work
+    continues in a subprocess, the benchmark's auto-finish fires on that early
+    `finished` signal, and its one-shot `_bench_auto_finished` guard is spent
+    before the real work is done. Observed as a run that completes its task and
+    then sits for ever with a child process in waitpid.
+
+    So: waiting is correct whenever the turn boundary is what something else is
+    measuring.
+    """
+    return os.environ.get("BENCHMARK_MODE", "").lower() == "true"
 
 DETACH_HEADER = "imagentj-detach:"
 
@@ -177,6 +194,11 @@ def run_or_detach(label: str, work: Callable[[], str],
     `work` is the ordinary blocking execution the non-detached path would have made,
     so a detached run and a waited one do the same thing; only the waiting moves.
     """
+    if disabled():
+        # Wait it out, exactly as before detaching existed.
+        print(f"[detach] benchmark mode — waiting for {label} instead of detaching",
+              flush=True)
+        return work()
     wait = DETACH_AFTER_SECONDS if wait is None else wait
     started = time.time()
     box: Dict[str, str] = {}

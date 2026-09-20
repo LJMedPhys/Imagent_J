@@ -445,6 +445,7 @@ def _normalise_mosaic_contract(out: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def _collect_and_finish(gui, message: str = "", success: bool = True, error: str = "") -> None:
+    _log.info("Benchmark: collect STARTED")
     out = _output_dir()
     out.mkdir(parents=True, exist_ok=True)
 
@@ -463,8 +464,15 @@ def _collect_and_finish(gui, message: str = "", success: bool = True, error: str
                     newest = max(candidates, key=lambda d: d.stat().st_mtime)
                     new_folders = {newest.name}
 
+            _log.info("Benchmark: copying project folder(s): %s",
+                      ", ".join(sorted(new_folders)) or "(none)")
             for folder_name in new_folders:
                 src_dir = proj_root / folder_name
+                # /app/data and /benchmark/output are the SAME directory under the
+                # ablation runner, so this duplicates the tree in place. Harmless —
+                # the destination is not under the source — but it is why a big
+                # project can sit here for minutes saying nothing, hence the log
+                # line above and the one after the loop.
                 for src in src_dir.rglob("*"):
                     if src.is_file():
                         rel = src.relative_to(proj_root)
@@ -478,6 +486,7 @@ def _collect_and_finish(gui, message: str = "", success: bool = True, error: str
         success = False
         error = error or f"collect failed: {traceback.format_exc(limit=5)}"
 
+    _log.info("Benchmark: copy finished")
     try:
         _normalise_mosaic_contract(out)
     except Exception:
@@ -549,6 +558,7 @@ def _collect_and_finish(gui, message: str = "", success: bool = True, error: str
     # Write sentinel — the adapter polls for this file. If even this fails we
     # surface the exception so _do_finish_in_background can still shut down.
     try:
+        _log.info("Benchmark: writing result.json (success=%s)", success)
         (out / "result.json").write_text(json.dumps({
             "success": success,
             "message": message or "Benchmark session completed.",
@@ -634,6 +644,7 @@ def _hook_auto_finish(gui) -> None:
     to let any final file writes complete, then trigger the collect.
     """
     original_on_finished = gui.on_agent_finished
+    _log.info("Benchmark: auto-finish hook INSTALLED")
 
     def _patched_on_finished():
         # Qt fires the worker's `finished` signal identically on a clean
@@ -649,7 +660,13 @@ def _hook_auto_finish(gui) -> None:
 
         # Don't auto-finish if already done
         if getattr(gui, "_bench_auto_finished", False):
+            # Worth logging loudly: this guard is one-shot, so a turn that ended
+            # EARLY (a detached script, a retried prompt) spends it before the real
+            # work is done and the run can never finish.
+            _log.warning("Benchmark: on_agent_finished fired again — already "
+                         "auto-finished, ignoring")
             return
+        _log.info("Benchmark: auto-finish TRIGGERED (had_error=%s)", had_error)
 
         gui._bench_auto_finished = True
 
@@ -667,6 +684,7 @@ def _hook_auto_finish(gui) -> None:
             finish_message = "Auto-pilot session completed."
 
         # Give the agent's last file writes a moment to flush
+        _log.info("Benchmark: collect scheduled in 10 s")
         QTimer.singleShot(10000, lambda: _do_finish_in_background(
             gui, finish_message, shutdown=True,
             success=not had_error, error=error_msg,
