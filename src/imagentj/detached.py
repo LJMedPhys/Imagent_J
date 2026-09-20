@@ -239,11 +239,24 @@ def _live_progress() -> str:
     for h in handles:
         try:
             tail = (h.output_tail(200) or "").strip().replace("\n", " ⏎ ")
-            bits.append(f"run#{h.run_id} {h.language} elapsed={_took(h.elapsed)} "
+            # "script#N", never "run#N": N counts script EXECUTIONS inside this one
+            # container, and an ablation reader seeing "run#2" reasonably concludes
+            # the study repeated the arm. It did not — the agent re-ran a stage.
+            bits.append(f"script#{h.run_id} {h.language} elapsed={_took(h.elapsed)} "
                         f"silent={_took(h.silent_for())} | …{tail[-160:]}")
         except Exception:
-            bits.append(f"run#{getattr(h, 'run_id', '?')} (unreadable)")
+            bits.append(f"script#{getattr(h, 'run_id', '?')} (unreadable)")
     return " ;; ".join(bits)
+
+
+def _short(label: str, limit: int = 60) -> str:
+    """A label short enough to read in a log line.
+
+    `purpose` is written for the agent and routinely runs to 300 characters, which
+    turns every heartbeat into a paragraph and buries the numbers that matter.
+    """
+    label = " ".join((label or "").split())
+    return label if len(label) <= limit else label[:limit - 1].rstrip() + "…"
 
 
 def _wait_bounded(label: str, work: Callable[[], str]) -> str:

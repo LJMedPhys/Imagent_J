@@ -446,7 +446,7 @@ def _normalise_mosaic_contract(out: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def _collect_and_finish(gui, message: str = "", success: bool = True, error: str = "") -> None:
-    _log.info("Benchmark: collect STARTED")
+    _say("collect STARTED")
     out = _output_dir()
     out.mkdir(parents=True, exist_ok=True)
 
@@ -503,7 +503,7 @@ def _collect_and_finish(gui, message: str = "", success: bool = True, error: str
         success = False
         error = error or f"collect failed: {traceback.format_exc(limit=5)}"
 
-    _log.info("Benchmark: copy finished")
+    _say("copy finished")
     try:
         _normalise_mosaic_contract(out)
     except Exception:
@@ -575,7 +575,7 @@ def _collect_and_finish(gui, message: str = "", success: bool = True, error: str
     # Write sentinel — the adapter polls for this file. If even this fails we
     # surface the exception so _do_finish_in_background can still shut down.
     try:
-        _log.info("Benchmark: writing result.json (success=%s)", success)
+        _say(f"writing result.json (success={success})")
         (out / "result.json").write_text(json.dumps({
             "success": success,
             "message": message or "Benchmark session completed.",
@@ -602,15 +602,88 @@ FINISH_HARD_EXIT_SECONDS = float(os.environ.get("IMAGENTJ_BENCHMARK_FINISH_TIMEO
 ARM_DEADLINE_SECONDS = float(os.environ.get("IMAGENTJ_BENCHMARK_DEADLINE", "5100"))
 
 
+def _say(msg: str) -> None:
+    """Put a line where the person watching `docker compose run` will see it.
+
+    `_log` writes to agentic-j_debug.log INSIDE the container, which is exactly the
+    file you cannot read when the thing you are debugging is the container failing to
+    exit. Every step of the shutdown therefore says itself on stderr too.
+    """
+    _log.info("Benchmark: %s", msg)
+    try:
+        sys.stderr.write(f"[benchmark] {msg}\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
+
+
 def _hard_exit(code: int, why: str) -> None:
     """Leave the process now, without unwinding anything."""
     _log.error("Benchmark: HARD EXIT (%s)", why)
     try:
-        sys.stderr.write(f"[benchmark] hard exit: {why}\n")
+        # If this process is not PID 1, killing it does NOT end the container — the
+        # entrypoint keeps Xvfb/x11vnc alive and `docker compose run` waits for ever
+        # on a container whose app is long gone. Worth knowing at the moment of exit
+        # rather than inferring it from a hang.
+        sys.stderr.write(f"[benchmark] hard exit: {why} (pid={os.getpid()}, "
+                         f"{'PID 1 — container will stop' if os.getpid() == 1 else 'NOT PID 1 — the container may outlive this process'})\n")
         sys.stderr.flush()
     except Exception:
         pass
     os._exit(code)
+
+
+def _install_qt_thread_tracer() -> None:
+    """Make Qt's cross-thread warnings name the code that caused them.
+
+    `QObject::setParent: Cannot set parent, new parent is in a different thread` on
+    its own is unattributable — it names no file, function or thread, and this app has
+    several threads that could plausibly touch a widget. Printing the Python stack the
+    first time each distinct warning appears turns it into an address.
+    """
+    try:
+        from PySide6.QtCore import qInstallMessageHandler
+    except Exception:
+        return
+
+    seen: set = set()
+
+    def _handler(mode, context, message):
+        try:
+            sys.stderr.write(f"[qt] {message}\n")
+            if "different thread" in message or "Cannot set parent" in message:
+                key = message[:80]
+                if key not in seen:
+                    seen.add(key)
+                    sys.stderr.write(
+                        f"[qt] ^ raised on thread {threading.current_thread().name!r}; "
+                        f"Python stack at that moment:\n"
+                        + "".join(traceback.format_stack()))
+            sys.stderr.flush()
+        except Exception:
+            pass
+
+    qInstallMessageHandler(_handler)
+    _log.info("Benchmark: Qt thread tracer installed")
+
+
+def _install_stall_tracer() -> None:
+    """Dump every thread's Python stack periodically, so a wedge is self-explaining.
+
+    This is py-spy's job, done from inside: an unattended container cannot be attached
+    to after the fact, and by the time a stall is noticed the useful state is only in
+    the process. Set IMAGENTJ_BENCHMARK_STACKDUMP=0 to turn it off.
+    """
+    interval = float(os.environ.get("IMAGENTJ_BENCHMARK_STACKDUMP", "300"))
+    if interval <= 0:
+        return
+    try:
+        import faulthandler
+        faulthandler.dump_traceback_later(interval, repeat=True, exit=False)
+    except Exception:
+        _log.exception("Benchmark: could not arm the stall tracer")
+        return
+    _log.info("Benchmark: stall tracer armed (all-thread stack dump every %.0fs)", interval)
 
 
 def _arm_deadline_watchdog(gui) -> None:
@@ -660,7 +733,7 @@ def _do_finish_in_background(gui, message: str = "", shutdown: bool = False,
                 args=(3, f"finish path did not complete within "
                          f"{FINISH_HARD_EXIT_SECONDS:.0f}s"))
             failsafe.start()
-            _log.info("Benchmark: finish failsafe armed (%.0fs)", FINISH_HARD_EXIT_SECONDS)
+            _say(f"finish failsafe armed ({FINISH_HARD_EXIT_SECONDS:.0f}s)")
         try:
             _collect_and_finish(gui, message, success=success, error=error)
         except Exception:
@@ -685,13 +758,16 @@ def _do_finish_in_background(gui, message: str = "", shutdown: bool = False,
             # the adapter polls for the container to exit, and a run that
             # failed to write result.json must still end, not hang forever.
             gui._bench_exited = True
-            _log.info("Shutdown scheduled — waiting 5 s for filesystem flush …")
+            _say("shutdown scheduled — waiting 5 s for filesystem flush")
             time.sleep(5)
 
-            # Clean up Qdrant lock files so the next run doesn't fail
+            # Clean up Qdrant lock files so the next run doesn't fail. Announced on
+            # both sides because it walks a bind mount, so it is the one step here
+            # that can plausibly take real time.
+            _say("clearing Qdrant lock files")
             _cleanup_qdrant_locks()
+            _say("Qdrant locks cleared")
 
-            _log.info("Exiting process.")
             _hard_exit(0, "benchmark finished normally")
 
     threading.Thread(target=_work, daemon=True).start()
@@ -753,7 +829,7 @@ def _hook_auto_finish(gui) -> None:
             _log.warning("Benchmark: on_agent_finished fired again — already "
                          "auto-finished, ignoring")
             return
-        _log.info("Benchmark: auto-finish TRIGGERED (had_error=%s)", had_error)
+        _say(f"auto-finish TRIGGERED (had_error={had_error})")
 
         gui._bench_auto_finished = True
 
@@ -771,7 +847,7 @@ def _hook_auto_finish(gui) -> None:
             finish_message = "Auto-pilot session completed."
 
         # Give the agent's last file writes a moment to flush
-        _log.info("Benchmark: collect scheduled in 10 s")
+        _say("collect scheduled in 10 s")
         QTimer.singleShot(10000, lambda: _do_finish_in_background(
             gui, finish_message, shutdown=True,
             success=not had_error, error=error_msg,
@@ -846,6 +922,11 @@ def setup_benchmark_gui(gui) -> None:
         return
     gui._bench_setup_done = True
     gui._bench_auto_finished = False
+
+    # Diagnostics first: both of these exist to explain a run that goes quiet, so
+    # they have to be in place before anything else gets a chance to.
+    _install_qt_thread_tracer()
+    _install_stall_tracer()
 
     # ── Snapshot existing projects ───────────────────────────────────
     proj_root = Path("/app/data/projects")
