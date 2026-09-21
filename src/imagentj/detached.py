@@ -87,7 +87,16 @@ DETACH_AFTER_SECONDS = float(os.environ.get("IMAGENTJ_DETACH_AFTER", "10"))
 # that is genuinely going to need two hours has already invalidated the comparison. So
 # benchmark runs get their own, much tighter cap, and blowing it FAILS THE SCRIPT rather
 # than the whole arm — the agent is told what happened and can still finish and report.
+#
+# The cap must mean STUCK, not SLOW. A first version killed on wall clock alone and
+# terminated a segmentation that was printing a line a second at the 30-minute mark —
+# the arm then measured a truncated pipeline, which is worse than a long one. So the
+# clock only decides when to START asking; what answers is `silent_for`, the same
+# stuck-detector the script watchdog uses. A run still producing output is granted
+# another window, up to an absolute ceiling.
 BENCHMARK_SCRIPT_TIMEOUT = float(os.environ.get("IMAGENTJ_BENCHMARK_SCRIPT_TIMEOUT", "1800"))
+BENCHMARK_SILENT_TIMEOUT = float(os.environ.get("IMAGENTJ_BENCHMARK_SILENT_TIMEOUT", "600"))
+BENCHMARK_SCRIPT_MAX = float(os.environ.get("IMAGENTJ_BENCHMARK_SCRIPT_MAX", "5400"))
 BENCHMARK_HEARTBEAT = float(os.environ.get("IMAGENTJ_BENCHMARK_HEARTBEAT", "60"))
 
 
@@ -249,6 +258,26 @@ def _live_progress() -> str:
     return " ;; ".join(bits)
 
 
+def _quietest() -> Optional[float]:
+    """Seconds since the busiest owned run last produced output, or None if unknown.
+
+    The MINIMUM across runs on purpose: if anything is still talking, the work as a
+    whole is progressing, and that is what decides whether a cap means "stuck".
+    """
+    try:
+        from .run_control import active_runs
+        handles = active_runs()
+    except Exception:
+        return None
+    silences = []
+    for h in handles:
+        try:
+            silences.append(float(h.silent_for()))
+        except Exception:
+            pass
+    return min(silences) if silences else None
+
+
 def _short(label: str, limit: int = 60) -> str:
     """A label short enough to read in a log line.
 
@@ -262,27 +291,50 @@ def _short(label: str, limit: int = 60) -> str:
 def _wait_bounded(label: str, work: Callable[[], str]) -> str:
     """Benchmark path: wait for `work()`, but talk while waiting and give up eventually."""
     started = time.time()
+    short = _short(label)
     box, done = _spawn(label, work)
-    print(f"[detach] benchmark mode — waiting for {label} instead of detaching "
+    print(f"[detach] benchmark mode — waiting for {short} instead of detaching "
           f"(cap {_took(BENCHMARK_SCRIPT_TIMEOUT)}, heartbeat every "
           f"{_took(BENCHMARK_HEARTBEAT)})", flush=True)
 
+    last_reprieve = -1e9              # so the first reprieve always announces itself
     while not done.wait(BENCHMARK_HEARTBEAT):
         elapsed = time.time() - started
-        print(f"[benchmark] still waiting on {label} — {_took(elapsed)} elapsed; "
+        print(f"[benchmark] still waiting on {short} — {_took(elapsed)} elapsed; "
               f"{_live_progress()}", flush=True)
         if elapsed < BENCHMARK_SCRIPT_TIMEOUT:
             continue
 
-        # Over the cap. Kill the child process group and let `work()` unwind
-        # normally — it returns the run's own stopped-report, which is far more
-        # useful to the agent than anything synthesised here.
-        print(f"[benchmark] {label} exceeded the {_took(BENCHMARK_SCRIPT_TIMEOUT)} "
-              f"benchmark cap — terminating it", flush=True)
+        # Past the cap — but is it stuck, or just long? A run that is still writing
+        # output is doing the work it was asked to do, and killing it truncates the
+        # very pipeline the arm is measuring. Only silence, or the absolute ceiling,
+        # ends it.
+        quiet = _quietest()
+        if (quiet is not None and quiet < BENCHMARK_SILENT_TIMEOUT
+                and elapsed < BENCHMARK_SCRIPT_MAX):
+            # Said once, then every 10 min. The per-minute heartbeat above already
+            # carries `silent=`, so repeating the reasoning every tick only buries it.
+            if elapsed - last_reprieve >= 600:
+                last_reprieve = elapsed
+                print(f"[benchmark] {short} is past the "
+                      f"{_took(BENCHMARK_SCRIPT_TIMEOUT)} cap but still producing "
+                      f"output (last line {_took(quiet)} ago) — letting it run, "
+                      f"ceiling {_took(BENCHMARK_SCRIPT_MAX)}", flush=True)
+            continue
+
+        why = (f"produced no output for {_took(quiet)}" if quiet is not None
+               and quiet >= BENCHMARK_SILENT_TIMEOUT
+               else f"hit the absolute {_took(BENCHMARK_SCRIPT_MAX)} ceiling")
+
+        # Kill the child process group and let `work()` unwind normally — it returns
+        # the run's own stopped-report, which is far more useful to the agent than
+        # anything synthesised here.
+        print(f"[benchmark] {short} {why} after {_took(elapsed)} — terminating it",
+              flush=True)
         try:
             from .run_control import terminate_all
-            terminate_all(reason=f"Exceeded the {int(BENCHMARK_SCRIPT_TIMEOUT)}s "
-                                 f"benchmark script cap", by="watchdog")
+            terminate_all(reason=f"Benchmark watchdog: {why} after "
+                                 f"{int(elapsed)}s", by="watchdog")
         except Exception as exc:
             print(f"[benchmark] terminate_all failed: {exc!r}", flush=True)
 
@@ -291,14 +343,13 @@ def _wait_bounded(label: str, work: Callable[[], str]) -> str:
         # The worker did not come back even after the kill. Returning is still
         # right: the agent gets a turn and the arm can finish and be measured,
         # which is the whole point of having a cap.
-        print(f"[benchmark] {label} did not unwind after termination — "
+        print(f"[benchmark] {short} did not unwind after termination — "
               f"reporting it as failed and moving on", flush=True)
         return (
-            f"SUMMARY: FAILED (timed out) — {label}\n"
+            f"SUMMARY: FAILED (stopped by the benchmark watchdog) — {label}\n"
             f"STATUS: ERROR\n"
-            f"The script ran for over {_took(BENCHMARK_SCRIPT_TIMEOUT)} without "
-            f"finishing and was terminated; it did not shut down cleanly, so its "
-            f"output is unavailable and any files it wrote may be incomplete.\n"
+            f"The script {why} and was terminated; it did not shut down cleanly, so "
+            f"its output is unavailable and any files it wrote may be incomplete.\n"
             f"Do NOT re-run it unchanged — it will hit the same cap. Either fix "
             f"what made it hang, reduce its scope, or report what you have."
         )

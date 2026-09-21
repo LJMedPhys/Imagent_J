@@ -38,8 +38,10 @@ import argparse
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -248,6 +250,11 @@ def run_arm(name, overrides, args, learned_root: Path) -> dict:
         # Comfortably inside the outer kill, so the self-ending path always wins.
         env["IMAGENTJ_BENCHMARK_DEADLINE"] = str(int(args.arm_timeout * 60) - 300)
     env["IMAGENTJ_BENCHMARK_SCRIPT_TIMEOUT"] = str(int(args.script_timeout * 60))
+    env["IMAGENTJ_BENCHMARK_SILENT_TIMEOUT"] = str(int(args.silent_timeout * 60))
+    if args.arm_timeout:
+        # A script still producing output may use the whole arm; the arm deadline is
+        # the real budget, so there is no reason for a second, tighter ceiling.
+        env["IMAGENTJ_BENCHMARK_SCRIPT_MAX"] = str(int(args.arm_timeout * 60) - 360)
     env["IMAGENTJ_BENCHMARK_HEARTBEAT"] = str(int(args.heartbeat))
     # The -f files must come BEFORE the subcommand, and every one of them that the
     # normal launch uses has to be here too: on the Spark the override carries the
@@ -282,10 +289,38 @@ def run_arm(name, overrides, args, learned_root: Path) -> dict:
 
     started = time.time()
     timed_out = False
+    # Every line the container prints is ALSO written next to that arm's results.
+    # Until now it existed only in terminal scrollback, so a dropped ssh session took
+    # the entire diagnostic record with it — and the heartbeats, stack dumps and
+    # shutdown trace are the only way to explain an arm after the fact.
+    log_path = out_dir / "container.log"
     try:
-        proc = subprocess.run(cmd, cwd=args.repo, env=run_env,
-                              timeout=args.arm_timeout * 60 if args.arm_timeout else None)
-        returncode = proc.returncode
+        proc = subprocess.Popen(cmd, cwd=args.repo, env=run_env,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, bufsize=1)
+    except Exception as exc:
+        print(f"  !! {name}: could not start the container: {exc}")
+        return {"arm": name, "overrides": overrides, "error": str(exc)}
+
+    def _tee():
+        with open(log_path, "w", encoding="utf-8", errors="replace") as fh:
+            for line in proc.stdout:
+                fh.write(line)
+                fh.flush()
+                try:
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+                except Exception:
+                    # The terminal went away (ssh dropped). The file is the record
+                    # that matters; losing the echo must not kill the study.
+                    pass
+
+    tee = threading.Thread(target=_tee, name=f"tee-{name}", daemon=True)
+    tee.start()
+
+    try:
+        returncode = proc.wait(timeout=args.arm_timeout * 60 if args.arm_timeout else None)
+        tee.join(timeout=15)
     except subprocess.TimeoutExpired:
         # Killing the compose CLIENT does not stop the container it started, so the
         # arm would keep running and the next one would contend for the same shared
@@ -295,6 +330,11 @@ def run_arm(name, overrides, args, learned_root: Path) -> dict:
         print(f"  !! {name}: exceeded {args.arm_timeout} min — killing {container}")
         subprocess.run(["docker", "rm", "-f", container],
                        cwd=args.repo, capture_output=True)
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        tee.join(timeout=15)
     took = time.time() - started
 
     result_file = out_dir / "result.json"
@@ -306,6 +346,8 @@ def run_arm(name, overrides, args, learned_root: Path) -> dict:
         "seconds": round(took, 1),
         "started": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "result_json": result_file.exists(),
+        "container_log": str(log_path.relative_to(args.results.resolve()))
+                         if log_path.exists() else None,
     }
     if result_file.exists():
         try:
@@ -356,9 +398,14 @@ def main():
                         "whole run. The container arms its own deadline 5 min inside "
                         "this, so it can still write result.json before being killed.")
     p.add_argument("--script-timeout", type=float, default=30,
-                   help="minutes any ONE script may run before it is terminated and "
-                        "reported to the agent as failed (default: 30). The agent "
-                        "keeps its turn and can still finish the task.")
+                   help="minutes after which one script starts being CHECKED for "
+                        "progress (default: 30). Passing it is not fatal — a script "
+                        "still writing output keeps running.")
+    p.add_argument("--silent-timeout", type=float, default=10,
+                   help="minutes of NO output, past --script-timeout, that count as "
+                        "stuck and get the script terminated (default: 10). This is "
+                        "what actually kills a script; the wall clock only decides "
+                        "when to start asking.")
     p.add_argument("--heartbeat", type=float, default=60,
                    help="seconds between 'still waiting' lines in the container log "
                         "while a script runs (default: 60). These are what tell a slow "
@@ -366,6 +413,16 @@ def main():
     p.add_argument("--dry-run", action="store_true", help="print the commands and stop")
     args = p.parse_args()
     args.repo = repo
+
+    # An ablation is hours long and is nearly always started over ssh. A dropped
+    # connection SIGHUPs the whole process group, which used to end the study
+    # mid-arm with no result and a half-written output tree. Ignoring it means the
+    # run continues to completion; the per-arm container.log is then the record,
+    # since the echo to a dead terminal is silently discarded.
+    try:
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    except (AttributeError, ValueError):
+        pass                       # not POSIX, or not on the main thread
 
     if not args.compose_file:
         args.compose_file = [repo / "docker-compose.yml"]
