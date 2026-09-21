@@ -549,6 +549,39 @@ RUN mkdir -p /home/imagentj/.cellpose/models \
     && echo "[cellpose] Baked in $(ls /home/imagentj/.cellpose/models | wc -l) model files" \
     && chown -R imagentj:imagentj /home/imagentj/.cellpose
 
+# ── micro_sam (Segment Anything for Microscopy) checkpoints ──────────────────
+# Same offline rationale as the Cellpose bundle above, but the failure mode is
+# worse: without this, the FIRST use downloads the checkpoint INSIDE napari's Qt
+# thread (annotator_2d / execute_code). That blocks the event loop, so the viewer
+# and the whole VNC desktop appear frozen with no progress bar, and an interrupted
+# download leaves a partial temp file that never completes or resumes.
+# Scope: the vit_t (tiny) tier for the two microscopy modalities this tool
+# actually serves — light microscopy and EM organelles — each with its AIS
+# decoder. ~170 MB total.
+#   * tiny is NOT CPU-only; it runs on GPU too, so one baked tier covers both the
+#     CPU and GPU image builds and needs no USE_GPU branching here.
+#   * the decoder is what enables segmentation_mode="ais" (one decoder pass per
+#     image). Without it micro_sam silently falls back to "amg", which runs the
+#     mask decoder over a dense prompt grid — orders of magnitude slower.
+ENV MICROSAM_CACHEDIR=/home/imagentj/.cache/micro_sam
+RUN echo "[micro_sam] Pre-fetching SAM checkpoints into $MICROSAM_CACHEDIR ..." \
+    && /opt/conda/envs/napari-mcp/bin/python -c \
+        "from micro_sam.automatic_segmentation import get_predictor_and_segmenter as g; \
+         [g(model_type=m, device='cpu', segmentation_mode='ais') \
+          for m in ('vit_t_lm', 'vit_t_em_organelles')]" \
+    && echo "[micro_sam] Baked in: $(ls $MICROSAM_CACHEDIR/models | tr '\n' ' ')" \
+    && du -sh $MICROSAM_CACHEDIR \
+    && chown -R imagentj:imagentj /home/imagentj/.cache
+
+# ── Seed Fiji jars/plugins for named-volume persistence ──────────────────────
+# fiji_jars/fiji_plugins are named volumes mounted at /opt/Fiji.app/{jars,plugins}.
+# On any deployment where those volumes already exist (created by an older image
+# build), they shadow every JAR/plugin baked into this layer — docker-entrypoint.sh's
+# _seed_volume() is supposed to backfill anything missing from these *.seed
+# snapshots on startup, so bake them here.
+# RUN cp -a /opt/Fiji.app/jars /opt/Fiji.app/jars.seed \
+#     && cp -a /opt/Fiji.app/plugins /opt/Fiji.app/plugins.seed
+
 # ── Seed home dir for named-volume persistence ────────────────────────────────
 # imagentj_home is a named volume mounted at /home/imagentj. It starts empty,
 # shadowing these baked-in config files. The entrypoint seeds it on first start.

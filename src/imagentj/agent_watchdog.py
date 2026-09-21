@@ -27,6 +27,11 @@ Three tiers, cheapest first — the same shape as the script watchdog:
   and rules CONTINUE or KILL, for the runaway that is neither repetitive nor
   stalled, merely endless.
 
+  Tier 3 (free, deterministic) — the odd one out: the turn is HEALTHY and the
+  user is still not getting a segmentation they accept. It never kills; it
+  switches the strategy to fine-tuning. Read from the usage log rather than the
+  tool history, because the evidence is the user's own words across many turns.
+
 Bias is toward CONTINUE, for the same reason as the script watchdog: a slow
 subagent is normal, and killing good work is worse than waiting. Every failure
 path (no LLM, parse error, missing handle) resolves to "leave it alone".
@@ -37,6 +42,7 @@ the Stop button does via `stop_signal`. The caller then returns its graceful
 """
 
 import contextvars
+import glob
 import hashlib
 import json
 import logging
@@ -91,8 +97,228 @@ _MAX_HISTORY = 40          # tool calls kept per handle (bounded memory)
 _MAX_ARG_CHARS = 400       # per-call argument digest input
 
 
-class AgentAborted(RuntimeError):
-    """Raised in the caller when the agent watchdog terminated an agent turn."""
+# ---------------------------------------------------------------------------
+# Tier 3 — the user is not getting a segmentation they will accept
+# ---------------------------------------------------------------------------
+# The other tiers watch for a run that is BROKEN. This one watches for a run that
+# is working and still failing the user: the agent adjusts a threshold, the user
+# says it is still wrong, the agent adjusts it again. Nothing ends that loop,
+# because fine-tuning is only routed when the user asks for it BY NAME — so a user
+# who does not know the capability exists never gets offered it, however long they
+# go round.
+#
+# THE SOURCE IS THE USAGE LOG, NOT THE STATE LEDGER. The first version of this read
+# `state_ledger.json`, which was wrong in practice: the ledger is written only when
+# the supervisor remembers to call `update_state_ledger`, and measured on a real
+# session it does NOT record separate retries of the same thresholding step. A
+# counter resting on a habit the model may not keep reads zero exactly when it
+# matters. `logs/usage_log.json` (and the per-chat `usage_stats.json`) is written by
+# the tracker on EVERY query with no model involvement, and it carries the one thing
+# that actually defines this problem: the user's own words.
+#
+# So the count is consecutive user turns expressing dissatisfaction with a
+# segmentation. Measured over 194 real chats / 704 queries in this deployment it
+# fires on 2, both genuine — e.g. "this is not correct, the nuclei are not detected
+# well" -> "but it's not better, there are a lot more nuceli actually" -> "now it's
+# finding too many extra compartments". No false positives in that sample.
+SEGMENTATION_RETRY_LIMIT = int(os.environ.get("IMAGENTJ_SEGMENTATION_RETRIES", "3"))
+
+# The segmenters and targets this system actually routes to. Deliberately NOT every
+# tool with a docs folder: ilastik and labkit have skills but no live route, so
+# counting them could only ever produce a false trigger.
+_SEG_WORDS = ("segment", "threshold", "mask", "cellpose", "stardist", "micro_sam",
+              "microsam", "watershed", "nuclei", "nucleus", "cells", "detect",
+              "outline", "label")
+
+# Phrases taken from the logged prompts of real dissatisfied sessions rather than
+# invented. Kept literal for that reason — a cleverer generalisation ("no", "not")
+# matches ordinary answers like "no time lapse" and fires on the first turn.
+_UNHAPPY = ("not correct", "incorrect", "not better", "not good", "not detected",
+            "not reasonable", "not all", "too many", "too few", "left out",
+            "over-represent", "over represent", "not right", "is wrong", "are wrong",
+            "still not", "still wrong", "doesn't work", "does not work", "not enough",
+            "these are not", "i want not", "not being detected", "getting counted",
+            "being counted", "try again", "not well", "not properly")
+_HAPPY = ("works", "worked", "perfect", "looks good", "that's it", "thanks",
+          "correct now", "that works", "good now")
+
+_project_root: Optional[str] = None
+_retry_announced: set = set()
+_last_reported: Optional[int] = None
+# Live count, fed by note_prompt as each turn arrives; None until seeded from the log.
+_live_streak: Optional[int] = None
+_live_prompts: list = []
+_prev_seg: bool = False
+
+
+def note_project(project_root: str) -> None:
+    """Told by the state ledger where the project is, to aim at the right usage log."""
+    global _project_root
+    if project_root:
+        _project_root = project_root
+
+
+def _usage_log_path() -> Optional[str]:
+    """The project's usage log, else the most recently touched chat's.
+
+    Deliberately discoverable without being told: the ledger hook that sets
+    `_project_root` is itself a model-dependent call, and Tier 3 exists precisely
+    because those cannot be relied on.
+    """
+    if _project_root:
+        p = os.path.join(_project_root, "logs", "usage_log.json")
+        if os.path.exists(p):
+            return p
+    base = os.environ.get("CHAT_DATA_PATH", "/app/data/chats")
+    try:
+        found = glob.glob(os.path.join(base, "*", "usage_stats.json"))
+        return max(found, key=os.path.getmtime) if found else None
+    except Exception:
+        return None
+
+
+def _classify(text: str, prev_was_segmentation: bool) -> str:
+    """One user turn: 'happy', 'unhappy', 'seg' or 'other'.
+
+    A complaint counts only in a segmentation context — either it names something
+    segmentation-related itself, or the turn before it did. "but it's not better"
+    carries no vocabulary of its own and is the most common shape of the second and
+    third complaint, so without the carried context the streak never reaches three.
+    """
+    t = (text or "").lower()
+    if any(w in t for w in _HAPPY):
+        return "happy"
+    seg = any(w in t for w in _SEG_WORDS)
+    if any(w in t for w in _UNHAPPY) and (seg or prev_was_segmentation):
+        return "unhappy"
+    return "seg" if seg else "other"
+
+
+def unhappy_streak(path: Optional[str] = None, force_log: bool = False) -> tuple:
+    """(streak, the prompts in it) — consecutive dissatisfied segmentation turns.
+
+    Prefers the live count fed by `note_prompt`, which is a turn ahead of the log.
+    """
+    if not force_log and path is None and _live_streak is not None:
+        return _live_streak, list(_live_prompts)
+    path = path or _usage_log_path()
+    if not path:
+        return 0, []
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            queries = (json.load(fh) or {}).get("queries") or []
+    except Exception:
+        return 0, []                    # no log yet, or mid-write: say nothing
+    streak, prompts, prev_seg = 0, [], False
+    for q in queries:
+        text = (q.get("prompt_preview") or "").strip()
+        if not text:
+            continue
+        kind = _classify(text, prev_seg)
+        if kind == "happy":
+            streak, prompts = 0, []     # the user accepted something: start again
+        elif kind == "unhappy":
+            streak += 1
+            prompts.append(text)
+        if kind in ("seg", "unhappy"):
+            prev_seg = True
+    return streak, prompts
+
+
+def finetune_directive(path: Optional[str] = None) -> str:
+    """The switch, as text for the agent's context. Empty until the limit is reached."""
+    streak, prompts = unhappy_streak(path)
+    if streak < SEGMENTATION_RETRY_LIMIT:
+        return ""
+    said = [f"    “{p[:120]}”" for p in prompts[-SEGMENTATION_RETRY_LIMIT:]]
+    return "\n".join([
+        f"⚠ WATCHDOG: the user has rejected this segmentation {streak} times running:",
+        *said,
+        "  → STOP TUNING PARAMETERS AND SWITCH TO FINE-TUNING. Three settings have failed;",
+        "    that is evidence about the MODEL, not the settings, and a fourth is a worse use",
+        "    of the user's patience than teaching the model what they mean.",
+        "    Read skills/napari/micro_sam/FINETUNING.md and run its 'is fine-tuning even",
+        "    needed?' gate FIRST — no GPU, too few images, or data the stock model already",
+        "    covers all rule it out in seconds, and then you say so and keep tuning.",
+        "    If the gate passes, tell the user the cost (~20 min of their time annotating",
+        "    ~8 small tiles) and start at stage 1, which opens the tile picker and puts the",
+        "    decision in front of them anyway.",
+        "    This clears as soon as the user says a result is right.",
+    ])
+
+
+def retry_status_line(path: Optional[str] = None) -> str:
+    """One line for the container log, so the counter is observable while it runs."""
+    streak, prompts = unhappy_streak(path)
+    last = f' last: "{prompts[-1][:70]}"' if prompts else ""
+    tail = ("  *** LIMIT REACHED -> switching to fine-tuning ***"
+            if streak >= SEGMENTATION_RETRY_LIMIT else "")
+    return (f"[retry-watch] consecutive rejected segmentations: "
+            f"{streak}/{SEGMENTATION_RETRY_LIMIT}{last}{tail}")
+
+
+def note_prompt(text: str) -> str:
+    """Called with each user turn AS IT ARRIVES. Returns the classification.
+
+    The usage log alone is always one turn behind: `finish_query` writes the record
+    when the turn ENDS, so anything polling it during a turn sees only the turns
+    before it — the count lagged, the log line appeared on some turns and not others,
+    and the third complaint could not trip anything until the fourth had started.
+    Feeding the prompt in at `start_query` removes the lag, and gets the FULL text
+    rather than the 120-character preview the log stores.
+
+    The log is still read once, to seed the streak after a restart mid-conversation.
+    """
+    global _live_streak, _live_prompts, _prev_seg
+    if _live_streak is None:
+        _live_streak, _live_prompts = unhappy_streak(force_log=True)
+    kind = _classify(text, _prev_seg)
+    if kind == "happy":
+        _live_streak, _live_prompts = 0, []
+    elif kind == "unhappy":
+        _live_streak += 1
+        _live_prompts.append(text)
+    if kind in ("seg", "unhappy"):
+        _prev_seg = True
+    # One line per user turn, whatever the verdict. Printing only on change hid the
+    # turns that scored 'other', which are exactly the ones worth seeing when the
+    # count is not moving and you cannot tell whether the phrase list missed them.
+    print(f"[retry-watch] turn={kind:<7} streak={_live_streak}/{SEGMENTATION_RETRY_LIMIT}"
+          f"  :: {text[:80]!r}", flush=True)
+    _announce_if_due()
+    return kind
+
+
+def pending_directive() -> str:
+    """The directive to hand the agent, or empty. Works with no project and no ledger.
+
+    The ledger-context route only exists once a project workspace does, which in fast
+    mode on a quick threshold it may not. This is the channel that is always there.
+    """
+    return finetune_directive()
+
+
+def _announce_if_due() -> None:
+    streak, _ = unhappy_streak()
+    if streak < SEGMENTATION_RETRY_LIMIT:
+        return
+    key = _project_root or _usage_log_path() or "?"
+    if key in _retry_announced:
+        return
+    _retry_announced.add(key)
+    _notify(f"Segmentation has been through {streak} rounds you were not happy with. "
+            f"Rather than tune the settings again, the assistant will look at "
+            f"fine-tuning the model on your own annotations.")
+
+
+def _check_segmentation_retries() -> None:
+    """Poll-loop hook. Only a backstop now — `note_prompt` does the real work."""
+    global _last_reported
+    streak, _ = unhappy_streak()
+    if streak != _last_reported:
+        _last_reported = streak
+    _announce_if_due()
+
 
 
 # GUI hook — set by gui_runner so an agent-watchdog kill surfaces in the chat.
@@ -295,6 +521,13 @@ def _supervise(handle: AgentHandle) -> None:
             _kill(handle, f"repeated the same '{tool}' call {repeats}× with identical "
                           f"arguments — spinning loop")
             return
+
+        # Tier 3 — working, but not producing anything the user accepts. Never kills:
+        # the turn is healthy, it is the STRATEGY that needs to change.
+        try:
+            _check_segmentation_retries()
+        except Exception:
+            log.debug("agent watchdog: retry check failed", exc_info=True)
 
         # Tier 1 — a tool that never returned.
         quiet = handle.quiet_for()

@@ -76,7 +76,7 @@ call `recall_concepts` alongside it.
 
 2. For each stage, describe: which Fiji menu to open, which plugin to launch, and what parameters to set.
    After each instruction, tell the user "if you get stuck on any parameter, let me know and I'll take a look."
-   Only call `capture_plugin_dialog` if the user says they are stuck or confused — not proactively.
+   Only call `capture_ui_window` if the user says they are stuck or confused — not proactively.
    Do NOT call imagej_coder or imagej_debugger in UI mode.
 
 3. After each step, use `inspect_all_ui_windows` to verify the output is correct before proceeding.
