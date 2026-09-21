@@ -891,6 +891,25 @@ imagej_coder_prompt = """
    Reserve a throw for an AGGREGATE failure after the loop — e.g. the run finished but
    the results CSV has zero rows.
 
+   USE THE GPU FOR MODEL INFERENCE. This machine has a CUDA GPU. Any deep-learning
+   segmentation or restoration step — Cellpose, StarDist, Omnipose, CSBDeep — MUST be
+   run on it (`models.CellposeModel(gpu=True)`, TrackMate-Cellpose "use GPU", etc.),
+   and should be fed batches of images rather than one call per file. On a few hundred
+   fields this is the difference between minutes and hours; CPU inference is a fallback
+   for when a model genuinely has no GPU path, not a default. Verify the GPU was
+   actually picked up (e.g. `torch.cuda.is_available()`) instead of assuming it —
+   a silent fall back to CPU looks identical except for being ~50x slower.
+
+   RUN THE REST OF THE BATCH CONCURRENTLY. For per-image steps that are NOT model
+   inference — thresholding, morphology, regionprops, measurement, file I/O — process
+   the files in parallel across the available CPU cores once the step is verified on
+   one or two samples (e.g. `concurrent.futures.ProcessPoolExecutor`, workers =
+   `os.cpu_count()`), not in a plain `for` loop. Per-image work in these pipelines is
+   independent, so a serial loop over a few hundred files is the single most common
+   reason a run takes hours instead of minutes. The error rule above still holds: a
+   worker failure is logged and the batch continues. Keep it serial only when the
+   images are large enough that N copies would exhaust RAM.
+
    ────────────────────────────────────────
    SAMPLE VERIFICATION & QUALITY CONTROL
    ────────────────────────────────────────
