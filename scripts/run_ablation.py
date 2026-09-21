@@ -43,6 +43,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -141,6 +142,47 @@ def render_config(base_path: Path, overrides: dict) -> str:
                 f"config that may not mean what the arm name says."
             )
     return "\n".join(lines)
+
+
+def _log_ref(log_path: Path, results_root: Path):
+    """Where this arm's container log lives, relative to the results root if possible.
+
+    Defensive on purpose. This is bookkeeping for summary.json, computed AFTER the
+    arm has finished and its real outputs are on disk — so nothing it does may raise.
+    An earlier version compared a relative path against a resolved one, and the
+    ValueError threw away a completed arm and stopped the whole study.
+    """
+    try:
+        if not log_path.exists():
+            return None
+        return str(log_path.resolve().relative_to(results_root.resolve()))
+    except Exception:
+        try:
+            return str(log_path)
+        except Exception:
+            return None
+
+
+def _write_summary(args, learned: Path, records: list) -> Path:
+    """Write summary.json. Called after every arm, not only at the end.
+
+    A study is hours long, and until now its only record appeared after the last
+    arm — so anything that ended the run early left no summary at all, even for the
+    arms that had finished cleanly.
+    """
+    summary = args.results / "summary.json"
+    summary.write_text(json.dumps({
+        "finished": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "instruction": str(args.instruction),
+        "learned_root": str(learned),
+        "learned_isolated": bool(args.isolate_learned),
+        "note": ("each arm had its own copy of the learned store; order does not matter"
+                 if args.isolate_learned else
+                 "arms SHARE one learned store and are order-dependent; "
+                 "the order below is the order run"),
+        "arms": records,
+    }, indent=2), encoding="utf-8")
+    return summary
 
 
 def _writable(path: Path) -> Path:
@@ -246,16 +288,28 @@ def run_arm(name, overrides, args, learned_root: Path) -> dict:
     # to end: it produces no result.json, so the arm contributes nothing to the study
     # even when the agent had already done most of the work. A container that ends
     # ITSELF writes its numbers down first.
+    #
+    # Every derived value is CLAMPED POSITIVE. Subtracting a fixed margin from a small
+    # --arm-timeout produced negatives, and a negative is not a small budget — it is a
+    # different behaviour: the container reads DEADLINE <= 0 as "watchdog disabled",
+    # and a negative SCRIPT_MAX makes every script fail its ceiling test on the first
+    # check, reinstating the kill-a-working-script bug. Both fail silently.
+    script_timeout = max(60, int(args.script_timeout * 60))
+    silent_timeout = max(60, int(args.silent_timeout * 60))
     if args.arm_timeout:
+        arm_seconds = int(args.arm_timeout * 60)
         # Comfortably inside the outer kill, so the self-ending path always wins.
-        env["IMAGENTJ_BENCHMARK_DEADLINE"] = str(int(args.arm_timeout * 60) - 300)
-    env["IMAGENTJ_BENCHMARK_SCRIPT_TIMEOUT"] = str(int(args.script_timeout * 60))
-    env["IMAGENTJ_BENCHMARK_SILENT_TIMEOUT"] = str(int(args.silent_timeout * 60))
-    if args.arm_timeout:
+        env["IMAGENTJ_BENCHMARK_DEADLINE"] = str(max(120, arm_seconds - 300))
         # A script still producing output may use the whole arm; the arm deadline is
         # the real budget, so there is no reason for a second, tighter ceiling.
-        env["IMAGENTJ_BENCHMARK_SCRIPT_MAX"] = str(int(args.arm_timeout * 60) - 360)
-    env["IMAGENTJ_BENCHMARK_HEARTBEAT"] = str(int(args.heartbeat))
+        script_max = max(120, arm_seconds - 360)
+        env["IMAGENTJ_BENCHMARK_SCRIPT_MAX"] = str(script_max)
+        # A cap above the ceiling would never be reached, so the reprieve logic that
+        # keeps a working script alive would never run at all.
+        script_timeout = min(script_timeout, script_max)
+    env["IMAGENTJ_BENCHMARK_SCRIPT_TIMEOUT"] = str(script_timeout)
+    env["IMAGENTJ_BENCHMARK_SILENT_TIMEOUT"] = str(silent_timeout)
+    env["IMAGENTJ_BENCHMARK_HEARTBEAT"] = str(max(5, int(args.heartbeat)))
     # The -f files must come BEFORE the subcommand, and every one of them that the
     # normal launch uses has to be here too: on the Spark the override carries the
     # GPU reservation, the HOST_UID build args and the unattended settings, so
@@ -346,8 +400,7 @@ def run_arm(name, overrides, args, learned_root: Path) -> dict:
         "seconds": round(took, 1),
         "started": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "result_json": result_file.exists(),
-        "container_log": str(log_path.relative_to(args.results.resolve()))
-                         if log_path.exists() else None,
+        "container_log": _log_ref(log_path, args.results),
     }
     if result_file.exists():
         try:
@@ -414,6 +467,15 @@ def main():
     args = p.parse_args()
     args.repo = repo
 
+    # Resolve the results root ONCE, here. `--results ./ablation_02` otherwise stays
+    # relative while individual call sites resolve it, and mixing the two forms is
+    # what made a path comparison blow up after an arm had already succeeded. It also
+    # matters that the absolute form is what reaches docker: these become bind-mount
+    # sources, and compose is run with cwd=repo, not from where you typed the command.
+    args.results = args.results.resolve()
+    if args.learned_root:
+        args.learned_root = args.learned_root.resolve()
+
     # An ablation is hours long and is nearly always started over ssh. A dropped
     # connection SIGHUPs the whole process group, which used to end the study
     # mid-arm with no result and a half-written output tree. Ignoring it means the
@@ -457,20 +519,23 @@ def main():
             _writable(arm_learned)
         else:
             arm_learned = learned
-        records.append(run_arm(name, overrides, args, arm_learned))
+        # One arm must never be able to end the study. Arms cost the better part of
+        # an hour each; an exception in the last arm previously discarded every
+        # earlier one, because summary.json is only written after the loop.
+        try:
+            records.append(run_arm(name, overrides, args, arm_learned))
+        except KeyboardInterrupt:
+            print("\ninterrupted — writing the summary for the arms completed so far")
+            break
+        except Exception:
+            print(f"  !! {name}: the runner itself raised — recording the arm as "
+                  f"failed and carrying on:")
+            traceback.print_exc()
+            records.append({"arm": name, "overrides": overrides,
+                            "runner_error": traceback.format_exc(limit=8)})
+        _write_summary(args, learned, records)     # after EVERY arm, not just at the end
 
-    summary = args.results / "summary.json"
-    summary.write_text(json.dumps({
-        "finished": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "instruction": str(args.instruction),
-        "learned_root": str(learned),
-        "learned_isolated": bool(args.isolate_learned),
-        "note": ("each arm had its own copy of the learned store; order does not matter"
-                 if args.isolate_learned else
-                 "arms SHARE one learned store and are order-dependent; "
-                 "the order below is the order run"),
-        "arms": records,
-    }, indent=2), encoding="utf-8")
+    summary = _write_summary(args, learned, records)
     print(f"\nsummary: {summary}")
 
     missing = [r["arm"] for r in records if not r.get("result_json") and "skipped" not in r]
