@@ -37,6 +37,7 @@ Usage
 import argparse
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -60,25 +61,76 @@ ADDITIVE = {"fast_mode": {"fast_mode": True}}
 SWITCHES = REMOVABLE + list(ADDITIVE)
 
 
-def arms(only=None, baseline="last"):
-    """The seven arms, in run order.
+def arm_catalogue(design="loo"):
+    """Every arm this design defines, as (name, config overrides).
 
-    Order is not cosmetic while the learned store is SHARED: every arm writes to
-    it, so a later arm starts with more memory than an earlier one. Putting the
-    baseline last therefore gives it the richest store of all, and any advantage
-    it shows is then partly ablation and partly running-order. Use
-    --isolate-learned to remove the confound entirely.
+    Two designs, because they answer different questions and disagree exactly where
+    it matters:
+
+      loo  "leave one out"  — baseline MINUS one component. Measures what a component
+           adds GIVEN EVERYTHING ELSE IS PRESENT. Blind to redundancy: if two
+           components cover the same ground, removing either alone changes nothing
+           and both look useless.
+
+      aoi  "add one in"     — all_off PLUS one component, independently (NOT
+           cumulative: each arm re-starts from all_off). Measures a component's
+           STANDALONE contribution, so a redundant component still shows up. Blind
+           instead to synergy — a component that only works alongside another reads
+           as useless here.
+
+    Run both and the pair of effects classifies each component:
+        large / large  -> genuinely useful, not substitutable
+        ~0    / large  -> redundant, something else covers it
+        large / ~0     -> synergistic, only works with others present
+        ~0    / ~0     -> does nothing on this task
+
+    `all_off` is in both designs and is the gate for the whole study: the
+    baseline - all_off gap is the TOTAL effect of every component together, and
+    therefore an upper bound on any single one. If that gap is inside the noise,
+    no individual arm can show anything and there is nothing to look for.
     """
-    out = [(f"no_{s}", {s: False}) for s in REMOVABLE]
+    off = {s: False for s in REMOVABLE}
+    out = [("baseline", {}), ("all_off", dict(off))]
+    if design in ("loo", "both"):
+        out += [(f"no_{s}", {s: False}) for s in REMOVABLE]
+    if design in ("aoi", "both"):
+        # all off EXCEPT this one — independent per arm, never accumulated.
+        out += [(f"only_{s}", {k: (k == s) for k in REMOVABLE}) for s in REMOVABLE]
     out += [(name, dict(ov)) for name, ov in ADDITIVE.items()]
-    out = ([("baseline", {})] + out) if baseline == "first" else (out + [("baseline", {})])
+    return out
+
+
+def arms(only=None, baseline="last", design="loo", repeats=1):
+    """The arms to run, in order, expanded by --repeats.
+
+    A repeat is a separate arm directory (`<arm>__r2`) with identical settings. That
+    is the whole point: with one run per arm there is no spread to compare an effect
+    against, so every difference is unfalsifiable. The repeats ARE the measurement.
+
+    Order still matters while the learned store is SHARED — every arm writes to it,
+    so a later arm starts richer. Use --isolate-learned to remove that confound.
+    """
+    out = arm_catalogue(design)
+    if baseline == "last":
+        out = [a for a in out if a[0] != "baseline"] + [("baseline", {})]
     if only:
         wanted = set(only)
         out = [a for a in out if a[0] in wanted]
         missing = wanted - {a[0] for a in out}
         if missing:
-            sys.exit(f"unknown arm(s): {', '.join(sorted(missing))}")
+            known = ", ".join(n for n, _ in arm_catalogue("both"))
+            sys.exit(f"unknown arm(s): {', '.join(sorted(missing))}\nknown: {known}")
+    if repeats > 1:
+        expanded = []
+        for name, ov in out:
+            expanded += [(f"{name}__r{i}", dict(ov)) for i in range(1, repeats + 1)]
+        out = expanded
     return out
+
+
+def base_arm(name: str) -> str:
+    """The arm name without its repeat suffix."""
+    return re.sub(r"__r\d+$", "", name)
 
 
 def render_config(base_path: Path, overrides: dict) -> str:
@@ -431,6 +483,8 @@ def run_arm(name, overrides, args, learned_root: Path,
     result_file = out_dir / "result.json"
     record = {
         "arm": name,
+        "base_arm": base_arm(name),
+        "repeat": int(re.search(r"__r(\d+)$", name).group(1)) if "__r" in name else 1,
         "overrides": overrides,
         "exit_code": returncode,
         "timed_out": timed_out,
@@ -477,6 +531,18 @@ def main():
                         "docker-compose.yml plus docker-compose.spark.yml when that "
                         "override exists — the same pair the normal launch uses.")
     p.add_argument("--only", nargs="+", help="run only these arms (e.g. baseline no_rag)")
+    p.add_argument("--design", choices=("loo", "aoi", "both"), default="loo",
+                   help="loo = baseline minus one component (what it adds given "
+                        "everything else); aoi = all_off plus one component, each arm "
+                        "independently (what it does alone, and unlike loo not blinded "
+                        "by redundancy); both = every arm of each. `baseline` and "
+                        "`all_off` are always included — their gap is the total effect "
+                        "and gates whether any single arm can show anything.")
+    p.add_argument("--repeats", type=int, default=1, metavar="N",
+                   help="run every arm N times (default 1). Repeats are what turn a "
+                        "difference into a measurement: without a spread there is no "
+                        "interval to compare an effect against. Each repeat is its own "
+                        "arm directory, <arm>__rN.")
     p.add_argument("--baseline", choices=("first", "last"), default="last",
                    help="where the all-on baseline runs (default: last)")
     p.add_argument("--isolate-learned", action="store_true",
@@ -527,6 +593,8 @@ def main():
     # sources, and compose is run with cwd=repo, not from where you typed the command.
     if args.parallel < 1:
         sys.exit("--parallel must be at least 1")
+    if args.repeats < 1:
+        sys.exit("--repeats must be at least 1")
     if args.parallel > 1 and not args.isolate_learned:
         # Concurrent arms writing one learned store would contaminate each other and
         # race on the same files — the very thing --isolate-learned exists to prevent.
@@ -563,8 +631,9 @@ def main():
         print(f"learned store emptied: {learned}")
     _writable(learned)
 
-    selected = arms(args.only, args.baseline)
-    print(f"{len(selected)} arm(s): {', '.join(n for n, _ in selected)}")
+    selected = arms(args.only, args.baseline, args.design, args.repeats)
+    print(f"design: {args.design}   repeats: {args.repeats}")
+    print(f"{len(selected)} run(s): {', '.join(n for n, _ in selected)}")
     print("learned store: " + (f"{learned} (a private COPY per arm)"
           if args.isolate_learned else f"{learned} (SHARED, carried forward)"))
 
