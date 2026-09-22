@@ -212,7 +212,14 @@ def _is_recipe(block: str) -> bool:
 def _append_or_bump(path: str, marker: str, block: str) -> None:
     """Idempotent write: if an entry with this marker (<!--p:HASH / <!--r:HASH) already
     exists in the page, increment its seen: count in place; otherwise append the new
-    block. This is how re-encountering the same lesson/recipe reinforces it."""
+    block. This is how re-encountering the same lesson/recipe reinforces it.
+
+    Raises OSError if the page cannot be written — callers MUST handle it. The store
+    is routinely a bind mount whose files were created by a different uid than the one
+    the app runs as, and there a page is readable but not appendable. Letting that
+    escape as an unhandled PermissionError took down the whole tool call and left the
+    caller's already-written code file orphaned; see library_add_recipe.
+    """
     os.makedirs(os.path.dirname(path), exist_ok=True)
     text = _read(path)
     if marker in text:                                   # idempotent: bump seen
@@ -563,11 +570,19 @@ def library_add_pitfall(language: str, rule: str, snippet: str = "",
     if snippet:
         block += "\n" + "\n".join("    " + ln for ln in snippet.strip().splitlines())
     target = _core_pitfall_page(language) if to_core else _pitfall_page(language)
-    with _LOCK:
-        _append_or_bump(target, f"<!--p:{h} ", block)
-        if to_core:
-            _enforce_core_cap(language, "pitfall")
-        _log(language, "pitfall", error_type or "Logic", h, rule)
+    try:
+        with _LOCK:
+            _append_or_bump(target, f"<!--p:{h} ", block)
+            if to_core:
+                _enforce_core_cap(language, "pitfall")
+            _log(language, "pitfall", error_type or "Logic", h, rule)
+    except OSError as exc:
+        # Nothing to roll back here — a pitfall is only the index entry — but the
+        # failure must still be REPORTED rather than raised. An unhandled error ends
+        # the agent's tool call over a bookkeeping write that was never load-bearing.
+        return (f"skipped: could not write the pitfall index ({type(exc).__name__}: "
+                f"{exc}) — the lesson was NOT stored. The learned store is not "
+                f"writable by this process; check permissions on {target}.")
     return f"added {'CORE ' if to_core else ''}pitfall [{h}] {rule[:60]}"
 
 @tool("library_add_recipe")
@@ -604,11 +619,26 @@ def library_add_recipe(language: str, name: str, description: str, inputs: str,
     block = (f"<!--r:{h} seen:1 lang:{language} chash:{chash} kw:{_norm_kw(keywords)}-->\n"
              f"- {name}  [inputs: {inputs}]\n  {description}\n  SCRIPT: {code_path}")
     target = _core_recipe_page(language) if core else _recipe_page(language)
-    with _LOCK:
-        _append_or_bump(target, f"<!--r:{h} ", block)
-        if core:
-            _enforce_core_cap(language, "recipe")
-        _log(language, "recipe", "core" if core else "lib", h, name)
+    try:
+        with _LOCK:
+            _append_or_bump(target, f"<!--r:{h} ", block)
+            if core:
+                _enforce_core_cap(language, "recipe")
+            _log(language, "recipe", "core" if core else "lib", h, name)
+    except OSError as exc:
+        # The code file is already on disk but nothing indexes it, and `recall` reads
+        # ONLY the index — so an unindexed recipe is unreachable dead weight that will
+        # also defeat the duplicate check on every future attempt. Take it back out and
+        # SAY SO: a silent half-write here is what made code memory look present and
+        # behave as though it were switched off.
+        try:
+            os.remove(code_path)
+        except OSError:
+            pass
+        return (f"skipped: saved the code but could not write the recipe index "
+                f"({type(exc).__name__}: {exc}) — the recipe was NOT stored. The "
+                f"learned store is not writable by this process; check ownership and "
+                f"permissions on {target}.")
     return f"added {'CORE ' if core else ''}recipe [{h}] {name}"
 
 @tool("library_remove")

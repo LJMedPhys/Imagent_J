@@ -246,13 +246,24 @@ def seed_arm_data(arm_dir: Path, repo: Path) -> None:
         if f.exists():
             f.write_text("", encoding="utf-8")
             emptied += 1
+    # Directories AND files. Everything here is created by the HOST user, while the
+    # container runs as `imagentj` — a uid baked from HOST_UID at image build time,
+    # and not necessarily this one. Write permission on a directory lets that user
+    # CREATE files in it, but never APPEND to an existing file it does not own.
+    #
+    # Chmodding only directories therefore produced a store the container could add
+    # to but not update, and the failure was silent in the worst way: learned_memory
+    # writes a recipe's CODE to a directory it creates itself (succeeds), then
+    # appends the index entry to a seeded .md (EACCES). The code file was orphaned
+    # with nothing pointing at it, `recall` reads only the index, and so returned
+    # empty for every query in all 21 arms of the first three studies — including the
+    # baselines, which made the no_code_memory comparison measure nothing at all.
     _writable(arm_dir)
     for sub in arm_dir.rglob("*"):
-        if sub.is_dir():
-            try:
-                sub.chmod(0o777)
-            except OSError:
-                pass
+        try:
+            sub.chmod(0o777 if sub.is_dir() else 0o666)
+        except OSError:
+            pass
     print(f"    seeded from tracked data/ (concept library + container snapshot kept; "
           f"{emptied} learned file(s) emptied)")
 
