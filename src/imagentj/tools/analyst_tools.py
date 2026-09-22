@@ -458,10 +458,23 @@ def summarize_deliverables(
         # that had produced exactly what was asked for. Per-image artefacts are the case
         # this check was built for, so that is the case it now fires on; for tables the
         # premise is unknowable from the files alone, so it asks instead of failing.
+        #
+        # COUNT from every matched path, never from the measured SAMPLE. Above
+        # _MAX_FILES_MEASURED files only an even sample is opened, for speed, so
+        # `measured` saturates at 60 while n_in stays the true input count — and this
+        # check then compared 60 against 500 and failed EVERY per-image batch larger
+        # than the sample cap. Four arms of a real ablation study were scored as
+        # failures that way, each reporting the identical "only 60 produced file(s)",
+        # which was the sample size and not anything on disk.
+        #
+        # The sample remains exactly right for asking WHAT the files are: kinds and
+        # statistics generalise from an even sample. A count does not.
         n_in = len(in_images)
+        produced_paths = [p for p in paths if os.path.basename(p) not in in_names]
+        n_produced = len(produced_paths)
         produced = [m for m in measured if m["name"] not in in_names]
         per_image_kind = [m for m in produced if m.get("kind") == "image"]
-        if n_in and len(produced) < n_in:
+        if n_in and n_produced < n_in:
             if not produced:
                 # Nothing was produced AT ALL, yet files matched the pattern — so
                 # every measured file is one of the inputs. The aggregate-deliverable
@@ -476,14 +489,17 @@ def summarize_deliverables(
                                        f"delivered anything; a missing deliverable is a failure, "
                                        f"not a caveat."))
             elif per_image_kind:
-                findings.append((FAIL, f"only {len(produced)} produced file(s) for {n_in} input "
+                # No second number here. The kind comes from the SAMPLE, so printing
+                # its size beside the real count invites exactly the misreading this
+                # whole check just produced: a reader (human or model) takes the
+                # smaller figure for the amount delivered.
+                findings.append((FAIL, f"only {n_produced} produced file(s) for {n_in} input "
                                        f"image(s), and they are per-image artefacts "
-                                       f"({len(per_image_kind)} mask/image file(s)) — one is "
-                                       f"expected per input. The batch stopped early or skipped "
-                                       f"images; a partial deliverable is a failure, not a "
-                                       f"caveat."))
-            elif len(produced) > 1:
-                findings.append((SUSPECT, f"{len(produced)} produced table(s) for {n_in} input "
+                                       f"(mask/image files) — one is expected per input. The "
+                                       f"batch stopped early or skipped images; a partial "
+                                       f"deliverable is a failure, not a caveat."))
+            elif n_produced > 1:
+                findings.append((SUSPECT, f"{n_produced} produced table(s) for {n_in} input "
                                           f"image(s). If these are per-image tables the batch "
                                           f"stopped early and this is a FAIL; if they are "
                                           f"aggregate summaries over the whole dataset it is "
