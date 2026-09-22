@@ -268,7 +268,8 @@ def seed_arm_data(arm_dir: Path, repo: Path) -> None:
           f"{emptied} learned file(s) emptied)")
 
 
-def run_arm(name, overrides, args, learned_root: Path) -> dict:
+def run_arm(name, overrides, args, learned_root: Path,
+            qdrant_src: Path | None = None) -> dict:
     # ONE directory per arm, serving as both /app/data and /benchmark/output. The
     # app needs /app/data for projects, chats and checkpoints, but nothing requires
     # it to be ./data — pointing it here means deliverables are written straight
@@ -345,6 +346,29 @@ def run_arm(name, overrides, args, learned_root: Path) -> dict:
     # inside the container and leave the mount pointing at ./data.
     run_env = {**os.environ, "IMAGENTJ_APP_DATA_DIR": str(out_dir.resolve())}
 
+    # Same trick for the vector store, and for two reasons. Qdrant in local mode takes
+    # an EXCLUSIVE LOCK, so concurrent arms sharing ./qdrant_data simply cannot both
+    # start — this is what makes --parallel possible at all. And even run sequentially
+    # the store is written during a run, so one arm's ingests were reaching the next;
+    # isolating it removes a contamination channel that had nothing to do with the
+    # feature being ablated.
+    #
+    # The copy is NOT optional-and-empty: the store holds the ingested RAG corpus, so
+    # an empty one would silently disable retrieval in every arm — the exact class of
+    # bug that made the concept library matter in seed_arm_data. ~180 MB, seconds.
+    if qdrant_src is not None:
+        arm_qdrant = out_dir / "qdrant"
+        if arm_qdrant.exists():
+            shutil.rmtree(arm_qdrant)
+        shutil.copytree(qdrant_src, arm_qdrant)
+        for sub in arm_qdrant.rglob("*"):
+            try:
+                sub.chmod(0o777 if sub.is_dir() else 0o666)
+            except OSError:
+                pass
+        _writable(arm_qdrant)
+        run_env["IMAGENTJ_QDRANT_DIR"] = str(arm_qdrant.resolve())
+
     print(f"\n{'=' * 72}\n  ARM: {name}   "
           f"({', '.join(f'{k}={v}' for k, v in overrides.items()) or 'nothing removed'})"
           f"\n{'=' * 72}")
@@ -372,6 +396,8 @@ def run_arm(name, overrides, args, learned_root: Path) -> dict:
             for line in proc.stdout:
                 fh.write(line)
                 fh.flush()
+                if args.parallel > 1:
+                    continue          # interleaved arms are unreadable; the file has it
                 try:
                     sys.stdout.write(line)
                     sys.stdout.flush()
@@ -456,11 +482,27 @@ def main():
     p.add_argument("--isolate-learned", action="store_true",
                    help="give every arm its OWN copy of the learned store, so arms "
                         "cannot see each other's memory and run order stops mattering")
-    p.add_argument("--arm-timeout", type=float, default=90,
+    p.add_argument("--parallel", type=int, default=1, metavar="N",
+                   help="run N arms at once (default: 1). Arms are LLM-bound — model "
+                        "thinking is ~99%% of each arm's wall clock — so this scales "
+                        "nearly linearly. 2-3 is sensible; each arm still wants the "
+                        "GPU for its segmentation steps. Requires --isolate-learned.")
+    p.add_argument("--isolate-qdrant", action="store_true",
+                   help="give every arm its own COPY of the vector store even when "
+                        "running sequentially. Implied by --parallel > 1, which needs "
+                        "it (Qdrant takes an exclusive lock). Worth it on its own: the "
+                        "shared store is written during a run, so one arm's ingests "
+                        "otherwise reach the next.")
+    p.add_argument("--qdrant-root", type=Path, default=None,
+                   help="the vector store to copy per arm (default: <repo>/qdrant_data)")
+    p.add_argument("--arm-timeout", type=float, default=60,
                    help="minutes before an arm is killed and the study moves on "
                         "(0 = wait for ever). One wedged arm should not cost the "
                         "whole run. The container arms its own deadline 5 min inside "
-                        "this, so it can still write result.json before being killed.")
+                        "this, so it can still write result.json before being killed. "
+                        "60 rather than 90 because the script cap is now silence-based: "
+                        "a working arm is no longer at risk of the deadline, while a "
+                        "stalled one used to burn the full 90 min for no measurement.")
     p.add_argument("--script-timeout", type=float, default=30,
                    help="minutes after which one script starts being CHECKED for "
                         "progress (default: 30). Passing it is not fatal — a script "
@@ -483,6 +525,14 @@ def main():
     # what made a path comparison blow up after an arm had already succeeded. It also
     # matters that the absolute form is what reaches docker: these become bind-mount
     # sources, and compose is run with cwd=repo, not from where you typed the command.
+    if args.parallel < 1:
+        sys.exit("--parallel must be at least 1")
+    if args.parallel > 1 and not args.isolate_learned:
+        # Concurrent arms writing one learned store would contaminate each other and
+        # race on the same files — the very thing --isolate-learned exists to prevent.
+        sys.exit("--parallel > 1 requires --isolate-learned, otherwise the arms share "
+                 "one writable learned store and contaminate each other.")
+
     args.results = args.results.resolve()
     if args.learned_root:
         args.learned_root = args.learned_root.resolve()
@@ -518,8 +568,17 @@ def main():
     print("learned store: " + (f"{learned} (a private COPY per arm)"
           if args.isolate_learned else f"{learned} (SHARED, carried forward)"))
 
-    records = []
-    for name, overrides in selected:
+    qdrant_src = None
+    if args.parallel > 1 or args.isolate_qdrant:
+        qdrant_src = (args.qdrant_root or (repo / "qdrant_data")).resolve()
+        if not qdrant_src.is_dir():
+            sys.exit(f"--parallel/--isolate-qdrant need a vector store to copy, but "
+                     f"{qdrant_src} is not a directory. Point --qdrant-root at it.")
+        print(f"vector store: a private COPY per arm from {qdrant_src}")
+
+    records, _rec_lock = [], threading.Lock()
+
+    def _one(name, overrides):
         if args.isolate_learned:
             # A private copy per arm, seeded from the same starting store, so no arm
             # can see what another learned and running order stops mattering.
@@ -534,17 +593,41 @@ def main():
         # an hour each; an exception in the last arm previously discarded every
         # earlier one, because summary.json is only written after the loop.
         try:
-            records.append(run_arm(name, overrides, args, arm_learned))
-        except KeyboardInterrupt:
-            print("\ninterrupted — writing the summary for the arms completed so far")
-            break
+            rec = run_arm(name, overrides, args, arm_learned, qdrant_src)
         except Exception:
             print(f"  !! {name}: the runner itself raised — recording the arm as "
                   f"failed and carrying on:")
             traceback.print_exc()
-            records.append({"arm": name, "overrides": overrides,
-                            "runner_error": traceback.format_exc(limit=8)})
-        _write_summary(args, learned, records)     # after EVERY arm, not just at the end
+            rec = {"arm": name, "overrides": overrides,
+                   "runner_error": traceback.format_exc(limit=8)}
+        with _rec_lock:
+            records.append(rec)
+            _write_summary(args, learned, records)  # after EVERY arm, not just at the end
+        return rec
+
+    if args.parallel > 1:
+        # Arms are LLM-bound, not GPU-bound — thinking time is ~99% of every arm's wall
+        # clock — so concurrency buys close to linear speedup. Kept modest by default
+        # anyway: the segmentation steps inside each arm DO want the GPU.
+        from concurrent.futures import ThreadPoolExecutor
+        print(f"running {args.parallel} arms at a time; per-arm output goes to "
+              f"<arm>/container.log (live echo is off while parallel)")
+        with ThreadPoolExecutor(max_workers=args.parallel) as pool:
+            futures = [pool.submit(_one, n, o) for n, o in selected]
+            try:
+                for f in futures:
+                    f.result()
+            except KeyboardInterrupt:
+                print("\ninterrupted — cancelling queued arms")
+                for f in futures:
+                    f.cancel()
+    else:
+        for name, overrides in selected:
+            try:
+                _one(name, overrides)
+            except KeyboardInterrupt:
+                print("\ninterrupted — writing the summary for the arms completed so far")
+                break
 
     summary = _write_summary(args, learned, records)
     print(f"\nsummary: {summary}")

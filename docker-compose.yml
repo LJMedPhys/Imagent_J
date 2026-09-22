@@ -47,7 +47,12 @@ services:
       # Bind-mount the host folder directly: qdrant_data/ is in .dockerignore and therefore
       # never reaches the image, so a named volume would always seed empty. The host folder
       # is the source of truth for ingested data.
-      - ./qdrant_data:/app/qdrant_data
+      #
+      # Overridable so several containers can run at once. Qdrant in local mode takes an
+      # exclusive lock on its store, so two containers sharing this path cannot both
+      # start — and even run sequentially they WRITE to it, letting one run's ingests
+      # reach the next. The ablation runner points each arm at its own copy.
+      - ${IMAGENTJ_QDRANT_DIR:-./qdrant_data}:/app/qdrant_data
       # Image data directory (place images in ./data on host, access as /mnt/data in container)
       - ${IMAGE_DATA_DIR:-./data}:/data
       # Source code mount for development (remove in production image)
