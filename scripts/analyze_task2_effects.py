@@ -117,7 +117,20 @@ def binary(path):
     return a > 0
 
 
-def score_run(run_dir, gt_masks):
+def load_mapping(path):
+    """{anonymised name -> (true_count, focus)} from anonymize_inputs.py's key."""
+    out = {}
+    with open(path, newline="") as fh:
+        rows = [l for l in fh if not l.startswith("#")]
+    for r in csv.DictReader(rows):
+        try:
+            out[key_of(r["new_name"])] = (float(r["true_count"]), int(r["focus"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+def score_run(run_dir, gt_masks, mapping=None):
     """RMSE / MAE / bias / Dice / cost / minutes for one run directory."""
     csv_path = find_one(run_dir, "**/counts.csv", "**/*count*.csv")
     if not csv_path:
@@ -128,10 +141,17 @@ def score_run(run_dir, gt_masks):
 
     errs, blur = [], defaultdict(list)
     for k, pc in pred.items():
-        m = META.search(k)
-        if not m:
-            continue
-        true_c, focus = int(m.group(1)), int(m.group(2))
+        if mapping is not None:
+            if k not in mapping:
+                continue
+            true_c, focus = mapping[k]
+        else:
+            # Fall back to the filename, which is where the answer sits in a
+            # dataset that has not been anonymised — and is exactly why it should be.
+            m = META.search(k)
+            if not m:
+                continue
+            true_c, focus = int(m.group(1)), int(m.group(2))
         errs.append(pc - true_c)
         blur[focus].append(pc - true_c)
     e = np.asarray(errs, float)
@@ -171,8 +191,14 @@ def score_run(run_dir, gt_masks):
             cost = round(money(md.get("session_totals") or {}), 3)
         except Exception:
             pass
+    # A perfect score over hundreds of images is not a result, it is a tell: the
+    # counts were read rather than measured. Flagged, never silently averaged in.
+    exact = int(np.sum(e == 0))
+    leaked = bool(e.size >= 50 and exact == e.size)
     return dict(
         images=int(e.size),
+        exact_matches=exact,
+        leaked=leaked,
         rmse=float(np.sqrt((e ** 2).mean())) if e.size else None,
         mae=float(np.abs(e).mean()) if e.size else None,
         bias=float(e.mean()) if e.size else None,
@@ -225,6 +251,11 @@ def main():
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--results", required=True, help="the study results root")
     p.add_argument("--gt-masks", help="directory of ground-truth masks, for Dice")
+    p.add_argument("--mapping", help="anonymize_inputs.py key, so true counts come "
+                                     "from the mapping instead of the filename")
+    p.add_argument("--keep-leaked", action="store_true",
+                   help="include runs whose counts exactly match ground truth on every "
+                        "image (by default they are reported and excluded)")
     p.add_argument("--out", help="write the per-run metrics CSV here")
     args = p.parse_args()
 
@@ -234,16 +265,33 @@ def main():
                     if os.path.isfile(p_)}
         print(f"ground-truth masks for Dice: {len(gt_masks)}")
 
+    mapping = load_mapping(args.mapping) if args.mapping else None
+    if mapping:
+        print(f"scoring through the mapping: {len(mapping)} images")
+
     runs = {}
     for d in sorted(os.listdir(args.results)):
         full = os.path.join(args.results, d)
         if not os.path.isdir(full) or d in ("learned", "qdrant"):
             continue
-        s = score_run(full, gt_masks)
+        s = score_run(full, gt_masks, mapping)
         if s:
             runs[d] = s
     if not runs:
         sys.exit(f"no scorable runs under {args.results}")
+
+    leaked = {n: s for n, s in runs.items() if s.get("leaked")}
+    if leaked:
+        print(f"\n{'!' * 78}\nGROUND-TRUTH LEAKAGE — {len(leaked)} of {len(runs)} run(s) "
+              f"scored EXACTLY right on every image\n{'!' * 78}")
+        for n, s in sorted(leaked.items()):
+            print(f"  {n:18} {s['images']} images, {s['exact_matches']} exact, "
+                  f"Dice {s['dice_mean'] if s['dice_mean'] is None else round(s['dice_mean'],3)}")
+        print("  Counts that perfect did not come from segmentation. Anonymise the "
+              "input filenames (scripts/anonymize_inputs.py) and re-run.")
+        if not args.keep_leaked:
+            print(f"  -> excluded from the statistics below (--keep-leaked to include)")
+            runs = {n: s for n, s in runs.items() if not s.get("leaked")}
 
     by_arm = defaultdict(list)
     for name, s in runs.items():
