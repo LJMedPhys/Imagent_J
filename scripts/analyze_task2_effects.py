@@ -74,7 +74,8 @@ def key_of(name):
 
 
 def base_arm(name):
-    return re.sub(r"__r\d+$", "", name)
+    """Arm name, stripped of both the results-root prefix and the repeat suffix."""
+    return re.sub(r"__r\d+$", "", name.split("/")[-1])
 
 
 def money(st):
@@ -249,7 +250,12 @@ def effect(a_vals, b_vals, metric):
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--results", required=True, help="the study results root")
+    p.add_argument("--results", required=True, nargs="+", metavar="DIR",
+                   help="one or more study result roots. Several are pooled by arm, "
+                        "which is how a top-up run is combined with the original: the "
+                        "repeat numbers restart per directory, so runs are kept "
+                        "distinct by their root and only GROUPED by arm. Merging the "
+                        "directories by hand would let <arm>__r1 overwrite <arm>__r1.")
     p.add_argument("--gt-masks", help="directory of ground-truth masks, for Dice")
     p.add_argument("--mapping", help="anonymize_inputs.py key, so true counts come "
                                      "from the mapping instead of the filename")
@@ -270,15 +276,24 @@ def main():
         print(f"scoring through the mapping: {len(mapping)} images")
 
     runs = {}
-    for d in sorted(os.listdir(args.results)):
-        full = os.path.join(args.results, d)
-        if not os.path.isdir(full) or d in ("learned", "qdrant"):
-            continue
-        s = score_run(full, gt_masks, mapping)
-        if s:
-            runs[d] = s
+    for root in args.results:
+        if not os.path.isdir(root):
+            sys.exit(f"not a directory: {root}")
+        tag = os.path.basename(os.path.normpath(root))
+        found = 0
+        for d in sorted(os.listdir(root)):
+            full = os.path.join(root, d)
+            if not os.path.isdir(full) or d in ("learned", "qdrant"):
+                continue
+            s = score_run(full, gt_masks, mapping)
+            if s:
+                # Qualified by root so two directories can both hold <arm>__r1.
+                runs[f"{tag}/{d}" if len(args.results) > 1 else d] = s
+                found += 1
+        if len(args.results) > 1:
+            print(f"  {root}: {found} run(s)")
     if not runs:
-        sys.exit(f"no scorable runs under {args.results}")
+        sys.exit(f"no scorable runs under {', '.join(args.results)}")
 
     leaked = {n: s for n, s in runs.items() if s.get("leaked")}
     if leaked:
