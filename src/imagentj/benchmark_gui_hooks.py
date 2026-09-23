@@ -144,6 +144,21 @@ def _apply_optional_agents(gui) -> None:
             _log.exception("Benchmark: could not enable QA reporter")
 
 
+def _task_output_dir(gui=None) -> Path:
+    """Where the CURRENT task's deliverables go.
+
+    A single-task run keeps writing straight to the output root, exactly as
+    before. A sequence gives each task its own subdirectory so one task's files
+    cannot be scored as another's.
+    """
+    out = _output_dir()
+    tasks = getattr(gui, "_bench_tasks", None) if gui is not None else None
+    if not tasks or len(tasks) < 2:
+        return out
+    label = tasks[getattr(gui, "_bench_task_index", 0)][0]
+    return out / label
+
+
 def _input_dir() -> Path:
     return Path(os.environ.get("BENCHMARK_INPUT_DIR", "/benchmark/input"))
 
@@ -299,25 +314,51 @@ def _awt_click(button):
 # Read task + stage images
 # ---------------------------------------------------------------------------
 
-def _load_task() -> tuple[str, list[Path]]:
-    instruction = ""
-    f = _output_dir() / "instruction.txt"
-    if f.exists():
-        instruction = f.read_text(encoding="utf-8").strip()
+def _load_tasks() -> tuple[list[tuple[str, str]], list[Path]]:
+    """[(label, instruction), …] and the staged images.
+
+    Two shapes are accepted in the output directory:
+
+        instruction.txt            one task, as before
+        instruction_1.txt …        a SEQUENCE, run in sorted order in ONE session
+
+    The sequence form exists because related tasks are often one piece of work —
+    the same dataset measured at widening scope — and a researcher would do them
+    in a single sitting, carrying what they learned from the first into the
+    second. Running them as three separate containers throws that away and pays
+    the startup cost three times.
+
+    Note what it means for an experiment: the tasks SHARE a conversation thread,
+    so task 2 can see task 1's context. That is session memory, distinct from the
+    learned store on disk, and it does not go away when data/learned is cleared.
+    """
+    out = _output_dir()
+    seq = sorted(out.glob("instruction_*.txt"),
+                 key=lambda p: (len(p.stem), p.stem))
+    tasks = []
+    if seq:
+        for f in seq:
+            text = f.read_text(encoding="utf-8").strip()
+            if text:
+                tasks.append((f.stem.replace("instruction_", "task_"), text))
+    else:
+        f = out / "instruction.txt"
+        if f.exists():
+            text = f.read_text(encoding="utf-8").strip()
+            if text:
+                tasks.append(("task", text))
 
     # Search recursively: the benchmark's get_input_dir() only guarantees a
     # single input/ directory and, per the black-box contract, leaves
-    # enumeration to the agent. Real tasks nest the data (e.g. this dataset
-    # ships its TIFFs under input/input/, sequence tasks use per-series
-    # subfolders), so a flat iterdir() would stage zero images. rglob finds
-    # them wherever they sit.
+    # enumeration to the agent. Real tasks nest the data, so a flat iterdir()
+    # would stage zero images.
     root = _input_dir()
     images = sorted(
         (p for p in root.rglob("*")
          if p.is_file() and p.suffix.lower() in _IMAGE_EXT),
         key=lambda p: str(p),
     )
-    return instruction, images
+    return tasks, images
 
 
 def _stage_images(images: list[Path]) -> list[Path]:
@@ -447,7 +488,7 @@ def _normalise_mosaic_contract(out: Path) -> None:
 
 def _collect_and_finish(gui, message: str = "", success: bool = True, error: str = "") -> None:
     _say("collect STARTED")
-    out = _output_dir()
+    out = _task_output_dir(gui)
     out.mkdir(parents=True, exist_ok=True)
 
     # Drop a provisional sentinel BEFORE the expensive part. Everything below —
@@ -828,6 +869,48 @@ def _hook_auto_finish(gui) -> None:
             return
         _say(f"auto-finish TRIGGERED (had_error={had_error})")
 
+        tasks = getattr(gui, "_bench_tasks", [])
+        idx = getattr(gui, "_bench_task_index", 0)
+        more = idx + 1 < len(tasks)
+
+        if more:
+            # Collect THIS task's outputs, then hand the next one to the same
+            # conversation. The container stays up: the whole point of a
+            # sequence is that the later tasks inherit the session.
+            label = tasks[idx][0]
+            _say(f"{label} finished ({idx + 1}/{len(tasks)}) — collecting, "
+                 f"then starting {tasks[idx + 1][0]}")
+
+            def _next():
+                try:
+                    _collect_and_finish(
+                        gui, f"{label} completed.",
+                        success=not had_error, error=error_msg)
+                except Exception:
+                    _log.exception("Benchmark: collect failed between tasks")
+                gui._bench_task_index = idx + 1
+                # The one-shot guard has to be re-armed, or the next task's
+                # finish would be swallowed as a duplicate and the run would
+                # stall with the container up and nothing running.
+                gui._bench_auto_finished = False
+                try:
+                    _send_task(gui)
+                except Exception:
+                    _log.exception("Benchmark: could not send the next task")
+                    _do_finish_in_background(
+                        gui, "Sequence aborted: the next task could not be sent.",
+                        shutdown=True, success=False,
+                        error=traceback.format_exc(limit=5))
+
+            gui._bench_auto_finished = True
+            # A Qt timer here would be posted to whichever thread this handler
+            # runs on; threading.Timer fires regardless, and nothing in _next
+            # touches a widget except through the normal send path.
+            t = threading.Timer(10.0, _next)
+            t.daemon = True
+            t.start()
+            return
+
         gui._bench_auto_finished = True
 
         if had_error:
@@ -866,6 +949,7 @@ def _hook_auto_finish(gui) -> None:
 # ---------------------------------------------------------------------------
 
 def _auto_send(gui) -> None:
+    """Start the benchmark: open the thread and send the first task."""
     gui._start_new_thread()
 
     # Turn on Vision/QA if the benchmark env flags asked for them. Done here,
@@ -873,22 +957,48 @@ def _auto_send(gui) -> None:
     # per-thread state and _start_new_thread() always resets it to off.
     _apply_optional_agents(gui)
 
-    instruction, images = _load_task()
-    if not instruction:
+    tasks, images = _load_tasks()
+    if not tasks:
         gui.chat_scroll.add_message(
             "error",
-            f"Benchmark: no instruction.txt found in {_output_dir()}",
+            f"Benchmark: no instruction.txt or instruction_N.txt in {_output_dir()}",
         )
         return
+    gui._bench_tasks = tasks
+    gui._bench_task_index = 0
+    gui._bench_images = images
+    if len(tasks) > 1:
+        _say(f"{len(tasks)} tasks queued for this session: "
+             f"{', '.join(label for label, _ in tasks)}")
+    _send_task(gui)
+
+
+def _send_task(gui) -> None:
+    """Send whichever task is current. Called for the first and every later one."""
+    tasks = getattr(gui, "_bench_tasks", [])
+    idx = getattr(gui, "_bench_task_index", 0)
+    label, instruction = tasks[idx]
+    images = getattr(gui, "_bench_images", [])
 
     local_images = _stage_images(images) if images else []
     file_list = "\n".join(f"- {p}" for p in local_images)
 
+    # Each task of a sequence writes to its own subdirectory, so one task's
+    # deliverables can never be mistaken for another's when they are scored.
+    dest = _task_output_dir(gui)
+    dest.mkdir(parents=True, exist_ok=True)
+    position = ""
+    if len(tasks) > 1:
+        position = (f"[SYSTEM: This is task {idx + 1} of {len(tasks)} in this "
+                    f"session. Earlier tasks in this conversation used the same "
+                    f"dataset; reuse what you established there rather than "
+                    f"redoing it.]\n")
     prompt = (
         f"{instruction}\n\n"
         f"[SYSTEM: Input images]:\n{file_list}\n\n"
+        f"{position}"
         f"[SYSTEM: This is a BENCHMARK run. Save ALL outputs to "
-        f"{_output_dir().resolve()} as well as the project folder.]\n"
+        f"{dest.resolve()} as well as the project folder.]\n"
     )
 
     # In auto-pilot mode, append the auto-approve directive
@@ -898,9 +1008,10 @@ def _auto_send(gui) -> None:
         prompt += _INTERACTIVE_DIRECTIVE
 
     mode_label = "AUTO-PILOT" if is_autopilot() else "INTERACTIVE"
+    of_n = f" [{idx + 1}/{len(tasks)}]" if len(tasks) > 1 else ""
     gui.chat_scroll.add_message(
         "system",
-        f"Benchmark [{mode_label}] — {len(local_images)} image(s). "
+        f"Benchmark [{mode_label}]{of_n} {label} — {len(local_images)} image(s). "
         "Sending to agent …",
     )
 
