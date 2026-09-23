@@ -137,10 +137,15 @@ def score_run(run_dir, gt_masks):
     e = np.asarray(errs, float)
 
     # Dice on whatever ground-truth masks exist, against the run's own mask folder.
-    dices = []
+    dices, masks = [], {}
     if gt_masks:
-        masks = {}
-        for p in glob.glob(os.path.join(run_dir, "**", "*.tif"), recursive=True):
+        for p in glob.glob(os.path.join(run_dir, "**", "*"), recursive=True):
+            # Case-sensitive globbing is why this silently found nothing: BBBC005
+            # ships .TIF and the runs write .tif, so "**/*.tif" matched the
+            # predictions but a "*.TIF" ground truth (or the reverse) matched
+            # neither. Match on the extension case-insensitively instead.
+            if not p.lower().endswith((".tif", ".tiff")) or not os.path.isfile(p):
+                continue
             if "qdrant" in p or "/learned/" in p:
                 continue
             k = key_of(p)
@@ -173,6 +178,9 @@ def score_run(run_dir, gt_masks):
         bias=float(e.mean()) if e.size else None,
         dice_mean=float(np.mean(dices)) if dices else None,
         dice_n=len(dices),
+        # A silent n/a is indistinguishable from "scored zero", so record how many
+        # of the run's files were even candidates.
+        masks_found=len(masks) if gt_masks else 0,
         cost_usd=cost, minutes=minutes,
         rmse_sharp=_band(blur, 1, 10), rmse_mid=_band(blur, 14, 26),
         rmse_blurred=_band(blur, 29, 48),
