@@ -58,7 +58,14 @@ done
 
 echo
 echo "WILL DELETE:"
-n=$(find "$ROOT/recipes/code" -type f 2>/dev/null | wc -l)
+# `find` on a missing directory fails, and under `set -o pipefail` that would
+# kill the whole script before it did anything — silently, since the error is
+# discarded. Guard the directory instead of relying on the redirect.
+if [ -d "$ROOT/recipes/code" ]; then
+    n=$(find "$ROOT/recipes/code" -type f | wc -l)
+else
+    n=0
+fi
 printf '  %10s files  recipes/code/\n' "$n"
 for rel in "${PURGE_FILES[@]}"; do
     [ -e "$ROOT/$rel" ] && printf '  %16s  %s\n' "present" "$rel" \
