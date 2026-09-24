@@ -903,12 +903,23 @@ def _hook_auto_finish(gui) -> None:
                         error=traceback.format_exc(limit=5))
 
             gui._bench_auto_finished = True
-            # A Qt timer here would be posted to whichever thread this handler
-            # runs on; threading.Timer fires regardless, and nothing in _next
-            # touches a widget except through the normal send path.
-            t = threading.Timer(10.0, _next)
-            t.daemon = True
-            t.start()
+            # MUST be a QTimer armed HERE, not a threading.Timer.
+            #
+            # _next calls _send_task, and _send_task drives Qt widgets --
+            # add_message(), input_line.setPlainText(), on_send(). Run from a
+            # plain Python thread those corrupt Qt's text document and the JVM
+            # dies with SIGSEGV in QTextFrame::begin(); observed killing a run
+            # between task 1 and task 2, with the crash 40 lines below a
+            # traceback that pointed at setPlainText.
+            #
+            # QTimer.singleShot's context-object overload does NOT rescue this:
+            # arming a timer from a non-QThread fails outright ("Timers can only
+            # be used with threads started with QThread"). The timer has to be
+            # armed on the GUI thread, which is where this handler runs --
+            # gui_runner connects `finished` to the bound slot
+            # _dispatch_agent_finished, so delivery is queued onto the GUI
+            # thread. Arming here inherits that.
+            QTimer.singleShot(10000, _next)
             return
 
         gui._bench_auto_finished = True
@@ -973,8 +984,28 @@ def _auto_send(gui) -> None:
     _send_task(gui)
 
 
+def _on_gui_thread() -> bool:
+    try:
+        from PySide6.QtCore import QThread
+        app = QApplication.instance()
+        return app is not None and QThread.currentThread() is app.thread()
+    except Exception:
+        return True          # cannot tell -- do not block the run over it
+
+
 def _send_task(gui) -> None:
-    """Send whichever task is current. Called for the first and every later one."""
+    """Send whichever task is current. Called for the first and every later one.
+
+    GUI THREAD ONLY. Everything below drives Qt widgets, and doing that from a
+    worker thread does not raise -- it corrupts Qt's text document and takes the
+    process down with SIGSEGV somewhere unrelated. The guard turns that into a
+    line in the log.
+    """
+    if not _on_gui_thread():
+        _say("REFUSING to send a task from a non-GUI thread — this would segfault "
+             "Qt. The caller must arm a QTimer on the GUI thread instead.")
+        _log.error("Benchmark: _send_task called off the GUI thread", stack_info=True)
+        return
     tasks = getattr(gui, "_bench_tasks", [])
     idx = getattr(gui, "_bench_task_index", 0)
     label, instruction = tasks[idx]

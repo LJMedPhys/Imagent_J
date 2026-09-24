@@ -35,6 +35,20 @@
 #   scripts/run_parasite_auto.sh 1 2        # tasks 1 and 2 in one session
 set -euo pipefail
 
+# Survive a dropped terminal. Three separate hazards, and the run has to outlive
+# all of them because a session is hours long and is always started over ssh:
+#
+#   SIGHUP   sent to the whole process group when the connection drops.
+#   SIGPIPE  what actually kills a `docker ... | tee log` pipeline: tee writes to
+#            a terminal that no longer exists, dies, and docker dies with it.
+#            This is the "broken pipe" that ends a run mid-way.
+#   the pipe itself — so there is no pipe. The container writes STRAIGHT to the
+#            log file, and a separate `tail -f` provides the live view. If the
+#            terminal goes, tail dies alone and the container never notices.
+#
+# tmux is still the right habit; this makes the script safe without it.
+trap "" HUP PIPE
+
 REPO="${REPO:-$PWD}"
 TASKS="${TASKS:-$REPO/tasks}"
 RUNS="${RUNS:-$REPO/parasite_runs}"
@@ -74,14 +88,44 @@ echo
 "$REPO/scripts/reset_learned.sh" --apply "$REPO/data/learned"
 echo
 
-docker compose "${COMPOSE[@]}" run --rm --name "parasite_auto_$STAMP" \
+LOG="$OUT/container.log"
+: > "$LOG"
+
+# -T: no TTY allocation. Output is going to a file, and without this docker
+# refuses with "the input device is not a TTY" whenever stdin is not a terminal
+# (nohup, cron, a detached tmux pane).
+docker compose "${COMPOSE[@]}" run --rm -T --name "parasite_auto_$STAMP" \
     -e BENCHMARK_MODE=true \
     -e BENCHMARK_INTERACTIVE=false \
     -e BENCHMARK_INPUT_DIR=/benchmark/input \
     -e BENCHMARK_OUTPUT_DIR=/benchmark/output \
     -v "$RUNS/_empty_input:/benchmark/input:ro" \
     -v "$OUT:/benchmark/output" \
-    imagentj 2>&1 | tee "$OUT/container.log"
+    imagentj >"$LOG" 2>&1 &
+DOCKER_PID=$!
+
+# Live view, entirely optional. Killing it does not touch the container.
+tail -f "$LOG" 2>/dev/null &
+TAIL_PID=$!
+
+# Ctrl-C should stop the CONTAINER, not just detach from it: `docker compose run`
+# leaves the container running when its client is killed, which is how an
+# abandoned run goes on burning GPU and API budget unnoticed.
+cleanup() {
+    kill "$TAIL_PID" 2>/dev/null || true
+    if kill -0 "$DOCKER_PID" 2>/dev/null; then
+        echo; echo "interrupted — stopping parasite_auto_$STAMP"
+        docker rm -f "parasite_auto_$STAMP" >/dev/null 2>&1 || true
+        kill "$DOCKER_PID" 2>/dev/null || true
+    fi
+}
+trap cleanup INT TERM
+
+STATUS=0
+wait "$DOCKER_PID" || STATUS=$?
+kill "$TAIL_PID" 2>/dev/null || true
+trap - INT TERM
+echo "container exit status: $STATUS"
 
 echo
 echo "session finished: $OUT"
