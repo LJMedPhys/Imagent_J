@@ -8,6 +8,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from .utils import walk, sanitize_filename, add_line_numbers
 from imagentj.rag.loaders import get_smart_splitter, load_and_split_ipynb
 from .vector_stores import get_vec_store_docs, is_rag_available
+from ..qdrant_client_singleton import write_lock as _qdrant_write_lock
 import threading
 from pathlib import Path
 import os
@@ -57,23 +58,24 @@ def shadow_ingest_upgrade(file_path: str, vector_store, file_hash: str):
             chunk.metadata["file_hash"] = file_hash
 
         client = get_qdrant_client(path=QDRANT_DATA_PATH)
-        client.delete(
-            collection_name=DOCS_COLLECTION_NAME,
-            points_selector=models.Filter(
-                must=[
-                    models.FieldCondition(
-                        key="metadata.source",
-                        match=models.MatchValue(value=file_path),
-                    ),
-                    models.FieldCondition(
-                        key="metadata.ingestion_quality",
-                        match=models.MatchValue(value="fast"),
-                    ),
-                ]
-            ),
-        )
+        with _qdrant_write_lock:
+            client.delete(
+                collection_name=DOCS_COLLECTION_NAME,
+                points_selector=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="metadata.source",
+                            match=models.MatchValue(value=file_path),
+                        ),
+                        models.FieldCondition(
+                            key="metadata.ingestion_quality",
+                            match=models.MatchValue(value="fast"),
+                        ),
+                    ]
+                ),
+            )
 
-        vector_store.add_documents(high_quality_splits)
+            vector_store.add_documents(high_quality_splits)
         print(f"[Shadow] Upgrade complete for: {file_path}")
 
     except Exception as e:
@@ -220,7 +222,8 @@ def smart_file_reader(file_path: str):
             print("Action: Large file detected. Indexing into RAG...")
             splitter = get_smart_splitter(ext)
             splits = splitter.create_documents([content], metadatas=[{"source": file_path}])
-            vec_store_docs.add_documents(splits)
+            with _qdrant_write_lock:
+                vec_store_docs.add_documents(splits)
             return {"type": "rag", "message": "File indexed in RAG."}
 
     # --- CATEGORY 2: PDFs (The slow part) ---
@@ -258,7 +261,8 @@ def smart_file_reader(file_path: str):
                 [md_text],
                 metadatas=[{"source": file_path, "file_hash": file_hash, "ingestion_quality": "fast"}]
             )
-            vec_store_docs.add_documents(fast_splits)
+            with _qdrant_write_lock:
+                vec_store_docs.add_documents(fast_splits)
 
             thread = threading.Thread(
                 target=shadow_ingest_upgrade,
@@ -291,7 +295,8 @@ def smart_file_reader(file_path: str):
             return {"type": "context", "content": full_text}
         else:
             splits = load_and_split_ipynb(file_path)
-            vec_store_docs.add_documents(splits)
+            with _qdrant_write_lock:
+                vec_store_docs.add_documents(splits)
             return {"type": "rag", "message": "Notebook indexed."}
 
     return {"type": "error", "message": "Unsupported file type."}
