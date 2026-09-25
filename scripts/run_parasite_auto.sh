@@ -77,6 +77,27 @@ for n in "${WHICH[@]}"; do
     else                              cp "$PROMPT" "$OUT/instruction_${i}.txt"; fi
 done
 
+# FAST_MODE=1 renders a quick-mode config into the session directory and points
+# the container at it. Reuses run_ablation.py's render_config, which is
+# section-aware: "mode" and the feature flags appear more than once in the file,
+# and a naive sed rewrites the wrong ones.
+CFG_ENV=()
+if [ "${FAST_MODE:-0}" = "1" ]; then
+    python3 - "$REPO" "$OUT" <<'PYCFG'
+import importlib.util, pathlib, sys
+repo, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+spec = importlib.util.spec_from_file_location("ra", repo / "scripts" / "run_ablation.py")
+ra = importlib.util.module_from_spec(spec); spec.loader.exec_module(ra)
+cfg = ra.render_config(repo / "imagentj_config.yaml", {"fast_mode": True})
+(out / "imagentj_config.yaml").write_text(cfg, encoding="utf-8")
+mode = [l.strip() for l in cfg.splitlines() if l.strip().startswith("mode:")]
+print("  fast mode config written:", mode[0] if mode else "?")
+PYCFG
+    CFG_ENV=(-e IMAGENTJ_CONFIG=/benchmark/output/imagentj_config.yaml)
+    echo "FAST_MODE=1 — quick mode; note this also drops the analyst, QA and VLM"
+    echo "             sub-agents and the state ledger (see quick_tools)."
+fi
+
 echo "session   : $OUT"
 echo "tasks     : ${WHICH[*]}  (${#WHICH[@]} in one conversation)"
 echo
@@ -95,6 +116,7 @@ LOG="$OUT/container.log"
 # refuses with "the input device is not a TTY" whenever stdin is not a terminal
 # (nohup, cron, a detached tmux pane).
 docker compose "${COMPOSE[@]}" run --rm -T --name "parasite_auto_$STAMP" \
+    "${CFG_ENV[@]}" \
     -e BENCHMARK_MODE=true \
     -e BENCHMARK_INTERACTIVE=false \
     -e BENCHMARK_INPUT_DIR=/benchmark/input \
