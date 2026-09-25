@@ -46,10 +46,12 @@ import sys
 
 # metric -> (label, +1 if higher is better, decimal places)
 METRICS = [
-    ("rmse",      "RMSE (cells)",     -1, 2),
-    ("mae",       "MAE (cells)",      -1, 2),
-    ("dice_mean", "Dice",             +1, 3),
-    ("cost_usd",  "Cost (USD)",       -1, 2),
+    ("rmse",       "RMSE (cells)",     -1, 2),
+    ("mae",        "MAE (cells)",      -1, 2),
+    ("dice_mean",  "Dice",             +1, 3),
+    ("minutes",    "Time (min)",       -1, 1),
+    ("tool_calls", "Tool calls",       -1, 1),
+    ("cost_usd",   "Cost (USD)",       -1, 2),
 ]
 ARM_LABEL = {"baseline": "baseline", "all\\_off": "all\\_off", "fast_mode": "fast\\_mode"}
 # t(0.975, df) for the small dfs this design produces
@@ -109,8 +111,23 @@ def effect(a_vals, b_vals, sign):
                 dz=(d / pooled if pooled else 0.0), df=df)
 
 
+def present_metrics(arms):
+    """Only the metrics this CSV actually carries.
+
+    An older pooled CSV predates the time and tool-call columns; printing them as
+    empty cells would look like the runs took no time rather than like the figure
+    was never recorded.
+    """
+    out = []
+    for m in METRICS:
+        if any(fnum(r, m[0]) is not None for rs in arms.values() for r in rs):
+            out.append(m)
+    return out
+
+
 def latex(arms, order, contrasts, per_arm):
     esc = lambda s: s.replace("_", r"\_")
+    metrics = present_metrics(arms)
     L = []
     L.append(r"\begin{table}[htbp]")
     L.append(r"\centering")
@@ -121,15 +138,15 @@ def latex(arms, order, contrasts, per_arm):
              r"all 500 images; Dice is measured on the 33 images that carry "
              r"ground-truth masks, all of which are in focus.}")
     L.append(r"\label{tab:arm-summary}")
-    L.append(r"\begin{tabular}{l c " + " ".join(["r"] * len(METRICS)) + "}")
+    L.append(r"\begin{tabular}{l c " + " ".join(["r"] * len(metrics)) + "}")
     L.append(r"\toprule")
-    L.append("Configuration & $n$ & " + " & ".join(lbl for _, lbl, _, _ in METRICS)
+    L.append("Configuration & $n$ & " + " & ".join(lbl for _, lbl, _, _ in metrics)
              + r" \\")
     L.append(r"\midrule")
     for arm in order:
         rs = arms.get(arm, [])
         cells = []
-        for key, _lbl, _sgn, nd in METRICS:
+        for key, _lbl, _sgn, nd in metrics:
             vals = [v for v in (fnum(r, key) for r in rs) if v is not None]
             cells.append(f"${st.mean(vals):.{nd}f} \\pm {st.stdev(vals):.{nd}f}$"
                          if len(vals) > 1 else
@@ -163,7 +180,7 @@ def latex(arms, order, contrasts, per_arm):
         first = True
         na, nb = len(arms.get(a, [])), len(arms.get(b, []))
         title = f"{title} ($n={na}$ vs ${nb}$)"
-        for key, lbl, sgn, nd in METRICS:
+        for key, lbl, sgn, nd in metrics:
             av = [v for v in (fnum(r, key) for r in arms.get(a, [])) if v is not None]
             bv = [v for v in (fnum(r, key) for r in arms.get(b, [])) if v is not None]
             e = effect(av, bv, sgn)

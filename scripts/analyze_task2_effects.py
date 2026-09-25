@@ -184,14 +184,32 @@ def score_run(run_dir, gt_masks, mapping=None):
             a, b = int(g.sum()), int(pr.sum())
             dices.append((2 * i / (a + b)) if (a + b) else 1.0)
 
-    cost = minutes = None
+    cost = minutes = tool_calls = soft_errors = None
     rj = os.path.join(run_dir, "result.json")
     if os.path.exists(rj):
         try:
             md = (json.load(open(rj)).get("metadata") or {})
             cost = round(money(md.get("session_totals") or {}), 3)
+            tool_calls = md.get("tool_calls")
         except Exception:
             pass
+
+    # Wall time and the soft-error count live in the project's own usage log.
+    # `thinking_seconds` is elapsed QUERY time, not model-only time: across 21 arms
+    # of an earlier study, wall clock minus this figure was a constant ~36 s of
+    # container startup. So it is a good wall-time estimate and a poor
+    # model-vs-script split, and is reported as the former.
+    for up in sorted(glob.glob(os.path.join(run_dir, "*", "logs", "usage_log.json"))):
+        try:
+            q = (json.load(open(up)).get("queries") or [{}])[0]
+        except Exception:
+            continue
+        if q.get("thinking_seconds"):
+            minutes = round(float(q["thinking_seconds"]) / 60.0, 2)
+            soft_errors = q.get("soft_error_tool_calls")
+            if tool_calls is None:
+                tool_calls = q.get("tool_calls")
+            break
     # A perfect score over hundreds of images is not a result, it is a tell: the
     # counts were read rather than measured. Flagged, never silently averaged in.
     exact = int(np.sum(e == 0))
@@ -209,6 +227,7 @@ def score_run(run_dir, gt_masks, mapping=None):
         # of the run's files were even candidates.
         masks_found=len(masks) if gt_masks else 0,
         cost_usd=cost, minutes=minutes,
+        tool_calls=tool_calls, soft_errors=soft_errors,
         rmse_sharp=_band(blur, 1, 10), rmse_mid=_band(blur, 14, 26),
         rmse_blurred=_band(blur, 29, 48),
     )
@@ -312,7 +331,7 @@ def main():
     for name, s in runs.items():
         by_arm[base_arm(name)].append(s)
 
-    METRICS = ["rmse", "mae", "dice_mean", "cost_usd"]
+    METRICS = ["rmse", "mae", "dice_mean", "cost_usd", "minutes", "tool_calls"]
     print(f"\n{'=' * 78}\nPER-ARM SUMMARY   (mean +- SD over repeats)\n{'=' * 78}")
     print(f"{'arm':18}{'n':>3}" + "".join(f"{m:>18}" for m in METRICS))
     for arm in sorted(by_arm):
