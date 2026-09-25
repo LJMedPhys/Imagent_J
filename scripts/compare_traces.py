@@ -39,6 +39,37 @@ import statistics as st
 import sys
 
 
+# What a run actually reached for, mined from the code it executed. The
+# tool_call_log records a code_preview for every execute_script call and an error
+# detail that names the conda env, so the METHOD is recoverable — which
+# segmentation model, which classical fallback, which tracker — without reading
+# the project folder. Grouped so that a family shows up once however it was
+# spelled: "cyto3", "cpsam" and "models.Cellpose" are all Cellpose.
+METHOD_PATTERNS = [
+    ("Cellpose",            r"\bcellpose\b|models\.Cellpose|CellposeModel"),
+    ("  └ cyto3 model",     r"\bcyto3\b"),
+    ("  └ cyto2 model",     r"\bcyto2\b"),
+    ("  └ nuclei model",    r"model_type\s*=\s*['\"]nuclei"),
+    ("  └ Cellpose-SAM",    r"\bcpsam\b|cellpose[-_ ]?sam"),
+    ("StarDist",            r"\bstardist\b|StarDist2D"),
+    ("micro_sam / SAM",     r"micro_sam|segment_anything|\bSamPredictor\b"),
+    ("TrackMate",           r"\btrackmate\b|fiji\.plugin\.trackmate"),
+    ("ilastik",             r"\bilastik\b"),
+    ("watershed",           r"\bwatershed\b"),
+    ("Otsu threshold",      r"threshold_otsu|\bOtsu\b"),
+    ("other threshold",     r"threshold_(li|yen|triangle|isodata|mean|local)|setAutoThreshold"),
+    ("distance transform",  r"distance_transform|EDM\b"),
+    ("connected components", r"\blabel\s*\(|connectedComponents|measure\.label"),
+    ("morphology",          r"binary_(opening|closing|erosion|dilation)|remove_small_objects"),
+    ("Gaussian / denoise",  r"gaussian_filter|GaussianBlur|median_filter|bilateral"),
+    ("CLAHE / contrast",    r"\bCLAHE\b|equalize_adapthist|percentile.*normali"),
+    ("regionprops",         r"regionprops"),
+    ("torch / GPU",         r"\btorch\b|cuda"),
+    ("ImageJ / Fiji API",   r"\bij\.IJ\b|import ij\.|IJ\.run\("),
+]
+ENV_RE = re.compile(r"imagentj-env:\s*([A-Za-z0-9_.-]+)|env='([A-Za-z0-9_.-]+)'")
+
+
 def base_arm(name):
     return re.sub(r"__r\d+$", "", name.split("/")[-1])
 
@@ -55,11 +86,15 @@ def load_trace(path):
     log = []
     for q in queries:
         log.extend(q.get("tool_call_log") or [])
+    # Every scrap of code and error text the run left behind, for method mining.
+    corpus = "\n".join(
+        str(e.get("code_preview") or "") + "\n" + str(e.get("detail") or "")
+        for e in log)
     if not log:
         # Older runs recorded only a count. Say so rather than showing an arm
         # with zero calls, which reads as "did nothing".
-        return {"entries": [], "count_only": md.get("tool_calls")}
-    return {"entries": log, "count_only": None}
+        return {"entries": [], "count_only": md.get("tool_calls"), "corpus": ""}
+    return {"entries": log, "count_only": None, "corpus": corpus}
 
 
 def collect(roots):
@@ -168,6 +203,33 @@ def main():
         users = [a for a in cols if matrix[a].get(tool, 0) > 0]
         if len(users) == 1:
             print(f"   {tool:34} only {users[0]}  ({matrix[users[0]][tool]:.1f}/run)")
+
+    print()
+    print("=" * 78)
+    print("5. METHODS REACHED FOR   (runs mentioning it, of runs in that arm)")
+    print("=" * 78)
+    print(f"{'method':24}" + "".join(f"{a[:13]:>14}" for a in cols))
+    envs = {}
+    for a in cols:
+        traces = [t for _n, t in by_arm[a] if t["entries"]]
+        envs[a] = collections.Counter(
+            m for t in traces for grp in ENV_RE.findall(t.get("corpus", ""))
+            for m in grp if m)
+    for label, pat in METHOD_PATTERNS:
+        rx = re.compile(pat, re.I)
+        row, any_hit = "", False
+        for a in cols:
+            traces = [t for _n, t in by_arm[a] if t["entries"]]
+            hits = sum(1 for t in traces if rx.search(t.get("corpus", "")))
+            any_hit = any_hit or hits > 0
+            row += f"{(f'{hits}/{len(traces)}' if hits else '-'):>14}"
+        if any_hit:
+            print(f"{label:24}{row}")
+    print()
+    print("conda envs the scripts ran in:")
+    for a in cols:
+        got = ", ".join(f"{e} x{n}" for e, n in envs[a].most_common(4)) or "-"
+        print(f"   {a:18} {got}")
 
     if args.out:
         import csv
