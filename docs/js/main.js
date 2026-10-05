@@ -29,13 +29,13 @@ document.querySelectorAll('.code [data-copy]').forEach((btn) => {
       btn.classList.add('copied');
       setTimeout(() => { btn.textContent = old; btn.classList.remove('copied'); }, 1500);
     } catch {
-      btn.textContent = 'press ⌘C';
+      btn.textContent = 'select & copy';
     }
   });
 });
 
 // 3) Active nav link as you scroll
-const sections = ['features', 'architecture', 'quickstart', 'plugins', 'docs']
+const sections = ['engines', 'finetuning', 'judge', 'education', 'architecture', 'quickstart', 'paper']
   .map((id) => document.getElementById(id))
   .filter(Boolean);
 const navLinks = new Map(
@@ -46,9 +46,9 @@ const navLinks = new Map(
 const navIO = new IntersectionObserver((entries) => {
   entries.forEach((e) => {
     if (!e.isIntersecting) return;
-    navLinks.forEach((a) => a.style.color = '');
+    navLinks.forEach((a) => a.classList.remove('active'));
     const link = navLinks.get(e.target.id);
-    if (link) link.style.color = 'var(--text)';
+    if (link) link.classList.add('active');
   });
 }, { rootMargin: '-45% 0px -45% 0px' });
 sections.forEach((s) => navIO.observe(s));
