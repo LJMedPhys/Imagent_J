@@ -6,7 +6,7 @@ for GitHub Pages from a `gh-pages` branch.
 ## Files
 
 ```
-website/
+docs/
 ├── index.html          ← single-page site
 ├── css/styles.css      ← modern scientific dark theme
 ├── js/main.js          ← reveal-on-scroll, copy-code, scrollspy

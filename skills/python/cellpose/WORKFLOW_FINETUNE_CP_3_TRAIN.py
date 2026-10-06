@@ -1,4 +1,5 @@
 # imagentj-env: cellpose4
+# imagentj-detach: training runs 10-20 min on a GPU with no human in the loop
 """Stage 3 (Cellpose): train cpsam on the user's annotated tiles, then MEASURE whether it helped.
 
 This is the Cellpose twin of `skills/napari/micro_sam/WORKFLOW_FINETUNE_3_TRAIN.py` and reads

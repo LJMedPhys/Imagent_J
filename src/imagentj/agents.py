@@ -57,7 +57,7 @@ from .tools import (
     VisionOptionMiddleware,
     NapariComputeGuardMiddleware,
     NarrationReminderMiddleware, PhaseGuardMiddleware, ToolOutputLimitMiddleware,
-    BioRefusalRetryMiddleware,
+    BioRefusalRetryMiddleware, InterjectMiddleware,
     update_state_ledger, read_state_ledger, set_ledger_metadata, get_ledger_context,
     check_environment,
     set_dialog_vision_llm,
@@ -1533,6 +1533,10 @@ def init_agent():
     }
 
     supervisor_middleware = [
+        # First, so a note the user typed mid-run is already in `messages` when
+        # every other middleware inspects them this turn (PhaseGuard's phase
+        # detection, the context editor's keep-window, the Vision prompt swap).
+        InterjectMiddleware(),
         ToolOutputLimitMiddleware(),
         ContextEditingMiddleware(
             edits=[

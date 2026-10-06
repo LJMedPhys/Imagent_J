@@ -155,13 +155,27 @@ Then **read stage 1's output before moving on**:
 
 ## Stage 2 — the user annotates
 
-Set `TASK_DIR`. The script opens napari and **blocks until the user closes the window** — that
-is intended: the script returning is how you know they finished. It prints a per-tile status
-table on exit; relay that.
+Set `TASK_DIR`. The script opens napari and runs until the user closes the window. It prints a
+per-tile status table on exit; relay that.
 
-> **Say the instructions BEFORE you run the script.** `execute_script` returns nothing until the
-> script exits, so everything it prints to stdout — including the banner — reaches you only after
-> the user has already finished. Paste the block below into the chat first, then run stage 2.
+> **You are DETACHED for this stage, immediately.** `execute_script` returns
+> `SUMMARY: WAITING FOR THE USER (detached)` the moment the window opens, and the status table
+> arrives later as a `[DETACHED RUN FINISHED]` message. That first receipt means **nothing has
+> been annotated yet** — it is not a result and not a failure.
+>
+> Until the finished message arrives: do not start stage 3, do not re-run stage 2, do not read
+> the annotation files, and do not say how many tiles are done — you cannot know. The script
+> saves the user's work itself, tile by tile, as they press N.
+>
+> The reason you are detached is that annotation takes twenty minutes and the user is looking
+> at the thing they are asking about. Expect questions — *"what does DRAW do?"*, *"is a rough
+> outline good enough?"*, *"can I skip this tile?"* — and answer them from this playbook and
+> `ANNOTATION_INSTRUCTIONS.md`. That is the job while they work.
+
+> **Say the instructions BEFORE you run the script.** Detaching changes when the RECEIPT
+> arrives, not when the OUTPUT does: everything the script prints to stdout — including the
+> banner — still reaches you only in the finished message, after the user has already done the
+> work. Paste the block below into the chat first, then run stage 2.
 > (The helper panel repeats it all on screen, which is the backstop, not the plan.)
 
 > **Never start this workflow in an unattended run.** Stage 2 waits for a human. In a benchmark
@@ -221,6 +235,14 @@ The status table tells you what to do next: **3+ usable tiles** → stage 3. Few
 ## Stage 3 — train and measure (agent)
 
 Set `TASK_DIR`. Everything else has a sensible default; `N_EPOCHS=10` is right for 5-10 tiles.
+
+> **This stage is DETACHED** (`# imagentj-detach:` on line 2). `execute_script` returns a
+> receipt — `SUMMARY: STILL RUNNING (detached)` — within seconds, and the training output
+> arrives later as a separate `[DETACHED RUN FINISHED]` message. That receipt is NOT a
+> failure and NOT an empty result: do not re-run the stage, do not poll for it, and do not
+> report a score you have not seen. Tell the user training is running and roughly how long
+> it takes, then answer whatever they ask next — the point of detaching is that they can
+> talk to you during the 10-20 minutes instead of waiting on a blocked turn.
 
 It validates every annotation (shape, dtype, ≥2 objects ≥25 px), holds out ~25 % of the tiles —
 **whole source images where possible**, so the score is not inflated by tiles cut from the same
