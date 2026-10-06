@@ -1,61 +1,53 @@
 ---
 name: bonej_documentation
 description: >-
-  BoneJ is a Fiji/ImageJ plugin suite for trabecular bone and porous-structure analysis from binary 2D and 3D images. This skill documents the validated Groovy automation path in this repo: clearing the shared BoneJ table, running Thickness, Area/Volume fraction, Connectivity (Modern), Surface fraction, Fractal dimension, Anisotropy, Skeletonise, and Analyse Skeleton through SciJava CommandService, plus a validated lower-level surface-area path for the local Fiji runtime. Read the files listed at the end of this SKILL for exact class calls, menu paths, and scope limits.
+  BoneJ is a Fiji plugin suite for trabecular bone and porous-structure analysis of binary 2D/3D images - thickness/separation (Tb.Th, Tb.Sp), BV/TV, connectivity/Euler, surface area, surface fraction, fractal dimension, anisotropy (DA), skeleton analysis and purify. Use it when a task asks for morphometry of a 3D binary network (bone, scaffolds, foams, vasculature, porous material). This skill holds the container-verified Groovy API (SciJava CommandService, every wrapper takes `inputDataset`), the µm-unit and dialog pitfalls, and two runnable workflow scripts.
 ---
 
-## Primary Use Case in This Skill Set
+## When to use
 
-Binary 3D stack
-  -> BoneJ Thickness
-  -> Area/Volume fraction
-  -> optional Connectivity (Modern)
-  -> CSV summary + thickness maps
+- 3D binary structure, and the question is about thickness, spacing, volume fraction, connectivity, surface, complexity, or orientation.
+- Not for counting or segmenting cells/nuclei. Use a segmentation skill first, and use MorphoLibJ or 3D ImageJ Suite for per-object measurements.
 
-Additional validated coverage:
+## Pipeline in this skill
 
-- Surface fraction
-- Fractal dimension
-- Anisotropy on a representative 3D directional structure
-- Surface area through marching-cubes + boundary-size ops
-- Skeletonise
-- Analyse Skeleton
+```
+3D stack -> (threshold to 8-bit 0/255) -> Clear BoneJ table
+  -> Thickness (Tb.Th/Tb.Sp + maps) -> Area/Volume fraction (BV/TV)
+  -> optional Purify -> Connectivity
+  -> CSV + thickness maps                     (GROOVY_WORKFLOW_THICKNESS_AND_FRACTION.groovy)
 
-## Verified Automation Boundary
+3D binary -> Surface fraction, Surface area, Fractal dimension, Anisotropy
+  -> one-row CSV                              (GROOVY_WORKFLOW_STRUCTURE_METRICS.groovy)
+```
 
-- Container-validated:
-  - `org.bonej.wrapperPlugins.tableTools.SharedTableCleaner`
-  - `org.bonej.wrapperPlugins.ThicknessWrapper`
-  - `org.bonej.wrapperPlugins.ElementFractionWrapper`
-  - `org.bonej.wrapperPlugins.ConnectivityWrapper`
-  - `org.bonej.wrapperPlugins.SurfaceFractionWrapper`
-  - `org.bonej.wrapperPlugins.FractalDimensionWrapper`
-  - `org.bonej.wrapperPlugins.AnisotropyWrapper`
-  - `org.bonej.wrapperPlugins.SkeletoniseWrapper`
-  - `org.bonej.wrapperPlugins.AnalyseSkeletonWrapper`
-  - `convertService.convert(imagePlus, ImgPlus.class)` for ImgPlus-only wrappers
-- lower-level surface-area path:
-  - `opService.convert().bit(...)`
-  - `Functions.unary(..., MarchingCubes.class, ...)`
-  - `Functions.unary(..., BoundarySize.class, ...)`
-- Official-doc or UI-only surface not adopted as a direct runnable wrapper API in this skill:
-  - `org.bonej.wrapperPlugins.SurfaceAreaWrapper`
-  - legacy UI tools such as `Slice Geometry`
+## Rules that make BoneJ scripts work (verified in the container)
 
-## Scope Limits
+1. Call commands with `command.run(Class, true, ...).get()`, never `IJ.run(...)`.
+2. **The image input of every wrapper is `"inputDataset"` (a `net.imagej.Dataset`).** Passing `"inputImage"` fails with `No such input: inputImage`. Convert with `convertService.convert(imp, Dataset.class)`.
+3. **Rewrite `µm` to `um` on the Dataset axes before calling BoneJ** (`toBoneJDataset()` in `SCRIPT_API.md`). Otherwise Thickness and Anisotropy throw `...#validateImage` (`Cannot parse unit: µm`), and ImageJ turns `um` into `µm` on every calibrated image.
+4. Connectivity is `org.bonej.plugins.Connectivity`. **`ConnectivityWrapper` does not exist**, and importing it is a compile error.
+5. Image outputs are `Dataset`s. Convert them back with `convertService.convert(ds, ImagePlus.class)` before `IJ.saveAsTiff`.
+6. Check `module.isCanceled()` after every call. BoneJ cancels (with `Need a 3D (X, Y, Z) image` or `Need a binary image`) instead of throwing, and all outputs are then `null`.
+7. Give `SurfaceAreaWrapper` a `stlDirectory` even with `exportSTL=false`. Without it a modal directory chooser opens and blocks the script.
+8. Run `SharedTableCleaner` before each image. The returned `resultsTable` is the whole shared table, with **rows keyed by image name**.
 
-- This skill assumes BoneJ is installed from the BoneJ update site in Fiji.
-- The checked-in Groovy workflow expects an 8-bit binary stack for final measurements. It can threshold a non-binary input for convenience, but threshold choice is outside BoneJ's measurement model.
-- In this Fiji runtime, `SurfaceAreaWrapper` canceled silently on validated 3D binary inputs. The checked-in scripting path therefore uses BoneJ's underlying marching-cubes and boundary-size ops instead of the wrapper itself.
-- `AnisotropyWrapper` is sensitive to sample geometry. It failed on a duplicated single-slice validation stack and succeeded on a genuine 3D directional rod lattice.
-- This skill does not document a macro-recorded `IJ.run(...)` string for the modern BoneJ wrappers. The validated scripting path is `CommandService`.
+## Pitfalls
+
+- 3D only for Thickness, Connectivity, Anisotropy, Surface area/fraction. Never copy one 2D slice into a fake stack to get a number.
+- Thresholding dominates the result. Noise specks in a `Default`-thresholded mask shifted BV/TV from 0.138 to 0.158 and Tb.Sp from 8.0 to 3.3 µm on a test lattice. Inspect or clean the mask first.
+- Check the voxel size. A TIFF that carries only a 72-dpi tag opens in `inch`, and BoneJ will happily report inches.
+- Thickness values are local-thickness **diameters**. Header units differ between commands (`µm` vs `um`), so match columns by prefix.
+- STL export joins directory and file name without a separator. Pass `new File(outDir, "mesh_")` as `stlDirectory`.
+- Analyse Skeleton on a raw mask leaves a `Skeleton of <name>` window open. Close it.
+- Fiji volumes built before the image update may still hold BoneJ **7.2.0**. The API is the same except for Analyse Skeleton's image outputs, which `SCRIPT_API.md` marks.
 
 ## File Index
 
 | File | Contents |
 |------|----------|
-| `SCRIPT_API.md` | Validated BoneJ `CommandService` calls, the lower-level surface-area workaround, parameter names, and runtime caveats |
-| `GROOVY_WORKFLOW_THICKNESS_AND_FRACTION.groovy` | Runnable Fiji workflow for binary-stack preparation, Thickness, Area/Volume fraction, optional Connectivity, and CSV export |
-| `GROOVY_WORKFLOW_STRUCTURE_METRICS.groovy` | Runnable Fiji workflow for Surface fraction, Fractal dimension, optional Anisotropy, and validated manual Surface area export |
-| `UI_GUIDE.md` | Verified BoneJ menu paths, input rules, and UI scope notes |
-| `UI_WORKFLOW_THICKNESS_AND_FRACTION.md` | Manual step-by-step workflow for Thickness plus Area/Volume fraction, with optional Connectivity |
+| `SCRIPT_API.md` | Every verified call: parameters, outputs, column names, cancel reasons, helpers (`toBoneJDataset`, `runBoneJ`) |
+| `GROOVY_WORKFLOW_THICKNESS_AND_FRACTION.groovy` | Runnable: threshold -> Thickness -> BV/TV -> optional Purify + Connectivity -> maps + CSV |
+| `GROOVY_WORKFLOW_STRUCTURE_METRICS.groovy` | Runnable: Surface fraction, Surface area, Fractal dimension, Anisotropy -> one-row CSV |
+| `UI_GUIDE.md` | Menu paths, dialog labels, input rules |
+| `UI_WORKFLOW_THICKNESS_AND_FRACTION.md` | Manual click-through of the thickness/fraction/connectivity workflow |

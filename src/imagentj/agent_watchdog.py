@@ -97,6 +97,10 @@ _MAX_HISTORY = 40          # tool calls kept per handle (bounded memory)
 _MAX_ARG_CHARS = 400       # per-call argument digest input
 
 
+class AgentAborted(RuntimeError):
+    """Raised in the caller when the agent watchdog terminated an agent turn."""
+
+
 # ---------------------------------------------------------------------------
 # Tier 3 — the user is not getting a segmentation they will accept
 # ---------------------------------------------------------------------------
