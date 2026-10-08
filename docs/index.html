@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <meta name="color-scheme" content="dark" />
-<title>Agentic-J — AI Agent for Microscopy Image Analysis from Exploration to Publication</title>
+<title>Agentic-J</title>
 <meta name="description" content="Agentic-J is a containerised multi-agent assistant for microscopy image analysis. It plans analyses and runs them in Fiji, Python and napari, checks results with a vision judge, fine-tunes segmentation models on your corrections, and teaches bioimage analysis in education mode." />
 
 <!-- Open Graph -->
@@ -18,7 +18,7 @@
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=Playfair+Display:ital,wght@0,400..700;1,400..600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Open+Sans:ital,wght@0,400..700;1,400..600&display=swap" rel="stylesheet">
 
 <link rel="stylesheet" href="css/styles.css" />
 <script>document.documentElement.classList.remove('no-js');</script>
@@ -37,7 +37,7 @@
     <nav class="nav-links" aria-label="primary">
       <a href="#engines">Engines</a>
       <a href="#finetuning">Fine-tuning</a>
-      <a href="#judge">VLM judge</a>
+      <!-- <a href="#judge">VLM judge</a> -->
       <a href="#education">Education</a>
       <a href="#architecture">Architecture</a>
       <a href="#quickstart">Get started</a>
@@ -54,15 +54,14 @@
   <div class="container">
     <div class="hero-grid">
       <div>
-        <span class="fig-tag reveal">AI agent for biological microscopy image analysis</span>
         <h1 class="reveal">
           From raw micrographs<br/>
-          to <em>publication</em>,<br/>
+          to <em>analytical validation</em>,<br/>
           <span class="outline">in one conversation.</span>
         </h1>
         <p class="lead reveal">
           Agentic-J runs <strong>Fiji</strong>, <strong>Python</strong> and <strong>napari</strong> in one container, next to a
-          chat panel. It plans the analysis, writes and debugs the code, checks every result by eye with a
+          chat panel. It plans the analysis, writes and debugs the code, can check every result with a
           vision-language judge, fine-tunes segmentation models on your corrections and documents the whole project.
           It can also teach you bioimage analysis from the ground up.
         </p>
@@ -96,7 +95,7 @@
       <div class="stat"><div class="num">25</div><div class="lbl">Fiji plugin skill packs</div></div>
       <div class="stat"><div class="num">11</div><div class="lbl">Python &amp; napari skills</div></div>
       <div class="stat"><div class="num">7</div><div class="lbl">specialist agents</div></div>
-      <div class="stat"><div class="num">3</div><div class="lbl">modes: advanced, quick, education</div></div>
+      <div class="stat"><div class="num">3</div><div class="lbl">modes: analysis (script-based, click-by-click), education</div></div>
     </div>
 
     <div class="hero-visual reveal">
@@ -109,7 +108,6 @@
       </figure>
       <div class="figcap">
         <span><b>FIG. 1</b>&nbsp;&nbsp;The chat panel and a live Fiji desktop, served to your browser by noVNC.</span>
-        <span class="scalebar"><i></i>1 docker compose up</span>
       </div>
     </div>
   </div>
@@ -120,7 +118,7 @@
   <div class="container">
     <div class="section-head reveal">
       <span class="fig-tag">What's inside</span>
-      <h2 class="section-title">A full analysis team, <span class="outline">not a chatbot.</span></h2>
+      <h2 class="section-title">More than <span class="outline">Fiji scripting.</span></h2>
       <p class="section-sub">
         Agentic-J started as an agent for Fiji scripting. It now covers the rest of the workflow too: Python science
         libraries, interactive napari work, model training, visual quality control and teaching.
@@ -146,7 +144,7 @@
         <p>You correct a handful of tiles and the agent trains micro-sam or Cellpose on them, then measures the result.</p>
         <span class="go">Fine-tuning →</span>
       </a>
-      <a href="#judge">
+      <a>
         <span class="no">04 <span class="new">NEW</span></span>
         <h3>VLM judge</h3>
         <p>A vision-language model looks at inputs, masks and plots and returns PASS, WARN or FAIL with reasons.</p>
@@ -185,10 +183,12 @@
   <div class="container">
     <div class="section-head reveal">
       <span class="fig-tag">Fig. 2 · Three engines</span>
-      <h2 class="section-title">Fiji, Python and napari, <span class="outline">one conversation.</span></h2>
+      <h2 class="section-title">Fiji, Python and napari <span class="outline">in the same chat.</span></h2>
       <p class="section-sub">
         The agent picks the right tool for each step. It might segment in Python, measure in Fiji and inspect
         the result in napari, all from the same chat and within the same project folder.
+        Each tool below comes with a curated skill (API notes, UI guides, tested workflows) that the agent loads
+        when needed. Need something else? Ask the agent to install it, or use Fiji's <code>Help → Update…</code> menu.
       </p>
     </div>
 
@@ -202,15 +202,22 @@
         <span class="kicker">GROOVY · MACROS · UI GUIDANCE</span>
         <p>A full Fiji with curated plugins. The coder writes Groovy against real plugin APIs, and the debugger reads the ImageJ log and fixes the script with surgical edits.</p>
         <ul>
-          <li><strong>25 skill packs</strong>: StarDist, TrackMate, MorphoLibJ, Labkit, CLIJ2, BoneJ, SNT…</li>
           <li><strong>UI mode</strong>: "do this through the menus" and it walks you through Fiji</li>
           <li><strong>Dialog help</strong>: it screenshots an open plugin dialog and explains each parameter</li>
         </ul>
-        <pre class="code"><button class="copy" data-copy>copy</button><span class="tok-c">// segment_nuclei_v2.groovy</span>
-<span class="tok-k">import</span> ij.IJ
-<span class="tok-k">def</span> imp = IJ.openImage(<span class="tok-s">"nuclei.tif"</span>)
-IJ.run(imp, <span class="tok-s">"Gaussian Blur..."</span>,
-       <span class="tok-s">"sigma=2"</span>)</pre>
+        <div class="skills">
+          <div class="chips">
+            <span class="chip">3D ImageJ Suite</span><span class="chip">BigStitcher</span><span class="chip">Bio-Formats</span>
+            <span class="chip">BioVoxxel Toolbox</span><span class="chip">BoneJ</span><span class="chip">bUnwarpJ</span>
+            <span class="chip">Cellpose</span><span class="chip">CLIJ2</span><span class="chip">Coloc 2</span>
+            <span class="chip">CSBDeep</span><span class="chip">DeepImageJ</span><span class="chip">FeatureJ</span>
+            <span class="chip">ilastik</span><span class="chip">Labkit</span><span class="chip">MIST</span>
+            <span class="chip">MorphoLibJ</span><span class="chip">NeuronJ</span><span class="chip">OrientationJ</span>
+            <span class="chip">Sholl Analysis</span><span class="chip">SNT</span><span class="chip">StackReg</span>
+            <span class="chip">StarDist</span><span class="chip">TrackMate</span><span class="chip">TransformJ</span>
+            <span class="chip">TurboReg</span>
+          </div>
+        </div>
       </article>
 
       <article class="engine frame reveal">
@@ -227,10 +234,14 @@ IJ.run(imp, <span class="tok-s">"Gaussian Blur..."</span>,
           <li><strong>Atlases</strong>: BrainGlobe registration to neuroanatomical atlases</li>
           <li><strong>Stats &amp; plots</strong>: scikit-learn, rigorous tests, 300-DPI PNG + SVG figures</li>
         </ul>
-        <pre class="code"><button class="copy" data-copy>copy</button><span class="tok-c"># imagentj-env: cellpose4</span>
-<span class="tok-k">from</span> cellpose <span class="tok-k">import</span> models
-model = models.CellposeModel(gpu=<span class="tok-k">True</span>)
-masks, *_ = model.eval(imgs)</pre>
+        <div class="skills">
+          <div class="chips">
+            <span class="chip">Cellpose 3</span><span class="chip">Cellpose-SAM</span><span class="chip">Big-FISH</span>
+            <span class="chip">cp_measure</span><span class="chip">BrainGlobe</span><span class="chip">scikit-image</span>
+            <span class="chip">scikit-learn</span><span class="chip">statistics</span><span class="chip">matplotlib / seaborn</span>
+            <span class="chip">plotnine</span>
+          </div>
+        </div>
       </article>
 
       <article class="engine frame reveal">
@@ -246,9 +257,12 @@ masks, *_ = model.eval(imgs)</pre>
           <li><strong>Object classifier</strong>: train on a few clicks, then apply to a batch</li>
           <li><strong>Annotation</strong>: the viewer where you correct masks for fine-tuning</li>
         </ul>
-        <pre class="code"><button class="copy" data-copy>copy</button><span class="tok-c"># imagentj-env: napari-mcp</span>
-<span class="tok-k">from</span> micro_sam.automatic_segmentation <span class="tok-k">import</span> (
-    get_predictor_and_segmenter)</pre>
+        <div class="skills">
+          <div class="chips">
+            <span class="chip">napari viewer</span><span class="chip">micro-sam</span><span class="chip">object classifier</span>
+            <span class="chip">fine-tuning</span>
+          </div>
+        </div>
       </article>
     </div>
   </div>
@@ -259,9 +273,9 @@ masks, *_ = model.eval(imgs)</pre>
   <div class="container">
     <div class="section-head reveal">
       <span class="fig-tag">Fig. 3 · Human-in-the-loop fine-tuning</span>
-      <h2 class="section-title">When the stock model is wrong, <span class="outline">teach it.</span></h2>
+      <h2 class="section-title">Fine-tune models <span class="outline">on your corrections.</span></h2>
       <p class="section-sub">
-        You never annotate a whole image. You pick a few small tiles and correct them in napari, and the agent
+        Instead of annotating a whole image, you can pick a few tiles and correct them in napari, and the agent
         does the rest: it trains, evaluates, and applies the model only after checking the result.
       </p>
     </div>
@@ -315,7 +329,7 @@ masks, *_ = model.eval(imgs)</pre>
         </g>
       </svg>
       <div>
-        <h4>Three good tiles are worth more than a whole bad image.</h4>
+        <h4>A few corrected tiles are usually enough.</h4>
         <p>Fine-tuning works with both micro-sam and Cellpose. Stages 1 and 2 are shared, so you can run the stock models
           first, compare their overlays, and fine-tune whichever is closest.</p>
         <div class="quote">
@@ -328,13 +342,14 @@ masks, *_ = model.eval(imgs)</pre>
 </section>
 
 <!-- =================== VLM JUDGE =================== -->
+<!-- Hidden for now: VLM judge section. Remove this wrapper to restore it (and renumber Figs 4-7 back to 5-8).
 <section id="judge">
   <div class="container">
     <div class="split">
       <div>
         <div class="section-head reveal">
           <span class="fig-tag">Fig. 4 · Visual quality control</span>
-          <h2 class="section-title">A second pair of eyes <span class="outline">on every step.</span></h2>
+          <h2 class="section-title">A vision model <span class="outline">checks the results.</span></h2>
           <p class="section-sub">
             A script that runs without errors can still produce wrong results. The optional VLM judge looks at the
             actual pixels: the input, each segmentation overlaid on its source, and the final plots.
@@ -407,6 +422,7 @@ masks, *_ = model.eval(imgs)</pre>
     </div>
   </div>
 </section>
+-->
 
 <!-- =================== EDUCATION =================== -->
 <section id="education" class="paper">
@@ -414,22 +430,13 @@ masks, *_ = model.eval(imgs)</pre>
     <div class="split">
       <div>
         <div class="section-head reveal">
-          <span class="fig-tag">Fig. 5 · Education mode</span>
-          <h2 class="section-title">Learn the analysis, <span class="outline">not just the answer.</span></h2>
+          <span class="fig-tag">Fig. 4 · Education mode</span>
+          <h2 class="section-title">Learn bioimage analysis <span class="outline">as you go.</span></h2>
           <p class="section-sub">
-            Switch to education mode and Agentic-J becomes a patient tutor. It teaches Pete Bankhead's
+            Switch to education mode and Agentic-J works as a tutor. It teaches Pete Bankhead's
             <em>Introduction to Bioimage Analysis</em> (CC-BY 4.0) in order, one chapter at a time, and explains
             concepts rather than doing the analysis for you.
           </p>
-        </div>
-
-        <div class="modes reveal" aria-label="Modes">
-          <span>advanced</span><span>quick</span><span class="on">education</span>
-        </div>
-        <div class="mode-notes reveal">
-          <div><b>advanced</b>The full pipeline: plan, code, run, check, document.</div>
-          <div><b>quick</b>One operation with a lean toolset. "Blur this", "count these".</div>
-          <div><b>education</b>The tutor, with curriculum, practicals and live demos.</div>
         </div>
 
         <ul class="checklist reveal">
@@ -440,7 +447,7 @@ masks, *_ = model.eval(imgs)</pre>
           <li><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m5 12 5 5 9-10"/></svg>
             <span><strong>Practicals with solutions</strong> that are revealed only when you ask. Progress is saved per chat.</span></li>
           <li><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m5 12 5 5 9-10"/></svg>
-            <span><strong>Ready for your own data?</strong> The tutor hands you over to quick or advanced mode.</span></li>
+            <span><strong>Ready for your own data?</strong> The tutor hands you over to exploratory or conventional mode.</span></li>
         </ul>
 
         <div class="edu-stats reveal">
@@ -476,54 +483,11 @@ masks, *_ = model.eval(imgs)</pre>
   </div>
 </section>
 
-<!-- =================== GUARDRAILS =================== -->
-<section id="guardrails">
-  <div class="container">
-    <div class="section-head reveal">
-      <span class="fig-tag">Fig. 6 · Guardrails</span>
-      <h2 class="section-title">Built to be trusted <span class="outline">with real data.</span></h2>
-      <p class="section-sub">Autonomy is only useful if you can rely on it. These safeguards run on every turn.</p>
-    </div>
-    <div class="guards">
-      <div class="guard frame reveal">
-        <svg class="ico" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="17" cy="17" r="14"/><path d="M17 8v9l6 4"/></svg>
-        <h3>Agent watchdog</h3>
-        <p>Detects an agent that repeats the same call, stalls on a hung tool, or runs on without end, and stops it cleanly so the supervisor still gets a structured hand-off.</p>
-      </div>
-      <div class="guard frame reveal">
-        <svg class="ico" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h12l6 6v20H9z"/><path d="M21 4v6h6"/><path d="m13 20 3 3 6-7"/></svg>
-        <h3>Script watchdog</h3>
-        <p>Supervises every Groovy and Python run and ends runaway scripts instead of letting them block the session.</p>
-      </div>
-      <div class="guard frame reveal">
-        <svg class="ico" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7c4-2 8-2 12 1 4-3 8-3 12-1v20c-4-2-8-2-12 1-4-3-8-3-12-1z"/><path d="M17 8v20"/></svg>
-        <h3>Learned memory</h3>
-        <p>A background librarian records the pitfalls and working recipes from past runs, and the agents recall them the next time the same problem comes up.</p>
-      </div>
-      <div class="guard frame reveal">
-        <svg class="ico" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6h22v22H6z"/><path d="M6 12h22M12 12v16"/></svg>
-        <h3>State ledger &amp; phases</h3>
-        <p>A shared <code>state_ledger.json</code> records every step. A phase guard stops the pipeline from skipping ahead, for example to plotting before the I/O check.</p>
-      </div>
-      <div class="guard frame reveal">
-        <svg class="ico" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5h18v24H8z"/><path d="M12 11h10M12 16h10M12 21h6"/></svg>
-        <h3>QA reporter</h3>
-        <p>An optional, read-only auditor that checks the project against community checklists for publishing image data and writes a report.</p>
-      </div>
-      <div class="guard frame reveal">
-        <svg class="ico" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3 6 8v8c0 7 4.7 12.5 11 15 6.3-2.5 11-8 11-15V8z"/></svg>
-        <h3>Secure by design</h3>
-        <p>Bound to <code>localhost</code>, runs as a non-root user with all Linux capabilities dropped, and sees only <code>./data/</code>. Your data stay on your machine.</p>
-      </div>
-    </div>
-  </div>
-</section>
-
 <!-- =================== ARCHITECTURE =================== -->
 <section id="architecture">
   <div class="container">
     <div class="section-head reveal">
-      <span class="fig-tag">Fig. 7 · Architecture</span>
+      <span class="fig-tag">Fig. 5 · Architecture</span>
       <h2 class="section-title">One supervisor, <span class="outline">seven specialists.</span></h2>
       <p class="section-sub">
         You only talk to the supervisor. It plans, delegates and synthesises, and each specialist is a focused
@@ -587,98 +551,98 @@ masks, *_ = model.eval(imgs)</pre>
   </div>
 </section>
 
+<!-- =================== GUARDRAILS =================== -->
+<section id="guardrails">
+  <div class="container">
+    <div class="section-head reveal">
+      <span class="fig-tag">Fig. 6 · Guardrails</span>
+      <h2 class="section-title">Safeguards <span class="outline">on every turn.</span></h2>
+      <p class="section-sub">These checks run alongside the agent and step in when something goes wrong.</p>
+    </div>
+    <div class="guards">
+      <div class="guard frame reveal">
+        <svg class="ico" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="17" cy="17" r="14"/><path d="M17 8v9l6 4"/></svg>
+        <h3>Agent watchdog</h3>
+        <p>Detects an agent that repeats the same call, stalls on a hung tool, or runs on without end, and stops it cleanly so the supervisor still gets a structured hand-off.</p>
+      </div>
+      <div class="guard frame reveal">
+        <svg class="ico" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h12l6 6v20H9z"/><path d="M21 4v6h6"/><path d="m13 20 3 3 6-7"/></svg>
+        <h3>Script watchdog</h3>
+        <p>Supervises every Groovy and Python run and ends runaway scripts instead of letting them block the session.</p>
+      </div>
+      <div class="guard frame reveal">
+        <svg class="ico" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7c4-2 8-2 12 1 4-3 8-3 12-1v20c-4-2-8-2-12 1-4-3-8-3-12-1z"/><path d="M17 8v20"/></svg>
+        <h3>Learned memory</h3>
+        <p>A background librarian records the pitfalls and working recipes from past runs, and the agents recall them the next time the same problem comes up.</p>
+      </div>
+      <div class="guard frame reveal">
+        <svg class="ico" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6h22v22H6z"/><path d="M6 12h22M12 12v16"/></svg>
+        <h3>State ledger &amp; phases</h3>
+        <p>A shared <code>state_ledger.json</code> records every step. A phase guard stops the pipeline from skipping ahead, for example to plotting before the I/O check.</p>
+      </div>
+      <div class="guard frame reveal">
+        <svg class="ico" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5h18v24H8z"/><path d="M12 11h10M12 16h10M12 21h6"/></svg>
+        <h3>QA reporter</h3>
+        <p>An optional, read-only auditor that checks the project against community checklists for publishing image data and writes a report.</p>
+      </div>
+      <div class="guard frame reveal">
+        <svg class="ico" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3 6 8v8c0 7 4.7 12.5 11 15 6.3-2.5 11-8 11-15V8z"/></svg>
+        <h3>Secure by design</h3>
+        <p>Bound to <code>localhost</code>, runs as a non-root user with all Linux capabilities dropped, and sees only <code>./data/</code>. Your data stay on your machine.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- =================== SCREENSHOTS =================== -->
 <section id="screenshots">
   <div class="container">
     <div class="section-head reveal">
-      <span class="fig-tag">Fig. 8 · In action</span>
-      <h2 class="section-title">From a sentence <span class="outline">to results.</span></h2>
+      <span class="fig-tag">Fig. 7 · In action</span>
+      <h2 class="section-title">What a session <span class="outline">looks like.</span></h2>
       <p class="section-sub">A typical session: describe the task in plain English, then watch the agent plan, write the script, run it and explain the result.</p>
     </div>
 
     <div class="shots">
       <figure class="shot frame reveal">
+        <img src="images/04_setup_wizard.png" alt="First-run setup wizard" loading="lazy" />
+        <figcaption>
+          <span class="ttl"><b>7a</b>First-run setup wizard</span>
+          <span class="sub">If no API key is found, a wizard asks for one before Fiji launches.</span>
+        </figcaption>
+      </figure>
+      <figure class="shot frame reveal">
         <img src="images/01_chat_and_fiji.png" alt="The full Agentic-J workspace" loading="lazy" />
         <figcaption>
-          <span class="ttl"><b>8a</b>The full workspace</span>
+          <span class="ttl"><b>7b</b>The full workspace</span>
           <span class="sub">Chat panel on the left, live Fiji desktop on the right, both in the browser.</span>
         </figcaption>
       </figure>
       <figure class="shot frame reveal">
         <img src="images/02_generated_script.png" alt="A generated Groovy script" loading="lazy" />
         <figcaption>
-          <span class="ttl"><b>8b</b>A real, runnable script</span>
+          <span class="ttl"><b>7c</b>A real, runnable script</span>
           <span class="sub">Saved under <code>scripts/</code> with version history, so you can re-run it outside the agent.</span>
         </figcaption>
       </figure>
       <figure class="shot frame reveal">
-        <img src="images/03_results_plots.png" alt="Stats and plots" loading="lazy" />
+        <img class="fit" src="images/03_results_plots.png" alt="Stats and plots" loading="lazy" />
         <figcaption>
-          <span class="ttl"><b>8c</b>Publication-quality figures</span>
+          <span class="ttl"><b>7d</b>Publication-quality figures</span>
           <span class="sub">Statistics and plots from the Python analyst, with CSV tables ready to share.</span>
-        </figcaption>
-      </figure>
-      <figure class="shot frame reveal">
-        <img src="images/04_setup_wizard.png" alt="First-run setup wizard" loading="lazy" />
-        <figcaption>
-          <span class="ttl"><b>8d</b>First-run setup wizard</span>
-          <span class="sub">If no API key is found, a wizard asks for one before Fiji launches.</span>
         </figcaption>
       </figure>
     </div>
   </div>
 </section>
 
-<!-- =================== COVERAGE =================== -->
-<section id="plugins">
-  <div class="container">
-    <div class="section-head reveal">
-      <span class="fig-tag">Fig. 9 · Coverage</span>
-      <h2 class="section-title">Tools the agent <span class="outline">already knows.</span></h2>
-      <p class="section-sub">Each comes with a curated skill: an overview, script API notes, UI guides and tested workflow templates, which the agent loads on demand.</p>
-    </div>
-    <div class="coverage">
-      <div class="col frame reveal">
-        <div class="col-head"><h3>Fiji plugins</h3><span>25 skill packs</span></div>
-        <div class="chips">
-          <span class="chip">3D ImageJ Suite</span><span class="chip">BigStitcher</span><span class="chip">Bio-Formats</span>
-          <span class="chip">BioVoxxel Toolbox</span><span class="chip">BoneJ</span><span class="chip">bUnwarpJ</span>
-          <span class="chip">Cellpose</span><span class="chip">CLIJ2</span><span class="chip">Coloc 2</span>
-          <span class="chip">CSBDeep</span><span class="chip">DeepImageJ</span><span class="chip">FeatureJ</span>
-          <span class="chip">ilastik</span><span class="chip">Labkit</span><span class="chip">MIST</span>
-          <span class="chip">MorphoLibJ</span><span class="chip">NeuronJ</span><span class="chip">OrientationJ</span>
-          <span class="chip">Sholl Analysis</span><span class="chip">SNT</span><span class="chip">StackReg</span>
-          <span class="chip">StarDist</span><span class="chip">TrackMate</span><span class="chip">TransformJ</span>
-          <span class="chip">TurboReg</span>
-        </div>
-      </div>
-      <div class="col frame reveal">
-        <div class="col-head"><h3>Python</h3><span>9 skills</span></div>
-        <div class="chips">
-          <span class="chip">Cellpose 3</span><span class="chip">Cellpose-SAM</span><span class="chip">Big-FISH</span>
-          <span class="chip">cp_measure</span><span class="chip">BrainGlobe</span><span class="chip">scikit-image</span>
-          <span class="chip">scikit-learn</span><span class="chip">statistics</span><span class="chip">matplotlib / seaborn</span>
-          <span class="chip">plotnine</span>
-        </div>
-      </div>
-      <div class="col frame reveal">
-        <div class="col-head"><h3>napari</h3><span>2 skills</span></div>
-        <div class="chips">
-          <span class="chip">napari viewer</span><span class="chip">micro-sam</span><span class="chip">object classifier</span>
-          <span class="chip">fine-tuning</span>
-        </div>
-      </div>
-    </div>
-    <p class="coverage-note reveal">Need something else? Ask the agent to install it, or use Fiji's <code>Help → Update…</code> menu.</p>
-  </div>
-</section>
 
 <!-- =================== QUICK START =================== -->
 <section id="quickstart">
   <div class="container">
     <div class="section-head reveal">
       <span class="fig-tag">Get started</span>
-      <h2 class="section-title">Up and running <span class="outline">in four steps.</span></h2>
+      <h2 class="section-title">Install <span class="outline">in four steps.</span></h2>
       <p class="section-sub">You'll need Docker, about 8 GB of RAM, about 30 GB of free disk, and an OpenAI <em>or</em> OpenRouter API key.</p>
     </div>
 
@@ -769,7 +733,7 @@ cd Agentic-J</pre>
   <div class="container">
     <div class="section-head reveal">
       <span class="fig-tag">Documentation</span>
-      <h2 class="section-title">Short guides <span class="outline">to get fluent.</span></h2>
+      <h2 class="section-title">Read <span class="outline">the docs.</span></h2>
       <p class="section-sub">Each guide is a single page, and together they take about 15 minutes to read.</p>
     </div>
 
@@ -829,7 +793,7 @@ cd Agentic-J</pre>
         <h5>Project</h5>
         <a href="#engines">Engines</a>
         <a href="#finetuning">Fine-tuning</a>
-        <a href="#judge">VLM judge</a>
+        <!-- <a href="#judge">VLM judge</a> -->
         <a href="#education">Education mode</a>
         <a href="#architecture">Architecture</a>
       </div>
