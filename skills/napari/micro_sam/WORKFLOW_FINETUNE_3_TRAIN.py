@@ -1,4 +1,5 @@
 # imagentj-env: napari-mcp
+# imagentj-detach: training runs 10-20 min on a GPU with no human in the loop
 """
 micro_sam fine-tuning — STAGE 3 of 4: validate the annotations, train, and PROVE it helped.
 

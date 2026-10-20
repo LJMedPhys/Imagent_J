@@ -155,13 +155,27 @@ Then **read stage 1's output before moving on**:
 
 ## Stage 2 — the user annotates
 
-Set `TASK_DIR`. The script opens napari and **blocks until the user closes the window** — that
-is intended: the script returning is how you know they finished. It prints a per-tile status
-table on exit; relay that.
+Set `TASK_DIR`. The script opens napari and runs until the user closes the window. It prints a
+per-tile status table on exit; relay that.
 
-> **Say the instructions BEFORE you run the script.** `execute_script` returns nothing until the
-> script exits, so everything it prints to stdout — including the banner — reaches you only after
-> the user has already finished. Paste the block below into the chat first, then run stage 2.
+> **You are DETACHED for this stage, immediately.** `execute_script` returns
+> `SUMMARY: WAITING FOR THE USER (detached)` the moment the window opens, and the status table
+> arrives later as a `[DETACHED RUN FINISHED]` message. That first receipt means **nothing has
+> been annotated yet** — it is not a result and not a failure.
+>
+> Until the finished message arrives: do not start stage 3, do not re-run stage 2, do not read
+> the annotation files, and do not say how many tiles are done — you cannot know. The script
+> saves the user's work itself, tile by tile, as they press N.
+>
+> The reason you are detached is that annotation takes twenty minutes and the user is looking
+> at the thing they are asking about. Expect questions — *"what does DRAW do?"*, *"is a rough
+> outline good enough?"*, *"can I skip this tile?"* — and answer them from this playbook and
+> `ANNOTATION_INSTRUCTIONS.md`. That is the job while they work.
+
+> **Say the instructions BEFORE you run the script.** Detaching changes when the RECEIPT
+> arrives, not when the OUTPUT does: everything the script prints to stdout — including the
+> banner — still reaches you only in the finished message, after the user has already done the
+> work. Paste the block below into the chat first, then run stage 2.
 > (The helper panel repeats it all on screen, which is the backstop, not the plan.)
 
 > **Never start this workflow in an unattended run.** Stage 2 waits for a human. In a benchmark
@@ -183,6 +197,10 @@ table on exit; relay that.
 >   then the same **S** and **C**. Use it when clicking keeps getting an object wrong. Loose is
 >   fine: the computer uses the box around your shape. Press the button again if the points
 >   won't stick — that swaps to drag-a-rectangle, same result.
+> - **☐ My drawn shape IS the outline (skip micro_sam)** — tick it when the computer keeps
+>   getting an object wrong however you prompt it. Then DRAW means: press, drag round the edge,
+>   release (press DRAW again for click-by-click), then **S** and **C** as usual — and what you
+>   drew is exactly what gets saved, so trace the edge carefully. Untick it to go back.
 > - **✖ DELETE objects** — click on anything outlined that shouldn't be.
 > - **⌫ CLEAR my clicks & boxes** — tidies away the dots and shapes; outlines are untouched.
 >
@@ -221,6 +239,14 @@ The status table tells you what to do next: **3+ usable tiles** → stage 3. Few
 ## Stage 3 — train and measure (agent)
 
 Set `TASK_DIR`. Everything else has a sensible default; `N_EPOCHS=10` is right for 5-10 tiles.
+
+> **This stage is DETACHED** (`# imagentj-detach:` on line 2). `execute_script` returns a
+> receipt — `SUMMARY: STILL RUNNING (detached)` — within seconds, and the training output
+> arrives later as a separate `[DETACHED RUN FINISHED]` message. That receipt is NOT a
+> failure and NOT an empty result: do not re-run the stage, do not poll for it, and do not
+> report a score you have not seen. Tell the user training is running and roughly how long
+> it takes, then answer whatever they ask next — the point of detaching is that they can
+> talk to you during the 10-20 minutes instead of waiting on a blocked turn.
 
 It validates every annotation (shape, dtype, ≥2 objects ≥25 px), holds out ~25 % of the tiles —
 **whole source images where possible**, so the score is not inflated by tiles cut from the same
@@ -393,13 +419,30 @@ CSV and overlay previews; the masks go straight into a `python_data_analyst` mea
     rescue it. A rectangle is one press-drag-release with no state in between, which is why it
     is the fallback DRAW swaps to when its polygon points will not stick.
 
-22. **A folder that mixes grayscale and RGB files silently breaks the annotator.** The series
+    **When SAM cannot get an object right at all, skip it — that is what the "My drawn shape
+    IS the outline" switch under DRAW is for.** With it ticked, S rasterises the shapes in
+    `prompts` into `current_object` (one object per closed shape, earlier shape wins an
+    overlap) without calling the model, and C is micro_sam's own commit. Nothing is fed to the
+    predictor, so the failure above does not apply; the default gesture is napari's freehand
+    lasso (`add_polygon_lasso`), a single press-drag-release like the rectangle. A hand-drawn
+    mask is only as faithful as the trace, so suggest it per object, not as the default.
+
+22. **Every commit is logged to `<TASK_DIR>/prompt_log/<tile>.json`.** One entry per C: the
+    drawn shapes (`type`, `vertices_yx`), the clicks (`yx`, `label`), `source` (`"drawn"` =
+    the mask is the shape itself, `"micro_sam"` = SAM segmented from these prompts) and the
+    `label_ids` the commit created. micro_sam clears the prompt layers on every commit, so this
+    log is the only record of what the user traced. It is a history, not the annotation:
+    objects deleted later still appear in it, and the label tif in `annotations/` remains what
+    stage 3 trains on. The stage-2 report counts, per tile, how many saved objects were drawn
+    by hand.
+
+23. **A folder that mixes grayscale and RGB files silently breaks the annotator.** The series
     annotator shows every tile in ONE napari image layer, so the first `(512,512,3)` tile after
     a `(512,512)` one is read as a 512-SLICE STACK: the canvas goes black, the committed masks
     float on nothing, and a dimension slider appears at the bottom. No error is raised. Stage 1
     now writes one colour mode for the whole task (`tile_mode` in the manifest) — RGB if any
     source has colour. Check that field if an annotator session ever looks like this.
-23. **A napari window launched from `python_data_analyst` can die on a Qt plugin mismatch.**
+24. **A napari window launched from `python_data_analyst` can die on a Qt plugin mismatch.**
     Importing cv2 in the agent's own env sets `QT_QPA_PLATFORM_PLUGIN_PATH` to *its* bundled Qt
     plugins, children inherit it, and the `napari-mcp` interpreter (a different Python and Qt
     build) then aborts with *Could not load the Qt platform plugin "xcb" ... even though it was
@@ -467,7 +510,7 @@ annotations, and the train-val split never sharing a source image), and
 | file | what it is |
 |---|---|
 | `WORKFLOW_FINETUNE_1_PREPARE.py` | tiles + pre-segmentation + `manifest.json` + generated human instructions |
-| `WORKFLOW_FINETUNE_2_ANNOTATE.py` | the annotator with the ADD/DRAW/DELETE helper panel; blocks until the user is done, then reports |
+| `WORKFLOW_FINETUNE_2_ANNOTATE.py` | the annotator with the ADD/DRAW/DELETE helper panel (and the drawn-shape-is-the-outline switch); logs every commit to `prompt_log/`; blocks until the user is done, then reports |
 | `WORKFLOW_FINETUNE_3_TRAIN.py` | validate → split → train → export → **stock vs fine-tuned on held-out tiles** → `evaluation.json` |
 | `WORKFLOW_FINETUNE_4_APPLY.py` | segment the folder with whichever model won, tiled at the training scale |
 | `SKILL.md` | the rest of micro_sam: automatic segmentation, the interactive annotator, the object classifier |

@@ -8,11 +8,6 @@ import json
 import time
 import html as html_module
 import logging
-import smtplib
-import ssl
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.application import MIMEApplication
 import jpype
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
@@ -28,6 +23,8 @@ from imagentj.agents import init_agent, set_qa_enabled
 from imagentj.imagej_context import get_ij
 from imagentj.chat_history import ChatHistoryManager
 import imagentj.stop_signal as stop_signal
+from imagentj import interject
+from imagentj import detached
 from imagentj import run_control
 from imagentj import watchdog
 from imagentj.safety_filter import is_bio_refusal
@@ -526,73 +523,22 @@ class MetricsPanelWidget(QWidget):
         self._lbl_soft.setText(  f("Soft errors", str(data["soft_error_tool_calls"]), "#e67e22"))
 
 # ---------------------------------------------------------------------------
-# Email helper
+# Report-issue dialog
 # ---------------------------------------------------------------------------
 
+_ISSUES_URL = "https://github.com/MMV-Lab/Agentic-J/issues/new"
 _REPORT_EMAIL = "agentj.help@gmail.com"
 
-def _send_report_email(subject: str, body: str, attachments: list[tuple[str, bytes]]) -> None:
-    """Send a report email from agentj.help@gmail.com to itself via Gmail SMTP.
-
-    Raises RuntimeError if GMAIL_APP_PASSWORD is not set or sending fails.
-    attachments: list of (filename, bytes) pairs.
-    """
-    app_password = os.environ.get("GMAIL_APP_PASSWORD", "").replace(" ", "")
-    if not app_password:
-        raise RuntimeError(
-            "GMAIL_APP_PASSWORD is not set in your .env file.\n"
-            "Generate an App Password at:\n"
-            "  Google Account → Security → 2-Step Verification → App Passwords"
-        )
-
-    msg = MIMEMultipart()
-    msg["From"] = _REPORT_EMAIL
-    msg["To"] = _REPORT_EMAIL
-    msg["Subject"] = subject
-    msg.attach(MIMEText(body, "plain"))
-
-    for filename, data in attachments:
-        part = MIMEApplication(data, Name=filename)
-        part["Content-Disposition"] = f'attachment; filename="{filename}"'
-        msg.attach(part)
-
-    ctx = ssl.create_default_context()
-    import socket
-
-    # Resolve to IPv4 — Docker containers often lack IPv6 (errno 97).
-    smtp_ip = socket.getaddrinfo("smtp.gmail.com", 587, socket.AF_INET)[0][4][0]
-    smtp_ip_465 = socket.getaddrinfo("smtp.gmail.com", 465, socket.AF_INET)[0][4][0]
-
-    raw = msg.as_bytes()
-    try:
-        # Port 587 with STARTTLS (preferred)
-        with smtplib.SMTP(smtp_ip, 587, timeout=15) as smtp:
-            smtp._host = "smtp.gmail.com"  # starttls verifies against hostname, not IP
-            smtp.ehlo()
-            smtp.starttls(context=ctx)
-            smtp.ehlo()
-            smtp.login(_REPORT_EMAIL, app_password)
-            smtp.sendmail(_REPORT_EMAIL, _REPORT_EMAIL, raw)
-    except (OSError, smtplib.SMTPException):
-        # Port 465 implicit TLS fallback (some networks block 587)
-        with smtplib.SMTP_SSL(smtp_ip_465, 465, context=ctx, timeout=15) as smtp:
-            smtp._host = "smtp.gmail.com"
-            smtp.login(_REPORT_EMAIL, app_password)
-            smtp.sendmail(_REPORT_EMAIL, _REPORT_EMAIL, raw)
-
-
-# ---------------------------------------------------------------------------
-# Feedback / Error-Report dialog
-# ---------------------------------------------------------------------------
 
 class FeedbackDialog(QDialog):
-    """Modal dialog for collecting user feedback and exporting an error report."""
+    """Points the user to GitHub issues or the support email address.
 
-    def __init__(self, tracker_cb, history_manager, current_thread_id, parent=None):
+    There is no browser inside the container, so both are shown as selectable
+    text with a Copy button; a copy lands in the noVNC clipboard panel.
+    """
+
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self._tracker_cb = tracker_cb
-        self._history_manager   = history_manager
-        self._current_thread_id = current_thread_id
         self.setWindowTitle("Report Issue")
         self.setMinimumWidth(480)
         self.setModal(True)
@@ -601,151 +547,51 @@ class FeedbackDialog(QDialog):
         layout.setSpacing(10)
         layout.setContentsMargins(14, 14, 14, 14)
 
-        desc_label = QLabel(
-            "<b>Describe the problem</b><br>"
+        intro = QLabel(
+            "<b>Found a problem or have a suggestion?</b><br>"
             "<span style='color:#555; font-size:11px;'>"
-            "What did you ask the agent to do, and what went wrong?</span>"
+            "Open an issue on GitHub (needs a GitHub account) or email us. "
+            "Please describe what you asked the agent to do and what went wrong.</span>"
         )
-        desc_label.setTextFormat(Qt.RichText)
-        desc_label.setWordWrap(True)
-        layout.addWidget(desc_label)
+        intro.setTextFormat(Qt.RichText)
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
 
-        self._text_edit = QPlainTextEdit()
-        self._text_edit.setPlaceholderText(
-            "e.g. 'The script ran but measured 0 cells on my fluorescence image.'"
-        )
-        self._text_edit.setFixedHeight(120)
-        layout.addWidget(self._text_edit)
+        layout.addWidget(self._copy_row("GitHub issue", _ISSUES_URL))
+        layout.addWidget(self._copy_row("Email", _REPORT_EMAIL))
 
-        options_box = QGroupBox("Export options")
-        options_layout = QVBoxLayout(options_box)
-        options_layout.setSpacing(4)
-        self._chk_usage = QCheckBox("Include usage stats (token counts, cost)")
-        self._chk_usage.setChecked(True)
-        options_layout.addWidget(self._chk_usage)
-        layout.addWidget(options_box)
-
-        conv_box = QGroupBox("Include conversations")
-        conv_layout = QVBoxLayout(conv_box)
-        conv_layout.setSpacing(2)
-        self._conv_list = QListWidget()
-        self._conv_list.setSelectionMode(QListWidget.NoSelection)
-        threads = self._history_manager.list_threads()
-        for thread_id, meta in threads:
-            title   = meta.get("title", thread_id)
-            display = f"{title[:45]}\u2026" if len(title) > 45 else title
-            item = QListWidgetItem(display)
-            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(
-                Qt.Checked if thread_id == self._current_thread_id else Qt.Unchecked
-            )
-            item.setData(Qt.UserRole, thread_id)
-            self._conv_list.addItem(item)
-        self._conv_list.setFixedHeight(min(len(threads), 6) * 22 + 6)
-        conv_layout.addWidget(self._conv_list)
-        sel_row = QHBoxLayout()
-        btn_all  = QPushButton("Select all")
-        btn_none = QPushButton("Select none")
-        btn_all.setFixedHeight(20)
-        btn_none.setFixedHeight(20)
-        btn_all.clicked.connect(lambda: self._set_all_checks(Qt.Checked))
-        btn_none.clicked.connect(lambda: self._set_all_checks(Qt.Unchecked))
-        sel_row.addWidget(btn_all)
-        sel_row.addWidget(btn_none)
-        conv_layout.addLayout(sel_row)
-        layout.addWidget(conv_box)
-
-        info = QLabel(
+        hint = QLabel(
             "<span style='color:#888; font-size:10px;'>"
-            "The report includes: error details and script code from selected conversation, "
-            "your description, and basic system info (OS, Python version). "
-            "No image data or raw file contents are included. Multiple conversations are exported as a ZIP.</span>"
+            "Copied text appears in the clipboard panel of the noVNC side bar, "
+            "from where you can paste it into your own browser or email program.</span>"
         )
-        info.setTextFormat(Qt.RichText)
-        info.setWordWrap(True)
-        layout.addWidget(info)
+        hint.setTextFormat(Qt.RichText)
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
 
-        btn_box = QDialogButtonBox()
-        btn_box.addButton("Send Report\u2026", QDialogButtonBox.AcceptRole)
-        btn_box.addButton("Cancel", QDialogButtonBox.RejectRole)
-        btn_box.accepted.connect(self._on_export)
+        self._status = QLabel("")
+        self._status.setStyleSheet("color:#27ae60; font-size:11px;")
+        layout.addWidget(self._status)
+
+        btn_box = QDialogButtonBox(QDialogButtonBox.Close)
         btn_box.rejected.connect(self.reject)
         layout.addWidget(btn_box)
 
-    def _set_all_checks(self, state):
-        for i in range(self._conv_list.count()):
-            self._conv_list.item(i).setCheckState(state)
+    def _copy_row(self, label: str, text: str) -> QGroupBox:
+        box = QGroupBox(label)
+        row = QHBoxLayout(box)
+        value = QLabel(text)
+        value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        row.addWidget(value, 1)
+        btn = QPushButton("Copy")
+        btn.setFixedWidth(70)
+        btn.clicked.connect(lambda: self._copy(label, text))
+        row.addWidget(btn)
+        return box
 
-    def _on_export(self):
-
-        selected = []
-        for i in range(self._conv_list.count()):
-            item = self._conv_list.item(i)
-            if item.checkState() == Qt.Checked:
-                selected.append(item.data(Qt.UserRole))
-
-        if not selected:
-            QMessageBox.warning(self, "Nothing selected",
-                                "Please select at least one conversation.")
-            return
-        
-        self._tracker_cb.set_user_feedback(self._text_edit.toPlainText().strip())
-
-        include_usage = self._chk_usage.isChecked()
-
-        import io, zipfile as _zipfile
-        timestamp = time.strftime('%Y%m%d_%H%M%S')
-        feedback_text = self._text_edit.toPlainText().strip()
-        try:
-            if len(selected) == 1:
-                report = self._tracker_cb.get_error_report_for_thread(
-                    selected[0], include_usage_stats=include_usage
-                )
-                fname = f"report_{selected[0][:8]}_{timestamp}.json"
-                attachments = [(fname, json.dumps(report, indent=2, ensure_ascii=False).encode())]
-            else:
-                buf = io.BytesIO()
-                with _zipfile.ZipFile(buf, "w", _zipfile.ZIP_DEFLATED) as zf:
-                    for thread_id in selected:
-                        report = self._tracker_cb.get_error_report_for_thread(
-                            thread_id, include_usage_stats=include_usage
-                        )
-                        zf.writestr(f"report_{thread_id[:8]}.json",
-                                    json.dumps(report, indent=2, ensure_ascii=False))
-                fname = f"agentic-j_issue_{timestamp}.zip"
-                attachments = [(fname, buf.getvalue())]
-
-            subject = f"[Agentic-J] Issue Report — {timestamp}"
-            body = f"User feedback:\n{feedback_text or '(none provided)'}\n\nAttached: {len(selected)} conversation(s)."
-            _send_report_email(subject, body, attachments)
-            QMessageBox.information(self, "Report Sent",
-                f"Issue report sent to {_REPORT_EMAIL}.\n\nThank you for the feedback!")
-            self.accept()
-        except Exception as e:
-            log.exception(f"Failed to send issue report: {e}")
-            reply = QMessageBox.warning(
-                self, "Send Failed",
-                f"Could not send the report by email:\n{e}\n\n"
-                "Would you like to save it to a file instead?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes,
-            )
-            if reply == QMessageBox.Yes:
-                default_name = os.path.expanduser(
-                    f"~/agentic-j_issue_{time.strftime('%Y%m%d_%H%M%S')}"
-                    f"{'zip' if len(attachments) == 1 and attachments[0][0].endswith('.zip') else 'json'}"
-                )
-                path, _ = QFileDialog.getSaveFileName(
-                    self, "Save Issue Report", default_name,
-                    "All files (*)",
-                )
-                if path:
-                    with open(path, "wb") as f:
-                        f.write(attachments[0][1])
-                    QMessageBox.information(self, "Report Saved",
-                        f"Report saved to:\n{path}\n\nPlease send it manually to {_REPORT_EMAIL}.")
-                    self.accept()
-        
+    def _copy(self, label: str, text: str) -> None:
+        QApplication.clipboard().setText(text)
+        self._status.setText(f"{label} copied.")
 
 
 # ---------------------------------------------------------------------------
@@ -761,6 +607,16 @@ class AgentWorker(QObject):
     stop_report = Signal(int, int)
     # Watchdog verdicts, surfaced in the chat rather than buried in the log.
     watchdog_notice = Signal(str)
+    note_delivered  = Signal(str)
+    detached_done   = Signal(str, str)      # (label, result-as-prompt)
+    detached_started = Signal(str)          # (label) — handed back, still running
+    # Emitted when a prompt is actually DEQUEUED, whoever queued it. The GUI marks
+    # itself busy from here, because a turn can start without the user pressing Send:
+    # a detached script's result and re-queued notes both arrive through the queue.
+    turn_started = Signal(str)
+    # Notes the user posted after the agent's final model turn; re-submitted as a
+    # prompt rather than silently dropped. Carries how many.
+    notes_requeued = Signal(int)
 
     def __init__(self, supervisor, thread_id: str, tracker_callback):
         super().__init__()
@@ -780,6 +636,7 @@ class AgentWorker(QObject):
                 break
             self._stop_requested = False
             stop_signal.clear()
+            self.turn_started.emit(prompt)
             self._run_prompt(prompt)
 
     def _run_prompt(self, user_input: str):
@@ -798,6 +655,10 @@ class AgentWorker(QObject):
         except Exception:
             pass                     # monitoring must never break the send path
         try:
+            # InterjectMiddleware has no way to learn which chat is running —
+            # Runtime carries no config — so tell it explicitly, here, on the
+            # thread that is about to run the graph.
+            interject.bind_thread(self.thread_id)
             config = {
                 "configurable": {"thread_id": self.thread_id},
                 "callbacks":    [self.tracker_callback],
@@ -832,6 +693,14 @@ class AgentWorker(QObject):
                 self.error.emit(str(e))
         finally:
             log.debug("_run_prompt finished")
+            # A note posted after the agent's last model turn would otherwise sit
+            # in the queue for ever, looking delivered to the user but seen by
+            # nobody. Re-submit it as an ordinary prompt so the run continues.
+            stranded = interject.drain(self.thread_id)
+            if stranded and not self._stop_requested:
+                log.info("re-submitting %d undelivered note(s) as a prompt", len(stranded))
+                self.notes_requeued.emit(len(stranded))
+                self.tasks.put("\n\n".join(stranded))
             self.finished.emit()
 
     def submit(self, prompt: str):
@@ -878,10 +747,17 @@ class ChatHistoryPanel(QWidget):
         layout.addWidget(header)
 
         self.btn_new = QPushButton("New Chat")
+        # The :disabled rule is the point. A stylesheet with a fixed background
+        # overrides Qt's disabled palette, so without it the button still looks
+        # bright green and clickable while the panel is disabled — it swallows the
+        # click and appears broken, rather than reading as unavailable. The panel is
+        # disabled whenever anything is running, including a detached script.
         self.btn_new.setStyleSheet(
-            "background-color: #2ecc71; color: white; font-weight: bold; "
-            "padding: 6px; border-radius: 4px;"
+            "QPushButton { background-color: #2ecc71; color: white; font-weight: bold; "
+            "padding: 6px; border-radius: 4px; }"
+            "QPushButton:disabled { background-color: #cfd8dc; color: #8f9ba1; }"
         )
+        self.btn_new.setToolTip("Disabled while a task is running in this chat")
         self.btn_new.clicked.connect(self.new_chat_requested)
         layout.addWidget(self.btn_new)
 
@@ -894,6 +770,9 @@ class ChatHistoryPanel(QWidget):
             "QListWidget::item:selected:active, "
             "QListWidget::item:selected:!active { background-color: #3498db; color: white; }"
             "QListWidget::item:hover:!selected { background-color: #e8f4fd; }"
+            # Same reason as the button: make "you cannot switch chats right now"
+            # visible rather than only enforced.
+            "QListWidget:disabled { background-color: #f4f6f7; color: #9aa4aa; }"
         )
         self.session_list.itemClicked.connect(self._on_item_clicked)
         layout.addWidget(self.session_list)
@@ -985,6 +864,15 @@ class ImageJAgentGUI(QWidget):
 
         self.status_label = QLabel("Agent is ready to help")
         self.status_label.setStyleSheet("color: green; font-weight: bold;")
+        # Ignored horizontally: the label may report any width it likes and the layout
+        # will not grow to fit it, so appending the process name cannot resize the chat.
+        self.status_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self._base_status = "Ready"
+        # Ticks the elapsed time of any detached run. One second, and it only ever
+        # rewrites a label, so it costs nothing when nothing is running.
+        self._bg_ticker = QTimer(self)
+        self._bg_ticker.timeout.connect(self._render_status)
+        self._bg_ticker.start(1000)
 
         btn_row = QHBoxLayout()
         btn_row.addWidget(self.send_button, stretch=4)
@@ -1038,9 +926,22 @@ class ImageJAgentGUI(QWidget):
         self.worker.error.connect(self.on_agent_error)
         self.worker.stop_report.connect(self.on_stop_report)
         self.worker.watchdog_notice.connect(self.on_watchdog_notice)
+        self.worker.note_delivered.connect(self.on_note_delivered)
+        self.worker.detached_done.connect(self.on_detached_done)
+        self.worker.detached_started.connect(self.on_detached_started)
+        self.worker.turn_started.connect(self.on_turn_started)
+        self.worker.notes_requeued.connect(self.on_notes_requeued)
         # The watchdog fires from its own thread; hop onto the GUI thread via the
         # worker's signal rather than touching widgets directly.
         watchdog.set_notifier(self.worker.watchdog_notice.emit)
+        # Same cross-thread route: the middleware drains notes on the agent worker
+        # thread, and only the GUI thread may touch widgets. Its own signal, not
+        # watchdog_notice — that slot sets the status to "Watchdog intervened".
+        interject.set_notifier(self.worker.note_delivered.emit)
+        # A detached script finishes on its own worker thread. Hand the result back
+        # through a signal so it is submitted on the GUI thread like any other prompt.
+        detached.set_completion_notifier(self.worker.detached_done.emit)
+        detached.set_detach_notifier(self.worker.detached_started.emit)
         self.thread.start()
 
         self._current_status_bubble = None
@@ -1120,16 +1021,26 @@ class ImageJAgentGUI(QWidget):
     # ------------------------------------------------------------------
 
     def new_chat(self):
-        if self._agent_is_busy():
-            QMessageBox.warning(self, "Agent Busy", "Please wait for the current task to finish.")
+        if self._anything_running():
+            QMessageBox.warning(
+                self, "Still running",
+                "A task is still running in this chat — its result will arrive here "
+                "when it finishes.\n\nStarting or switching chats now would deliver "
+                "it into the wrong conversation. Wait for it, or press Stop."
+            )
             return
         self._start_new_thread()
 
     def switch_thread(self, thread_id: str):
         if thread_id == self.current_thread_id:
             return
-        if self._agent_is_busy():
-            QMessageBox.warning(self, "Agent Busy", "Please wait for the current task to finish.")
+        if self._anything_running():
+            QMessageBox.warning(
+                self, "Still running",
+                "A task is still running in this chat — its result will arrive here "
+                "when it finishes.\n\nStarting or switching chats now would deliver "
+                "it into the wrong conversation. Wait for it, or press Stop."
+            )
             return
         self._load_thread(thread_id)
 
@@ -1157,12 +1068,7 @@ class ImageJAgentGUI(QWidget):
 
 
     def _open_feedback_dialog(self):
-        dlg = FeedbackDialog(
-            self._tracker_cb,
-            self.history_manager,
-            self.current_thread_id,
-            parent=self,
-        )
+        dlg = FeedbackDialog(parent=self)
         dlg.exec()
 
     # ------------------------------------------------------------------
@@ -1178,34 +1084,126 @@ class ImageJAgentGUI(QWidget):
         return super().eventFilter(obj, event)
 
     def _agent_is_busy(self) -> bool:
-        return not self.send_button.isEnabled()
+        # Explicit flag rather than the send button's enabled state: the button
+        # stays enabled while running so mid-run notes can be typed, so it no
+        # longer distinguishes the two. Several callers depend on this being
+        # right (the Vision/QA toggles and thread switching all refuse mid-run).
+        #
+        # STRICTLY the agent's own loop. A detached script does NOT count: the agent
+        # is free, and `on_send` uses this to decide between answering and parking a
+        # note. Counting background runs here parked every message as a note that
+        # could not be read until the script finished — the exact opposite of what
+        # detaching is for. Use `_anything_running()` for "is anything in flight".
+        return getattr(self, "_busy", False)
+
+    def _anything_running(self) -> bool:
+        """The agent is mid-turn, OR a detached script is still going.
+
+        The wider question, and the one that matters for the chat LIST: a detached
+        run delivers its result into THIS thread when it finishes, so starting or
+        switching chats meanwhile drops it into whatever conversation is open. It is
+        also what keeps Stop live once the agent has gone idle.
+        """
+        if self._agent_is_busy():
+            return True
+        try:
+            return bool(detached.active())
+        except Exception:
+            return False
 
     def set_status(self, text: str):
+        # Remembered, because a detached script keeps running after the agent goes
+        # idle: the status line has to say BOTH things, and only this knows the first.
+        self._base_status = text
+        self._render_status()
+
+    def _render_status(self):
+        """Compose the agent's own state with anything still running in the background.
+
+        Without this the window looks completely idle the moment a run detaches — the
+        agent says "Ready", and a script that will take another twenty minutes is
+        invisible. The amber wins over the green on purpose: something IS running, and
+        that is the more important of the two facts.
+        """
+        text = getattr(self, "_base_status", "Ready")
         colors = {"Ready": "green", "Thinking...": "blue", "Stopping...": "#e74c3c"}
         color  = colors.get(text, "black")
-        self.status_label.setText("Agent is ready to help" if text == "Ready" else text)
+        label  = "Agent is ready to help" if text == "Ready" else text
+
+        runs = []
+        try:
+            runs = detached.active()
+        except Exception:
+            pass
+        if runs:
+            name = runs[0]["label"]
+            if len(name) > 24:                 # bounded, so the line cannot widen the window
+                name = name[:23] + "…"
+            label += f"  ·  Process: {name}"
+            if len(runs) > 1:
+                label += f" +{len(runs) - 1}"
+            color = "#b26a00"
+
+        self.status_label.setText(label)
         self.status_label.setStyleSheet(f"color: {color}; font-weight: bold;")
+        self._sync_controls()
+
+    def _sync_controls(self):
+        """Put every control that depends on "is something running" into one place.
+
+        `set_ui_busy` only knows about the AGENT, and a detached script outlives it:
+        the turn ends, `set_ui_busy(False)` re-enables everything, and a run with
+        twenty minutes left is left with a greyed Stop and an unlocked chat list.
+        Driving both from `_anything_running()` — which now counts detached runs — keeps
+        them right, and the 1 s ticker calls this so the state also follows a run that
+        STARTS or FINISHES while the agent is idle, which no event would otherwise
+        report.
+        """
+        running = self._anything_running()
+
+        self.stop_button.setEnabled(running)
+        self.stop_button.setStyleSheet(
+            "background-color: #e74c3c; color: white; font-weight: bold; padding: 8px;"
+            if running else
+            "background-color: #bdc3c7; color: #7f8c8d; font-weight: bold; padding: 8px;"
+        )
+        # Switching or starting a chat while a detached run is in flight would deliver
+        # its result into the wrong conversation.
+        self.history_panel.setEnabled(not running)
 
     def set_ui_busy(self, busy: bool):
+        self._busy = busy
         self.stop_button.setEnabled(busy)
-        self.send_button.setDisabled(busy)
-        self.input_line.setDisabled(busy)
-        self.history_panel.setEnabled(not busy)
+        # Input stays live while the agent works: on_send routes what is typed to
+        # the interjection queue instead of starting a second run. The history
+        # panel stays disabled — switching chats mid-run is still unsafe.
+        self.send_button.setEnabled(True)
+        self.input_line.setEnabled(True)
+        self.send_button.setText("Send note" if busy else "Send")
+        # History panel and Stop are both set by _sync_controls() at the end of this
+        # method, because a detached run keeps them locked after the agent goes idle.
 
         if busy:
             self.stop_button.setStyleSheet(
                 "background-color: #e74c3c; color: white; font-weight: bold; padding: 8px;"
             )
             self.send_button.setStyleSheet(
-                "background-color: #bdc3c7; color: #7f8c8d; font-weight: bold; padding: 8px;"
+                "background-color: #8e7cc3; color: white; font-weight: bold; padding: 8px; border:none;"
+            )
+            self.input_line.setPlaceholderText(
+                "Send a note to the agent — it reads this at its next step…"
             )
         else:
+            self.input_line.setPlaceholderText("")
             self.stop_button.setStyleSheet(
                 "background-color: #bdc3c7; color: #7f8c8d; font-weight: bold; padding: 8px;"
             )
             self.send_button.setStyleSheet(
                 "background-color: #3498db; color: white; font-weight: bold; padding: 8px; border:none;"
             )
+        # Last word on Stop: the branches above only know about the agent, and a
+        # detached script outlives it.
+        self._sync_controls()
 
     # ------------------------------------------------------------------
     # Agent options
@@ -1278,6 +1276,52 @@ class ImageJAgentGUI(QWidget):
         self.chat_scroll.add_message('system', message)
         self.set_status("Watchdog intervened")
 
+    def on_note_delivered(self, message: str):
+        self.chat_scroll.add_message('system', message)
+        self.set_status_busy_with_notes()      # the queue just shrank; recount
+
+    def on_detached_started(self, label: str):
+        """A run outlasted the wait and was handed back — say so in the transcript."""
+        self.chat_scroll.add_message(
+            'system',
+            f"Process “{label}” moved to the background — keep chatting, the result "
+            f"comes back here. Stop still ends it."
+        )
+        self._render_status()
+
+    def on_detached_done(self, label: str, result: str):
+        """A long script the agent did not wait for has finished."""
+        self.chat_scroll.add_message(
+            'system', f"Process “{label}” finished."
+        )
+        self._render_status()          # drop it from the status line immediately
+        # Submitted as an ordinary prompt, so it is picked up by the same worker loop
+        # and runs as one more serialised turn. If the agent is mid-turn right now it
+        # simply queues behind it; two graph runs never overlap on one thread.
+        self.worker.submit(result)
+
+    def on_turn_started(self, prompt: str):
+        """A turn began that the GUI did not start itself.
+
+        `_execute_agent_query` marks the UI busy when the USER sends something, but it
+        is not the only way a turn begins: a detached script's result and re-queued
+        notes are both put straight on the worker's queue. Those turns used to run
+        with the window still looking idle — blue "Send" instead of purple "Send note",
+        the input in normal mode, and the history panel unlocked mid-run, which is the
+        one thing it is disabled to prevent.
+
+        Guarded on `_busy`, so the ordinary send path — which has already marked itself
+        busy by the time this arrives — does not start a second tracker query.
+        """
+        if getattr(self, "_busy", False):
+            return
+        try:
+            self._tracker_cb.start_query(prompt, thread_id=self.current_thread_id)
+        except Exception:
+            log.exception("start_query failed for a queued turn")
+        self.set_status("Thinking...")
+        self.set_ui_busy(True)
+
     def on_agent_finished(self):
         log.debug("on_agent_finished called")
         try:
@@ -1315,6 +1359,53 @@ class ImageJAgentGUI(QWidget):
         self.set_ui_busy(True)
         self.worker.submit(prompt)
 
+    def _post_note(self, text: str):
+        """Queue a mid-run note and reflect it in the chat immediately."""
+        if self.attached_files:
+            self.set_status_busy_with_notes()
+            self.chat_scroll.add_message(
+                "system",
+                "Attachments cannot be added to a running task — send the note on "
+                "its own, or wait for the agent to finish."
+            )
+            return
+
+        depth = interject.post(self.current_thread_id, text)
+        if depth == 0:
+            self.chat_scroll.add_message(
+                "system",
+                f"Note not queued: the limit of {interject.MAX_PENDING} pending "
+                "notes was reached. Wait for the agent to read the ones already "
+                "queued."
+            )
+            return
+
+        self.chat_scroll.add_message("user", text)
+        self.chat_scroll.add_message(
+            "system",
+            "Queued — the agent will read this at its next step. A long-running "
+            "script has to finish first."
+        )
+        self.input_line.clear()
+        self.history_manager.touch_thread(self.current_thread_id)
+        self.set_status_busy_with_notes()
+
+    def set_status_busy_with_notes(self):
+        """Status line that also says how many notes are waiting to be read."""
+        n = interject.pending(self.current_thread_id)
+        if n:
+            self.set_status(f"Thinking... · {n} note{'s' if n > 1 else ''} queued")
+        else:
+            self.set_status("Thinking...")
+
+    def on_notes_requeued(self, count: int):
+        self.chat_scroll.add_message(
+            "system",
+            f"The agent finished before reading {count} note"
+            f"{'s' if count > 1 else ''} — sending {'them' if count > 1 else 'it'} "
+            "as a new message."
+        )
+
     # ------------------------------------------------------------------
     # Send
     # ------------------------------------------------------------------
@@ -1322,6 +1413,13 @@ class ImageJAgentGUI(QWidget):
     def on_send(self):
         user_input = self.input_line.toPlainText().strip()
         if not user_input and not self.attached_files:
+            return
+
+        # Agent already running: this is a note, not a new task. It is parked and
+        # delivered at the agent's next model turn (see imagentj.interject), so
+        # the run is never interrupted and nothing is thrown away.
+        if self._agent_is_busy():
+            self._post_note(user_input)
             return
 
         full_prompt = user_input

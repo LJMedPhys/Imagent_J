@@ -3,14 +3,15 @@ import logging
 import os
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Annotated, Any, Callable, Optional
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ToolCallRequest, AgentState
-from langchain_core.messages import ToolMessage, SystemMessage, AIMessage
+from langchain_core.messages import ToolMessage, SystemMessage, AIMessage, HumanMessage
 from langgraph.types import Command
 from langchain.agents.middleware import TodoListMiddleware
 
+from .. import interject
 from ..safety_filter import (
     filter_injected_blocks,
     find_sensitive_terms,
@@ -334,11 +335,29 @@ class VisionOptionMiddleware(AgentMiddleware):
 
 # ── Multi-mode routing ──────────────────────────────────────────────────────
 
+def _take_last(old, new):
+    """Reducer: last write wins, and an empty update never clears what is set.
+
+    Without a reducer these are LastValue channels, which refuse two writes in ONE
+    superstep — `InvalidUpdateError: At key "mode": Can receive only one value per
+    step`. That is reachable in normal use: `set_mode` returns a Command updating the
+    key, and if the model emits two `set_mode` calls in a single assistant message
+    (or a turn is stopped mid-flight and the replayed tool calls run alongside the
+    retry) ToolNode executes them in parallel and both write. The run then dies on a
+    mode switch — a bookkeeping detail — rather than on anything to do with the task.
+
+    Order between parallel writes is not guaranteed, so "last" is arbitrary among
+    them. That is fine here: any of the requested modes is a valid state, whereas
+    crashing is not.
+    """
+    return old if new is None else new
+
+
 class AgentModeState(AgentState):
     """State fields for multi-mode operation, persisted per-chat (thread)."""
-    mode: NotRequired[str]                 # "advanced" | "quick" | "education"
-    course_plan: NotRequired[list]         # education: ordered chapter-id playlist
-    course_progress: NotRequired[dict]     # education: {current, completed, notes}
+    mode: NotRequired[Annotated[str, _take_last]]           # advanced | quick | education
+    course_plan: NotRequired[Annotated[list, _take_last]]   # ordered chapter-id playlist
+    course_progress: NotRequired[Annotated[dict, _take_last]]  # {current, completed, notes}
 
 
 @dataclass
@@ -689,3 +708,42 @@ class TodoDisplayMiddleware(TodoListMiddleware):
             )
             output["content"] += "\n\n" + formatted
         return output
+
+
+class InterjectMiddleware(AgentMiddleware):
+    """Deliver notes the user typed WHILE the agent was running.
+
+    The GUI parks them in :mod:`imagentj.interject`; this drains them at the next
+    model turn and returns them as a state update, so LangGraph merges and
+    checkpoints them. That matters: the note becomes a real message in the
+    thread's history rather than a decoration on one model call, so it is visible
+    to every later turn, to context editing, and to the transcript on reload.
+
+    Returning ``{"messages": [...]}`` from ``before_model`` is the same mechanism
+    PhaseGuardMiddleware already uses for its reminder.
+
+    Notes are delivered as HumanMessage, not SystemMessage: they ARE the user
+    speaking, and dressing them as system text would let the model treat them as
+    infrastructure noise it can skip.
+    """
+
+    def before_model(self, state, runtime=None):
+        notes = interject.drain(interject.active_thread())
+        if not notes:
+            return None
+        _log.info("delivering %d queued user note(s) to the agent", len(notes))
+        interject._notify(
+            f"Your note{'s' if len(notes) > 1 else ''} reached the agent just now — "
+            f"it will take {'them' if len(notes) > 1 else 'it'} into account before "
+            f"the next step."
+        )
+        return {
+            "messages": [
+                HumanMessage(content=(
+                    "[NOTE FROM THE USER, sent while you were working — read it "
+                    "before your next action and adjust if it changes the plan]\n"
+                    + note
+                ))
+                for note in notes
+            ]
+        }

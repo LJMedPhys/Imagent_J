@@ -1,23 +1,25 @@
 # BoneJ — Script API
 
-This file separates BoneJ's scripting surface into:
-
-- container-validated `CommandService` calls
-- standard Fiji helpers needed to prepare binary inputs
-- runtime caveats where the local Fiji path differs from the official BoneJ page
+Ground truth for this file: the BoneJ jars installed in the container Fiji
+(`bonej-plugins-7.2.2`, image `agenticj:gpu-local`), introspected through
+`CommandService.getCommands()` and run live through the agent's
+`ij.py.run_script("Groovy", ...)` path on a calibrated synthetic 3D lattice.
+Older Fiji volumes may still hold BoneJ 7.2.0; differences are marked **7.2.0**.
 
 ## General Rules
 
-1. The modern BoneJ commands documented here are SciJava commands. Use `command.run(...)`, not a guessed `IJ.run(...)` string.
-2. `ThicknessWrapper`, `SkeletoniseWrapper`, and `AnalyseSkeletonWrapper` take `ij.ImagePlus`.
-3. `ElementFractionWrapper`, `ConnectivityWrapper`, `SurfaceFractionWrapper`, `FractalDimensionWrapper`, and `AnisotropyWrapper` take `net.imagej.ImgPlus`. Convert with `convertService.convert(binaryImp, ImgPlus.class)`.
-4. BoneJ measurement wrappers append columns to a shared BoneJ results table. Clear it before starting a new measurement chain with `SharedTableCleaner`.
-5. The validated workflow in this skill assumes binary voxels follow ImageJ's 8-bit convention: foreground `255`, background `0`.
-6. In this Fiji runtime, the documented `SurfaceAreaWrapper` canceled on 8-bit binary `ImgPlus` inputs. The validated scripting path for surface area converts the binary image to `BitType` and calls BoneJ's underlying marching-cubes and boundary-size ops directly.
+1. BoneJ's modern commands are SciJava commands. Call them with `command.run(Class, true, ...).get()`, never with a guessed `IJ.run(...)` string.
+2. **Every wrapper's image input is named `inputDataset` and has type `net.imagej.Dataset`.** There is no `inputImage` parameter. Passing `"inputImage"` fails with `IllegalArgumentException: No such input: inputImage`.
+3. Convert an `ImagePlus` with `convertService.convert(imp, Dataset.class)`, then run `fixBoneJUnits(ds)` (below). Image outputs (thickness maps, skeletons, purified stacks) also come back as `Dataset`. Convert them back with `convertService.convert(outDs, ImagePlus.class)` before `IJ.saveAsTiff`.
+4. **A `µm` calibration breaks Thickness and Anisotropy.** ImageJ stores the unit `um` as `µm`. BoneJ's unit parser rejects the `µ` character, so the command throws `RuntimeException: Error executing method: ...#validateImage` (the log shows `Cannot parse unit: µm`). Replace `µ`/`μ` with `u` on the Dataset axes before running any BoneJ command. The voxel size is unchanged.
+5. Connectivity is **not** a wrapper class. Use `org.bonej.plugins.Connectivity`. `org.bonej.wrapperPlugins.ConnectivityWrapper` does not exist, and importing it is a Groovy compile error.
+6. Measurement commands append columns to one shared BoneJ results table. Run `SharedTableCleaner` before each new image. The returned `resultsTable` is the whole shared table, not just the new columns.
+7. Always check `module.isCanceled()` and `module.getCancelReason()` after `.get()`. A BoneJ command that rejects its input usually cancels instead of throwing, and then every output is `null`. Reasons seen: `Need a 3D (X, Y, Z) image`, `Need a binary image`. In the interactive GUI each cancel also opens an "ImageJ2" message dialog on the user's screen (non-blocking for the script), so validate dimensions and binariness *before* calling BoneJ.
+8. Never leave a `File` input unset. `SurfaceAreaWrapper` opens a modal **"Choose a directory"** dialog for `stlDirectory` even when `exportSTL=false`, then cancels with an empty reason. Always pass `"stlDirectory", someDir`.
+9. Binary convention: 8-bit, foreground `255`, background `0`. BoneJ cancels on non-binary input.
+10. Groovy literals: pass `2.0d` and `1.2d` for `Double`/`double` parameters and `48L` for `long` parameters (a bare `2.0` is a `BigDecimal`).
 
 ## Standard Setup
-
-Inject these services at the top of a Groovy script:
 
 ```groovy
 #@ CommandService command
@@ -25,337 +27,256 @@ Inject these services at the top of a Groovy script:
 
 import ij.IJ
 import ij.ImagePlus
-import net.imagej.ImgPlus
+import net.imagej.Dataset
+import net.imagej.axis.CalibratedAxis
+import org.bonej.plugins.Connectivity
+import org.bonej.plugins.Purify
 import org.bonej.wrapperPlugins.AnalyseSkeletonWrapper
 import org.bonej.wrapperPlugins.AnisotropyWrapper
-import org.bonej.wrapperPlugins.ConnectivityWrapper
 import org.bonej.wrapperPlugins.ElementFractionWrapper
 import org.bonej.wrapperPlugins.FractalDimensionWrapper
 import org.bonej.wrapperPlugins.SkeletoniseWrapper
+import org.bonej.wrapperPlugins.SurfaceAreaWrapper
 import org.bonej.wrapperPlugins.SurfaceFractionWrapper
 import org.bonej.wrapperPlugins.ThicknessWrapper
 import org.bonej.wrapperPlugins.tableTools.SharedTableCleaner
-```
 
-Convert an `ImagePlus` when a BoneJ wrapper expects `ImgPlus`:
+// ImagePlus -> Dataset that BoneJ accepts (rule 3 + rule 4)
+Dataset toBoneJDataset(ImagePlus imp) {
+    Dataset ds = convertService.convert(imp, Dataset.class)
+    if (ds == null) throw new IllegalStateException("Could not convert ImagePlus to Dataset")
+    for (int d = 0; d < ds.numDimensions(); d++) {
+        def axis = (CalibratedAxis) ds.axis(d)
+        def unit = axis.unit()
+        if (unit != null) axis.setUnit(unit.replace('µ', 'u').replace('μ', 'u'))
+    }
+    return ds
+}
 
-```groovy
-ImgPlus binaryImgPlus = convertService.convert(binaryImp, ImgPlus.class)
-if (binaryImgPlus == null) {
-    throw new IllegalStateException("Could not convert ImagePlus to ImgPlus for BoneJ")
+// Fail loudly instead of silently getting null outputs (rule 7)
+def runBoneJ(Class cls, String label, Object... args) {
+    def module = command.run(cls, true, args).get()
+    if (module.isCanceled()) {
+        throw new IllegalStateException(label + " canceled: " + module.getCancelReason())
+    }
+    return module
 }
 ```
 
-## Container-Validated Automation
+Because `toBoneJDataset` and `runBoneJ` call the injected services, they must be
+script-level methods in the same script (Groovy script methods can see `#@`
+fields). The checked-in workflows define them exactly like this.
+
+Read a table into plain values:
+
+```groovy
+def t = module.getOutput("resultsTable")          // org.scijava.table.Table
+for (int c = 0; c < t.getColumnCount(); c++) {
+    println t.getColumnHeader(c) + " = " + t.get(c, 0)
+}
+```
+
+## Commands
+
+All of these were run in the container on a calibrated 96×96×64 binary lattice
+(0.5 µm voxels) and returned results without dialogs. The numbers in the examples come
+from that run.
 
 ### 1. Clear the shared BoneJ table
 
-Use this before a new measurement chain:
+Menu: `Plugins > BoneJ > Table > Clear BoneJ results`
 
 ```groovy
 command.run(SharedTableCleaner, true).get()
 ```
 
-If you do not clear it, later BoneJ measurements may append columns onto the same row from previous BoneJ commands.
-
 ### 2. Thickness
 
-Official menu path: `Plugins > BoneJ > Thickness`
-
-Suitable input from the official docs: 3D, 8-bit, binary, no hyperstack.
+Menu: `Plugins > BoneJ > Thickness`. Input: 3D, 8-bit binary, no hyperstack.
 
 ```groovy
-def thicknessModule = command.run(ThicknessWrapper, true,
-    "inputImage",    binaryImp,
-    "mapChoice",     "Both",
-    "showMaps",      true,
+Dataset ds = toBoneJDataset(binaryImp)
+def thickness = runBoneJ(ThicknessWrapper, "Thickness",
+    "inputDataset",  ds,
+    "mapChoice",     "Both",        // "Trabecular thickness" | "Trabecular separation" | "Both"
+    "showMaps",      true,          // false -> map outputs are null
     "maskArtefacts", true
-).get()
-
-def thicknessTable = thicknessModule.getOutput("resultsTable")
-ImagePlus trabecularMap = thicknessModule.getOutput("trabecularMap")
-ImagePlus separationMap = thicknessModule.getOutput("separationMap")
+)
+ImagePlus tbThMap = convertService.convert(thickness.getOutput("trabecularMap"), ImagePlus.class)
+ImagePlus tbSpMap = convertService.convert(thickness.getOutput("separationMap"), ImagePlus.class)
 ```
 
-Validated parameter values:
-
-| Parameter | Accepted values in this repo pass |
-|-----------|-----------------------------------|
-| `mapChoice` | `Trabecular thickness`, `Trabecular separation`, `Both` |
-| `showMaps` | `true` or `false` |
-| `maskArtefacts` | `true` or `false` |
-
-Validated outputs:
-
-- `resultsTable` with `Tb.Th` and/or `Tb.Sp` summary columns
-- `trabecularMap` when thickness was requested and `showMaps=true`
-- `separationMap` when separation was requested and `showMaps=true`
-
-Saved thickness maps remained 32-bit float TIFFs in the container validation run. Background pixels can come back as `NaN` when the saved TIFF is read outside Fiji.
+- Table columns: `Tb.Th Mean (µm)`, `Tb.Th Std Dev (µm)`, `Tb.Th Max (µm)` and the matching `Tb.Sp ...` columns. Thickness labels its headers from the ImagePlus calibration, so they show `µm`, while Dataset-based commands show `um` (`BV (um³)`). Uncalibrated images report `pixel`. Match columns by prefix, not by the full header string.
+- The maps are 32-bit, keep the calibration, and are titled `<name>_Tb.Th` / `<name>_Tb.Sp`. Background is `NaN` when `maskArtefacts=true`.
+- Mean/max are **diameters** (local thickness), not radii.
 
 ### 3. Area/Volume fraction
 
-Official menu path: `Plugins > BoneJ > Fraction > Area/Volume fraction`
-
-Suitable input from the official docs: 2D or 3D 8-bit binary image.
+Menu: `Plugins > BoneJ > Fraction > Area/Volume fraction`. Input: 2D or 3D binary. Voxel counting.
 
 ```groovy
-ImgPlus binaryImgPlus = convertService.convert(binaryImp, ImgPlus.class)
-
-def fractionModule = command.run(ElementFractionWrapper, true,
-    "inputImage", binaryImgPlus
-).get()
-
-def sharedTable = fractionModule.getOutput("resultsTable")
+def fraction = runBoneJ(ElementFractionWrapper, "Area/Volume fraction", "inputDataset", ds)
 ```
 
-Validated outputs appended to the shared BoneJ table:
+Columns: `BV (um³)`, `TV (um³)`, `BV/TV` (3D) or `BA`, `TA`, `BA/TA` (2D). TV is the whole image volume.
 
-- `BV` or `BA`
-- `TV` or `TA`
-- `BV/TV` or `BA/TA`
+### 4. Connectivity
 
-When this command is run after `ThicknessWrapper` without clearing the BoneJ table, the returned table contains both the thickness columns and the fraction columns in a single row.
-
-### 4. Connectivity (Modern)
-
-Official menu path: `Plugins > BoneJ > Connectivity > Connectivity (Modern)`
-
-Suitable input from the official docs: 3D binary image. BoneJ recommends a single foreground particle; use `Purify` first when you need that assumption.
+Menu: `Plugins > BoneJ > Connectivity`. Class: **`org.bonej.plugins.Connectivity`**. Input: 3D binary.
 
 ```groovy
-ImgPlus binaryImgPlus = convertService.convert(binaryImp, ImgPlus.class)
-
-def connectivityModule = command.run(ConnectivityWrapper, true,
-    "inputImage", binaryImgPlus
-).get()
-
-def sharedTable = connectivityModule.getOutput("resultsTable")
+def connectivity = runBoneJ(Connectivity, "Connectivity", "inputDataset", ds)
 ```
 
-Validated outputs appended to the shared BoneJ table:
+Columns: `Euler ch.`, `Δ(χ)`, `Connectivity`, `Conn.D (um^-3)`.
 
-- `Euler char. (χ)`
-- `Corr. Euler (χ + Δχ)`
-- `Connectivity`
-- `Conn.D`
+- BoneJ assumes a **single** foreground particle. Run Purify first when the stack contains more than one.
+- The shared table keys rows **by image name**. Purify's output is named `<name>_purified`, so Connectivity on it adds a *second row* rather than extending the first.
+- **7.2.2** also accepts `"inputImagePlus", imp` in place of `inputDataset`. **7.2.0** accepts only `inputDataset`, so use `inputDataset` everywhere.
 
-### 5. Surface fraction
+### 5. Purify
 
-Official menu path: `Plugins > BoneJ > Fraction > Surface fraction`
-
-Suitable input from the official docs: 3D binary image.
+Menu: `Plugins > BoneJ > Purify`. Keeps the largest foreground particle and fills background cavities.
 
 ```groovy
-ImgPlus binaryImgPlus = convertService.convert(binaryImp, ImgPlus.class)
-
-def surfaceFractionModule = command.run(SurfaceFractionWrapper, true,
-    "inputImage", binaryImgPlus
-).get()
-
-def surfaceFractionTable = surfaceFractionModule.getOutput("resultsTable")
+def purify = runBoneJ(Purify, "Purify", "inputDataset", ds, "showPerformance", false, "makeCopy", true)
+Dataset purified = purify.getOutput("outputDataset")   // named "<name>_purified"; resultsTable stays null
 ```
 
-Validated outputs:
+### 6. Surface fraction
 
-- `BV`
-- `TV`
-- `BV/TV`
-
-This wrapper executed successfully on a volumetric synthetic sphere stack in the container.
-
-### 6. Fractal dimension
-
-Official menu path: `Plugins > BoneJ > Fractal dimension`
-
-Suitable input from the official docs: 2D or 3D binary image.
+Menu: `Plugins > BoneJ > Fraction > Surface fraction`. Input: 3D binary. Uses mesh volumes, so values differ from Area/Volume fraction. The lattice gave BV/TV 0.097 here versus 0.138 from voxel counting.
 
 ```groovy
-ImgPlus binaryImgPlus = convertService.convert(binaryImp, ImgPlus.class)
+def surfaceFraction = runBoneJ(SurfaceFractionWrapper, "Surface fraction", "inputDataset", ds)
+```
 
-def fractalModule = command.run(FractalDimensionWrapper, true,
-    "inputImage",      binaryImgPlus,
-    "autoParam",       true,
+Columns: `BV (um³)`, `TV (um³)`, `BV/TV`.
+
+### 7. Surface area
+
+Menu: `Plugins > BoneJ > Surface area`. Input: 3D binary.
+
+```groovy
+def surfaceArea = runBoneJ(SurfaceAreaWrapper, "Surface area",
+    "inputDataset", ds,
+    "exportSTL",    false,
+    "stlDirectory", outputDir          // REQUIRED even when exportSTL=false (rule 8)
+)
+```
+
+Column: `Surface area (um²)`.
+
+STL export (`exportSTL=true`) has a path bug. BoneJ joins `stlDirectory` and the file name **without a separator**, so `stlDirectory=/out/meshes` writes `/out/meshesmyImage_.stl` *next to* the folder. Treat the parameter as a path prefix:
+
+```groovy
+"exportSTL", true,
+"stlDirectory", new File(outputDir, "mesh_")   // -> <outputDir>/mesh_<imageName>_.stl
+```
+
+### 8. Fractal dimension
+
+Menu: `Plugins > BoneJ > Fractal dimension`. Input: 2D or 3D binary.
+
+```groovy
+def fractal = runBoneJ(FractalDimensionWrapper, "Fractal dimension",
+    "inputDataset",    ds,
+    "autoParam",       true,     // true: BoneJ picks box sizes from the image size
     "showPoints",      false,
     "translations",    0L,
     "startBoxSize",    48L,
     "smallestBoxSize", 6L,
     "scaleFactor",     1.2d
-).get()
-
-def fractalTable = fractalModule.getOutput("resultsTable")
+)
 ```
 
-Validated outputs:
+Columns: `Fractal dimension`, `R²`.
 
-- `Fractal dimension`
-- `R²`
+### 9. Anisotropy
 
-Validated note:
-
-- `autoParam=true` worked on the volumetric synthetic sphere used in the local container pass.
-
-### 7. Anisotropy
-
-Official menu path: `Plugins > BoneJ > Anisotropy`
-
-Suitable input from the official docs: 3D binary image.
+Menu: `Plugins > BoneJ > Anisotropy`. Input: 3D binary. Requires the unit fix (rule 4).
 
 ```groovy
-ImgPlus binaryImgPlus = convertService.convert(binaryImp, ImgPlus.class)
-
-def anisotropyModule = command.run(AnisotropyWrapper, true,
-    "inputImage",             binaryImgPlus,
-    "directions",             200,
-    "lines",                  400,
-    "samplingIncrement",      2.0d,
-    "recommendedMin",         false,
+def anisotropy = runBoneJ(AnisotropyWrapper, "Anisotropy",
+    "inputDataset",           ds,
+    "directions",             2000,    // Integer, min 9  (UI default 2000)
+    "lines",                  10000,   // Integer, min 1  (UI default 10000)
+    "samplingIncrement",      2.0d,    // Double; no default, must be passed
+    "recommendedMin",         false,   // true overrides directions/lines with BoneJ's minimums
     "printRadii",             true,
     "printEigens",            false,
     "displayMILVectors",      false,
     "printMILVectorsToTable", false
-).get()
-
-def anisotropyTable = anisotropyModule.getOutput("resultsTable")
+)
 ```
 
-Validated outputs from the local successful run:
+Columns: `DA`, plus `Radius a/b/c` when `printRadii`. DA is 0 for isotropic structure and 1 for fully anisotropic structure.
 
-- `DA`
-- `Radius a`
-- `Radius b`
-- `Radius c`
+- On a 96×96×64 stack the defaults (2000 / 10000) took about 10 s. `directions=200, lines=400` runs in about a second and is enough for a smoke test. Use the defaults or `recommendedMin=true` for reported numbers.
+- Ellipsoid fitting fails on degenerate volumes, such as a 2D slice copied into a stack. The command then cancels with `Anisotropy could not be calculated - ellipsoid fitting failed`.
 
-Runtime caveat:
+### 10. Skeletonise
 
-- This wrapper is sensitive to sample geometry. It canceled on a duplicated single-slice validation stack with `Anisotropy could not be calculated - ellipsoid fitting failed`.
-- It succeeded on a genuine 3D directional rod lattice.
-
-### 8. Surface area through the validated lower-level path
-
-Official menu path: `Plugins > BoneJ > Surface area`
-
-Official docs describe the wrapper input as a 3D binary image. In this repo's container, the documented `SurfaceAreaWrapper` canceled without a result table. The underlying BoneJ/ImageJ ops did work after converting the binary `ImgPlus` to `BitType`.
-
-Add these imports when using the lower-level path:
+Menu: `Plugins > BoneJ > Skeletonise`. Input: 2D or 3D, 8-bit binary.
 
 ```groovy
-#@ OpService opService
-
-import net.imagej.mesh.Mesh
-import net.imagej.mesh.naive.NaiveFloatMesh
-import net.imagej.ops.Ops.Geometric.BoundarySize
-import net.imagej.ops.Ops.Geometric.MarchingCubes
-import net.imagej.ops.special.function.Functions
-import net.imglib2.type.numeric.real.DoubleType
+def skel = runBoneJ(SkeletoniseWrapper, "Skeletonise", "inputDataset", ds)
+ImagePlus skeleton = convertService.convert(skel.getOutput("skeletonDataset"), ImagePlus.class)
 ```
 
-Validated surface-area path:
+The output is an 8-bit 0/255 skeleton titled `skeleton_<name>`. `resultsTable` is `null`. Check it with `new ij.process.StackStatistics(skeleton)`, because `getStatistics()` reads the current slice only.
+
+### 11. Analyse Skeleton
+
+Menu: `Plugins > BoneJ > Analyse Skeleton`. Input: a binary image. A non-skeleton input is skeletonised internally.
 
 ```groovy
-ImgPlus binaryImgPlus = convertService.convert(binaryImp, ImgPlus.class)
-def bitImg = opService.convert().bit(binaryImgPlus)
-ImgPlus bitImgPlus = new ImgPlus(bitImg, binaryImgPlus)
-
-def marchingCubesOp = Functions.unary(opService, MarchingCubes.class, Mesh.class, bitImgPlus)
-Mesh mesh = marchingCubesOp.calculate(bitImgPlus)
-
-def areaOp = Functions.unary(opService, BoundarySize.class, DoubleType.class, new NaiveFloatMesh())
-double surfaceArea = areaOp.calculate(mesh).get()
+def analysed = runBoneJ(AnalyseSkeletonWrapper, "Analyse Skeleton",
+    "inputDataset",           ds,
+    "pruneCycleMethod",       "None",  // "None" | "Shortest branch" | "Lowest intensity voxel" | "Lowest intensity branch"
+    "pruneEnds",              false,
+    "calculateShortestPaths", false,
+    "verbose",                false,   // true -> verboseTable (per-branch)
+    "displaySkeletons",       false
+)
+def skeletonTable = analysed.getOutput("resultsTable")   // ONE ROW PER SKELETON (connected component)
 ```
 
-Validated output:
+Columns: `# Skeleton`, `# Branches`, `# Junctions`, `# End-point voxels`, `# Junction voxels`, `# Slab voxels`, `Average Branch Length`, `# Triple points`, `# Quadruple points`, `Maximum Branch Length`.
 
-- scalar surface area value from the mesh boundary-size op
+Image outputs when `displaySkeletons=true`: **7.2.2** returns `taggedImage` and `treeLabeledImage`. **7.2.0** returns `labelledSkeleton`. `shortestPaths` appears when `calculateShortestPaths=true`, and `verboseTable` (one row per branch) appears when `verbose=true`.
 
-Runtime divergence from official docs:
-
-- The BoneJ page documents `Surface area` as a standard 3D binary-image tool.
-- In the local Fiji runtime the wrapper itself canceled on an 8-bit binary `ImgPlus`.
-- The lower-level marching-cubes path succeeded once the input was converted to `BitType`.
-
-### 9. Skeletonise
-
-Official menu path: `Plugins > BoneJ > Skeletonise`
-
-Suitable input from the official docs: 2D or 3D, 8-bit, binary, no hyperstack.
-
-```groovy
-def skeletoniseModule = command.run(SkeletoniseWrapper, true,
-    "inputImage", binaryImp
-).get()
-
-ImagePlus skeleton = skeletoniseModule.getOutput("skeleton")
-```
-
-Validated output:
-
-- `skeleton` as an 8-bit ImagePlus
-
-The `resultsTable` output stayed `null` in the container validation run, so consume the skeleton image rather than relying on table output from this wrapper.
-
-### 10. Analyse Skeleton
-
-Official menu path: `Plugins > BoneJ > Analyse Skeleton`
-
-Suitable input from the official docs: 2D or 3D, 8-bit, binary, no hyperstack.
-
-```groovy
-def analyseModule = command.run(AnalyseSkeletonWrapper, true,
-    "inputImage",              binaryImp,
-    "pruneCycleMethod",        "None",
-    "pruneEnds",               false,
-    "calculateShortestPaths",  false,
-    "verbose",                 false,
-    "displaySkeletons",        false
-).get()
-
-def skeletonResults = analyseModule.getOutput("resultsTable")
-```
-
-Validated `pruneCycleMethod` choices:
-
-- `None`
-- `Shortest branch`
-- `Lowest intensity voxel`
-- `Lowest intensity branch`
-
-Validated outputs:
-
-- `resultsTable`
-- `labelledSkeleton` when skeleton display outputs are enabled
-- `shortestPaths` when shortest-path output is enabled
+- Pass the **binary mask**. Given a raw mask, Analyse Skeleton skeletonises it internally and leaves an ImageJ window titled `Skeleton of <name>` open. Close it with `WindowManager.getImage("Skeleton of " + imp.getTitle())?.with { changes = false; close() }`.
+- Feeding it the `SkeletoniseWrapper` output instead gave a different count on the test lattice: 32 skeletons instead of 16. Use one path consistently across a dataset.
 
 ## Standard Fiji Helpers Used Around BoneJ
 
-These are standard Fiji calls, not BoneJ wrappers.
-
-Convert a grayscale image to an 8-bit binary mask:
+Threshold a grayscale stack into an 8-bit 0/255 mask. `stack` in `setAutoThreshold` uses the histogram of the whole stack, not the current slice:
 
 ```groovy
-if (imp.getBitDepth() != 8) {
-    IJ.run(imp, "8-bit", "")
-}
-IJ.setAutoThreshold(imp, "Default dark")
-IJ.run(imp, "Convert to Mask", "method=Default background=Dark black stack")
+if (imp.getBitDepth() != 8) IJ.run(imp, "8-bit", "")
+IJ.setAutoThreshold(imp, "Default dark stack")
+IJ.run(imp, "Convert to Mask", "method=Default background=Dark black" + (imp.getNSlices() > 1 ? " stack" : ""))
 ```
 
-Duplicate a single 2D slice into a small stack when you only have a slice-level sample image and need to exercise a 3D BoneJ command:
+Check binariness across the whole stack:
 
 ```groovy
-import ij.ImageStack
-import ij.ImagePlus
-
-ImageStack stack = new ImageStack(imp.getWidth(), imp.getHeight())
-for (int i = 0; i < 6; i++) {
-    stack.addSlice(imp.getProcessor().duplicate())
+boolean isBinary8Bit(ImagePlus imp) {
+    if (imp.getBitDepth() != 8) return false
+    def h = new ij.process.StackStatistics(imp).histogram
+    return (1..254).every { h[it] == 0 }
 }
-ImagePlus stackedImp = new ImagePlus("stacked", stack)
-stackedImp.setCalibration(imp.getCalibration())
 ```
 
-## UI-Only Or Legacy Surface
+Thresholding is outside BoneJ's measurement model, and it moves the numbers a lot. On the noisy grayscale version of the test lattice, `Default` gave BV/TV 0.158 instead of 0.138 and Tb.Sp 3.3 µm instead of 8.0 µm, because noise specks became foreground. Inspect the mask, or clean it up (e.g. remove small particles), before trusting the metrics.
 
-### Legacy UI tools
+Check calibration before reporting real units. A TIFF that carries only the default
+72-dpi resolution tag opens with unit `inch`. BoneJ accepts that and reports in inches,
+which is plausible-looking but wrong for microscopy. Set the correct voxel size with
+`imp.getCalibration()` before converting.
 
-Legacy menu-driven tools such as `Slice Geometry` are intentionally left as UI-only in this skill. They are not presented here as validated Groovy API.
+## Not Covered As Script API
+
+- `Plugins > BoneJ > Slice Geometry`, `Moments of Inertia`, `Particle Analyser`, `Fit Sphere`, `Ellipsoid Factor`, `Inter-trabecular angles`: present in the jar (all take `inputDataset`) but not run in this skill's validation.
+- `Plugins > BoneJ > Plus > ...` (BoneJ+): needs a working OpenCL device. See `UI_GUIDE.md`.

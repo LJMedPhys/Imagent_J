@@ -71,7 +71,7 @@ The micro_sam panel appears on the right; its layers appear in the layer list.
 | Layer | Type | What it's for |
 |---|---|---|
 | `point_prompts` | Points | Your clicks. **Green = positive** (include this), **red = negative** (exclude this). |
-| `prompts` | Shapes | **Box prompts** — draw a rectangle around an object (ellipse/polygon also work). |
+| `prompts` | Shapes | **Box prompts** — draw a rectangle around an object (ellipse/polygon also work, but SAM only sees their bounding box). In the fine-tuning helper panel, ticking *My drawn shape IS the outline* makes S use the shape itself as the mask instead. |
 | `current_object` | Labels | The mask SAM just made from your prompts — your *work in progress*, one object. |
 | `auto_segmentation` | Labels | Result of the **Automatic Segmentation** button (whole image at once). |
 | `committed_objects` | Labels | **Finished** objects. This is the one you save to disk (0 = background, one integer per object). |

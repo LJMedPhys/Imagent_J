@@ -2125,6 +2125,57 @@ def execute_script(directory: str, filename: str) -> str:
     # watchdog needs it to tell "slow but on track" from "doing the wrong thing".
     purpose = _existing_description(directory, filename) or filename
 
+    # A script that declares `imagentj-detach: <reason>` is started and left to run: the
+    # supervisor gets a receipt now and the output arrives as a new turn later, so the
+    # agent can talk to the user during a long batch instead of being parked in this call.
+    #
+    # The gate is "do we own the process", not the language. Python always runs as a
+    # subprocess; a self-contained Groovy batch gets its own Fiji process and is equally
+    # safe. An IN-PROCESS Groovy run is not: it shares the app's JVM and its live windows,
+    # and cannot be reliably killed either — the same property decides both.
+    # Every run we OWN THE PROCESS FOR goes through the clock: waited on normally, and
+    # handed back only if it is still going after the deadline — at which point the
+    # agent is freed to talk to the user and the output arrives as a later turn. A
+    # quick script finishes inside the window and nothing about it changes.
+    #
+    # An IN-PROCESS Groovy run is excluded at any duration: it shares the app's JVM and
+    # its live windows, so the agent could act on ImageJ state a script is still
+    # mutating — and nothing owns it well enough to kill it either.
+    detach_ignored = None
+    try:
+        from ..detached import (wants_detach, never_detach, interactive_reason,
+                                run_or_detach)
+    except Exception:
+        wants_detach = never_detach = interactive_reason = run_or_detach = None
+    blocked = never_detach(code_content) if never_detach else None
+    if blocked:
+        log.info("not detachable (%s): %s", blocked, filename)
+    # A window session detaches AT ONCE: the user will be in there for minutes, and
+    # the whole point is that they can ask questions while they work.
+    session = interactive_reason(code_content) if interactive_reason else None
+    if run_or_detach is not None and not blocked:
+        header_reason = wants_detach(code_content)      # "detach immediately", if present
+        work = None
+        if filename.endswith('.py'):
+            work = lambda: _post_execution(                       # noqa: E731
+                run_python_code(code_content, directory, purpose=purpose),
+                directory, filename)
+        elif filename.endswith('.groovy') and _should_run_in_subprocess(code_content)[0]:
+            work = lambda: _post_execution(                       # noqa: E731
+                _run_groovy_subprocess(code_content, purpose), directory, filename)
+        elif header_reason:
+            # A header that cannot be honoured must say so in the RESULT, not just the
+            # log: a silently ignored header is how a template ends up claiming to
+            # detach for the rest of its life.
+            detach_ignored = ("this Groovy script needs the app's own Fiji (live "
+                              "windows), so it runs in-process and cannot be detached")
+            log.info("imagentj-detach ignored for %s: %s", filename, detach_ignored)
+        if work is not None:
+            return run_or_detach(label=purpose, work=work,
+                                 wait=0 if (header_reason or session) else None,
+                                 reason=header_reason or "",
+                                 interactive=session or "")
+
     # Route based on extension
     if filename.endswith('.py'):
         # Calls your existing run_python_code function
@@ -2136,6 +2187,22 @@ def execute_script(directory: str, filename: str) -> str:
     else:
         return f"Error: File extension of {filename} is not supported for execution."
 
+    if detach_ignored:
+        # Say it in the RESULT, not only the log: a header that quietly did nothing is
+        # how a template ends up claiming to detach for the rest of its life.
+        output = (f"NOTE: this script asks to run detached, but it ran normally — "
+                  f"{detach_ignored}.\n\n{output}")
+    return _post_execution(output, directory, filename)
+
+
+def _post_execution(output: str, directory: str, filename: str) -> str:
+    """Everything that happens to a result after the script ends.
+
+    Split out so a DETACHED run produces byte-identical output to a waited one — the
+    OOM annotation and the Librarian hand-off must not be privileges of the blocking
+    path, or the same script would teach the system different things depending on how
+    it was launched.
+    """
     # An out-of-memory death is not self-announcing. The JVM throws
     # OutOfMemoryError from its UncaughtExceptionHandler and the script simply
     # stops producing output — no traceback in the usual place, no non-zero exit

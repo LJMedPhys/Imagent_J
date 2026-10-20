@@ -105,11 +105,13 @@ The full user guide lives in [`user_guide/`](user_guide/):
 
 | Guide | Contents |
 |-------|----------|
-| [01 Getting Started](user_guide/01_getting_started.md) | Prerequisites, `.env` setup, API keys, starting the container |
-| [02 Interface & Agents](user_guide/02_interface_and_agents.md) | noVNC interface, agent architecture, supported plugins |
-| [03 Prompting](user_guide/03_prompting.md) | How to write effective prompts |
-| [04 Data, History & Reports](user_guide/04_data_history_and_reports.md) | File layout, chat history, issue reports |
-| [05 Security](user_guide/05_security.md) | Security model, network exposure, key handling |
+| [01 Getting started](user_guide/01_getting_started.md) | What you need, the `.env` file, starting Agentic-J, using a GPU |
+| [02 The interface](user_guide/02_interface_and_agents.md) | Chat window, modes, helpers, plugins, settings |
+| [03 Writing good requests](user_guide/03_prompting.md) | What to tell the assistant, examples, tips |
+| [04 Your files, chats and reports](user_guide/04_data_history_and_reports.md) | Where results are saved, chat history, cost and issue reports |
+| [05 Security and privacy](user_guide/05_security.md) | What is sent to the AI provider, the Vision Judge, network access |
+| [06 napari, segmentation and fine-tuning](user_guide/06_napari_and_fine_tuning.md) | napari, micro-sam, fine-tuning on your corrections, sorting objects |
+| [07 Learning mode](user_guide/07_learning_mode.md) | Learning bioimage analysis with the built-in course |
 
 ## Project layout
 
@@ -125,7 +127,7 @@ Running on the host is supported but not the recommended path. See [environment.
 
 ## Reporting issues
 
-Use the **Report Issue** button in the chat panel, or email `agentj.help@gmail.com`.
+Open an issue at <https://github.com/MMV-Lab/Agentic-J/issues/new>, or email `agentj.help@gmail.com`. The **Report Issue** button in the chat panel shows both.
 
 ## License
 
