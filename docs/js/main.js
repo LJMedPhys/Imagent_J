@@ -63,8 +63,17 @@ document.querySelectorAll('.video[data-youtube]').forEach((slot) => {
   f.loading = 'lazy';
   f.allow = 'accelerometer; encrypted-media; gyroscope; picture-in-picture; fullscreen';
   f.allowFullscreen = true;
+  f.referrerPolicy = 'strict-origin-when-cross-origin';
   slot.classList.remove('empty');
   slot.replaceChildren(f);
+  // Fallback link in case the embed is blocked (extensions, embedding disabled, ...)
+  const a = document.createElement('a');
+  a.className = 'yt-link';
+  a.href = `https://www.youtube.com/watch?v=${encodeURIComponent(id)}`;
+  a.target = '_blank';
+  a.rel = 'noopener';
+  a.textContent = 'Watch on YouTube ↗';
+  slot.closest('.window').after(a);
 });
 
 // 5) Demo tabs

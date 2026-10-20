@@ -20,7 +20,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Open+Sans:ital,wght@0,400..700;1,400..600&display=swap" rel="stylesheet">
 
-<link rel="stylesheet" href="css/styles.css?v=2026-10-20b" />
+<link rel="stylesheet" href="css/styles.css?v=2026-10-20d" />
 <script>document.documentElement.classList.remove('no-js');</script>
 </head>
 <body>
@@ -94,7 +94,7 @@
       <div class="stat"><div class="num">25</div><div class="lbl">Fiji plugin skill packs</div></div>
       <div class="stat"><div class="num">11</div><div class="lbl">Python &amp; napari skills</div></div>
       <div class="stat"><div class="num">7</div><div class="lbl">specialist agents</div></div>
-      <div class="stat"><div class="num">3</div><div class="lbl">modes: full analysis, quick edits, teaching</div></div>
+      <div class="stat"><div class="num">3</div><div class="lbl">modes: conventional, exploratory, education</div></div>
     </div>
 
     <div class="hero-visual reveal">
@@ -274,7 +274,7 @@
     <div class="section-head reveal">
       <span class="fig-tag">Install</span>
       <h2 class="section-title">Install <span class="outline">in four steps.</span></h2>
-      <p class="section-sub">You'll need Docker, about 8 GB of RAM, about 30 GB of free disk, and an OpenAI <em>or</em> OpenRouter API key.</p>
+      <p class="section-sub">You'll need Docker, at least 8 GB of RAM, 50 GB of free disk, and an OpenAI <em>or</em> OpenRouter API key.</p>
     </div>
 
     <div class="qs-grid">
@@ -435,7 +435,7 @@ cd Agentic-J</pre>
       <div class="demo-panel" role="tabpanel" id="panel-teach" aria-labelledby="tab-teach" hidden>
         <div class="frame window">
           <div class="win-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">Teaching mode</div></div>
-          <div class="video empty" data-youtube="" data-title="Teaching mode">
+          <div class="video empty" data-youtube="IcAtm61FyZE" data-title="Teaching mode">
             <span class="play" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
             <span class="soon">Demo video · coming soon</span>
           </div>
@@ -527,27 +527,33 @@ cd Agentic-J</pre>
     <div class="section-head reveal">
       <span class="fig-tag">Documentation</span>
       <h2 class="section-title">Read <span class="outline">the docs.</span></h2>
-      <p class="section-sub">Each guide is a single page, and together they take about 15 minutes to read.</p>
+      <p class="section-sub">Seven short guides, each a single page.</p>
     </div>
 
     <div class="doc-grid reveal">
       <a class="doc-card" href="https://github.com/MMV-Lab/Agentic-J/blob/main/user_guide/01_getting_started.md" target="_blank" rel="noopener">
-        <span class="num">01</span><h4>Getting started</h4><p>Prerequisites, <code>.env</code> setup, API keys, starting the container.</p><span class="arrow">Read →</span>
+        <span class="num">01</span><h4>Getting started</h4><p>What you need, the <code>.env</code> file, starting and stopping, using a graphics card.</p><span class="arrow">Read →</span>
       </a>
       <a class="doc-card" href="https://github.com/MMV-Lab/Agentic-J/blob/main/user_guide/02_interface_and_agents.md" target="_blank" rel="noopener">
-        <span class="num">02</span><h4>Interface &amp; agents</h4><p>The noVNC interface, the agent architecture, supported plugins.</p><span class="arrow">Read →</span>
+        <span class="num">02</span><h4>The interface</h4><p>The chat window, the three modes, the helpers behind the scenes, plugins, settings.</p><span class="arrow">Read →</span>
       </a>
       <a class="doc-card" href="https://github.com/MMV-Lab/Agentic-J/blob/main/user_guide/03_prompting.md" target="_blank" rel="noopener">
-        <span class="num">03</span><h4>Prompting</h4><p>How to write effective prompts, with before-and-after examples.</p><span class="arrow">Read →</span>
+        <span class="num">03</span><h4>Writing good requests</h4><p>What to tell the assistant, with examples and tips.</p><span class="arrow">Read →</span>
       </a>
       <a class="doc-card" href="https://github.com/MMV-Lab/Agentic-J/blob/main/user_guide/04_data_history_and_reports.md" target="_blank" rel="noopener">
-        <span class="num">04</span><h4>Data &amp; reports</h4><p>Where files live, chat history, usage reports, issue reporting.</p><span class="arrow">Read →</span>
+        <span class="num">04</span><h4>Files, chats &amp; reports</h4><p>Where results are saved, chat history, cost reports, reporting a problem.</p><span class="arrow">Read →</span>
       </a>
       <a class="doc-card" href="https://github.com/MMV-Lab/Agentic-J/blob/main/user_guide/05_security.md" target="_blank" rel="noopener">
-        <span class="num">05</span><h4>Security</h4><p>Local-only by default, container hardening, key handling.</p><span class="arrow">Read →</span>
+        <span class="num">05</span><h4>Security &amp; privacy</h4><p>What is sent to the AI provider and what stays on your computer.</p><span class="arrow">Read →</span>
+      </a>
+      <a class="doc-card" href="https://github.com/MMV-Lab/Agentic-J/blob/main/user_guide/06_napari_and_fine_tuning.md" target="_blank" rel="noopener">
+        <span class="num">06</span><h4>napari &amp; fine-tuning</h4><p>napari in the chat, micro-sam, training a model on your own corrections.</p><span class="arrow">Read →</span>
+      </a>
+      <a class="doc-card" href="https://github.com/MMV-Lab/Agentic-J/blob/main/user_guide/07_learning_mode.md" target="_blank" rel="noopener">
+        <span class="num">07</span><h4>Learning mode</h4><p>Learning bioimage analysis with the built-in course.</p><span class="arrow">Read →</span>
       </a>
       <a class="doc-card" href="https://github.com/MMV-Lab/Agentic-J#gpu-support-optional" target="_blank" rel="noopener">
-        <span class="num">06</span><h4>GPU setup</h4><p>CUDA builds, driver requirements, CDI, and verifying the GPU is used.</p><span class="arrow">Read →</span>
+        <span class="num">GPU</span><h4>GPU setup</h4><p>CUDA builds, driver requirements, CDI, and verifying the GPU is used.</p><span class="arrow">Read →</span>
       </a>
     </div>
 
@@ -653,6 +659,6 @@ cd Agentic-J</pre>
   </div>
 </footer>
 
-<script src="js/main.js?v=2026-10-20b"></script>
+<script src="js/main.js?v=2026-10-20d"></script>
 </body>
 </html>
