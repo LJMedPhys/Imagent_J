@@ -1,137 +1,143 @@
-# Interface & How the System Works
+# The Interface and How Agentic-J Works
 
-## The browser interface
+## What you see in the browser
 
-When you open `http://localhost:6080/vnc.html` you see a virtual desktop rendered via noVNC. It contains two main areas:
+When you open `http://localhost:6080/vnc.html`, you see a virtual desktop in your browser with:
 
-- the Agentic-J chat interface (conversation history, new chat button, usage meter)
-- the full Fiji/ImageJ application running in the virtual desktop
+- the **Agentic-J chat window**: your conversations, a **New Chat** button and a cost meter;
+- **Fiji**, the full program, which you can use by hand as usual;
+- **napari** windows, which open when the assistant (or you) uses napari.
 
-Scaling is set to "Local Scaling" by default so the desktop fits your browser window.
+The desktop is scaled to fit your browser window.
 
-### Chat panel controls
+### Buttons and options in the chat window
 
-| Control | Description |
+| Control | What it does |
 |---------|-------------|
-| **Send / Enter** | Submit your message to the agent. |
-| **Stop** | Requests the agent to stop after the current tool call completes. The agent finishes its in-progress step first — it does not cut off mid-execution. Use this if the agent is heading in the wrong direction or is taking too long. |
-| **QA Agent** (checkbox) | Enables the QA Reporter agent, which runs a full audit at the end of the workflow and generates `QA_Checklist_Report.md`. **Off by default** — enabling it adds one extra LLM call per completed project and increases cost. Toggle it before sending your first message; the setting cannot be changed while the agent is running. |
-| **Vision Judge** (checkbox) | Enables advisory visual review of a representative input and every image-producing processing step. **Off by default** — enabling it adds vision-model calls and requires either an OpenAI or OpenRouter key. The setting is saved independently for each chat and cannot be changed while the agent is running. |
-| **Save Usage Report** | Saves a JSON summary of token usage and estimated cost for the current conversation to a file of your choice. |
-| **Report Issue** | Opens a dialog to describe a problem and send a report to the developers (see [Data & Reports](04_data_history_and_reports.md)). |
+| **Send / Enter** | Sends your message. |
+| **Sending while it works** | You can type and send a message while the assistant is busy. It is added as a note, and the assistant reads it at its next step. Use this to correct course ("use channel 2, not 1") without stopping anything. If a long script is running, the note waits until that script finishes. |
+| **Stop** | Asks the assistant to stop after the step it is doing now. It doesn't cut off a step halfway. Use it if the assistant is going the wrong way or taking too long. |
+| **Attach files** | Drag files or folders onto the chat window. Only their location (path) is shared with the assistant, not their contents. |
+| **Vision Judge** (tick box) | Lets an image-reading AI model look at your images and results and comment on them. **Off by default.** It costs extra and sends small copies of your images to the AI provider; see [What happens when the Vision Judge is on](05_security.md#the-vision-judge). The setting is saved per chat and can't be changed while the assistant is working. |
+| **QA Agent** (tick box) | At the end of an analysis, a checker reviews the project folder and writes `QA_Checklist_Report.md`. **Off by default**, and it adds to the cost. Set it before your first message. |
+| **Save Usage Report** | Saves a file with the number of AI tokens used and the estimated cost of this chat. |
+| **Report Issue** | Shows the GitHub issues link and the support email address, each with a Copy button (see [Reporting issues](04_data_history_and_reports.md#reporting-issues)). |
+
+### Long-running steps
+
+Some steps, such as segmenting a whole folder of images or training a model, take many minutes. When a step is still running after a short while, Agentic-J lets it continue in the background and frees up the chat. You can keep asking questions in the meantime. When the step finishes, a message starting with `[DETACHED RUN FINISHED]` appears and the assistant carries on with the result.
 
 ---
 
-## Copying and pasting text (VNC clipboard)
+## Copying and pasting (clipboard)
 
-The noVNC toolbar on the left edge of the browser window contains a clipboard tool that bridges your local clipboard with the virtual desktop.
+Your computer's clipboard and the virtual desktop are separate. To move text between them, use the clipboard tool in the noVNC side bar on the left edge of the browser window.
 
 ![noVNC clipboard](images/novnc_clipboard.png)
 
-To paste text into Fiji (e.g. a file path):
-1. Click the clipboard icon in the noVNC sidebar.
-2. Paste your text into the clipboard panel.
-3. Click inside the Fiji window and paste normally (Ctrl+V / Cmd+V).
+To paste text into Fiji (for example a file path):
+1. Click the clipboard icon in the side bar.
+2. Paste your text into the clipboard box.
+3. Click inside the Fiji window and paste as usual (Ctrl+V / Cmd+V).
 
-To copy text out of Fiji, select it in the virtual desktop, then open the clipboard panel to retrieve it.
-
----
-
-## Agent architecture
-
-Agentic-J uses a **supervisor + specialist** model. The supervisor receives your request, orchestrates the pipeline, and calls specialists as tools. You never address specialists directly.
-
-| Agent | Model | Role |
-|-------|-------|------|
-| **Supervisor** | GPT-5.2 (low reasoning) | Plans the workflow, maintains project state, calls specialists and tools, synthesises results. |
-| **Plugin Manager** | GPT-5.2 | Finds the best Fiji plugin for a task by reading plugin skill descriptions; checks whether it is installed and installs it if needed. Called automatically in the planning phase. |
-| **ImageJ Coder** | GPT-5.3-codex | Writes production-ready Groovy/ImageJ macro scripts using plugin skill documentation. |
-| **ImageJ Debugger** | GPT-5.3-codex | Diagnoses and repairs failing scripts by reading the ImageJ log and inspecting exception stack traces. |
-| **Python Data Analyst** | GPT-5.2 | Runs Python code for statistical analysis (scipy, pandas) and publication-quality plots (matplotlib). |
-| **VLM Judge** | GPT-5.6 Luna via OpenAI Responses API (high reasoning), or Gemini 3.5 Flash via OpenRouter | Optionally adds advisory visual context during input metadata review and judges every image-producing processing step. For segmentation it compares the original, mask, and a transparent mask overlay. |
-| **QA Reporter** | GPT-4o-mini | Audits the completed project folder against workflow and image-publishing standards; generates a `QA_Checklist_Report.md`. Optional — enabled per session. |
-
-The supervisor follows a structured pipeline: gather requirements → select plugin → plan → set up workspace → code & test → statistics → plots → summarise & document → QA.
-
-The VLM Judge returns a structured handoff that is stored in the project state
-ledger and shared with the other specialists. Its observations are advisory:
-numeric metadata, quantitative checks, and the user's visual approval remain the
-source of truth. With an OpenRouter key it uses Gemini 3.5 Flash, including when
-both provider keys are present; an OpenAI-only setup uses GPT-5.6 Luna directly.
-An unavailable visual call does not stop the core pipeline.
-
-### Dialog window vision
-
-When you ask "What does this window do?" or similar, the agent uses a **GPT-4o-mini vision call** to capture a screenshot of what you have on screen and explain each parameter in context. This is not a separate agent — it is a tool (`capture_ui_window`) called directly by the supervisor. It covers both Fiji plugin dialogs and the napari window (canvas, layer list, and any docked plugin panel such as micro_sam), picking whichever is open. It works regardless of whether you use an OpenAI or OpenRouter key. For a successful screen capture, do make sure that the screen of interest is clearly visible in the display, i.e. it is not occluded or behind some other window. 
+To copy text out, select it on the virtual desktop, then open the clipboard box and copy it from there.
 
 ---
 
-## What the agent can do (tools)
+## Three modes
 
-| Capability | What it means in practice |
-|------------|--------------------------|
-| **Execute Groovy scripts** | Run scripts directly in the live Fiji instance; captures stdout, stderr, and the ImageJ log |
-| **Debug scripts** | Read the ImageJ log and exception stack traces to diagnose and repair failing scripts |
-| **Run Python code** | Statistical analysis (scipy, pandas) and publication-quality plots (matplotlib, seaborn) |
-| **Extract image metadata** | Read pixel size, bit depth, dimensions, channel count, and calibration from image files without loading pixel data |
-| **Visual input/result review** | Inspect overall image quality at input and review each image-producing processing step; segmentation review uses a transparent mask overlay |
-| **List open Fiji windows** | Enumerate all currently open images and dialogs in the Fiji UI |
-| **Capture on-screen window** | Take a screenshot of whatever is open — a Fiji plugin dialog, or the napari window with its layer list and docked plugin panel — and explain its fields using a vision model |
-| **Search & install plugins** | Search Fiji update sites by capability; check installation status; install plugins |
-| **Inspect Java classes** | Explore Fiji/ImageJ class APIs at runtime to find the correct method signatures for scripting |
-| **Read files** | Read scripts, CSVs, logs, and other text files from the mounted data volume |
-| **Browse folder tree** | List directory contents to understand project structure and find files |
-| **Create directories / copy files** | Set up output folders and copy files within the data volume |
-| **Set up analysis workspace** | Create the standardised project folder structure under `/app/data/projects/` |
-| **Save scripts** | Persist generated Groovy and Python scripts with version history |
-| **Save markdown** | Write summary, documentation, and QA report files to the project folder |
-| **State ledger** | Read and update a persistent `state_ledger.json` per project — stores image parameters, pipeline progress, script paths, and scientific context shared across all agents |
-| **Search the web** | Look up documentation, API references, ImageJ forum answers |
-| **RAG retrieval** | Query an internal vector knowledge base of plugin documentation and past scripting errors/fixes |
-| **Save coding experience** | Record solved scripting errors into the RAG knowledge base so past fixes are reused |
+Agentic-J works in one of three modes. It starts in **Conventional (advanced)** mode and switches when your request changes. You can also ask for a mode directly, for example "just make a maximum projection of this stack, nothing else" or "teach me about thresholding".
+
+| Mode | When it is used | What happens |
+|------|-----------------|--------------|
+| **Conventional (advanced)** | A real analysis project | It asks questions, proposes a plan, writes and tests scripts, runs statistics and plots, and documents everything in a project folder. |
+| **Exploratory (quick)** | A single operation | It does one thing quickly (for example, crop, convert, split channels) without planning and project set-up. |
+| **Education** | Learning | It works as a tutor using a built-in bioimage analysis course. See [Learning mode](07_learning_mode.md). |
 
 ---
 
-## Supported plugins (24 pre-installed)
+## How a request is handled
 
-The agent has built-in skill knowledge for all of these:
+You only talk to one assistant (the *supervisor*). Behind the scenes it hands parts of the work to specialised helpers and checks their results. You never need to address them yourself.
 
-3D ImageJ Suite · BigStitcher · Bio-Formats · BioVoxxel Toolbox · BoneJ · bUnwarpJ · Coloc 2 · CSBDeep · DeepImageJ · FeatureJ · Ilastik · Labkit · MIST · MorphoLibJ · NeuronJ · OrientationJ · Sholl Analysis · SNT · StackReg · StarDist · TrackMate (incl. StarDist & Cellpose detectors) · TransformJ · TurboReg
+| Helper | What it does |
+|--------|------|
+| **Supervisor** | Talks with you, plans the analysis, keeps track of the project and decides which helper does what. |
+| **Plugin finder** | Picks the best Fiji plugin or tool for the task, checks whether it is installed and installs it if needed (asking you first). |
+| **Fiji script writer** | Writes the Fiji scripts (Groovy) that do the image processing. |
+| **Script fixer** | When a script fails, reads the error and repairs the script. |
+| **Data analyst** | Runs Python for measurements, statistics and plots, and also runs napari, micro-sam and Cellpose. |
+| **Vision Judge** (optional) | Looks at images and results and says whether they look right. See [Security and privacy](05_security.md#the-vision-judge). |
+| **QA checker** (optional) | Reviews the finished project folder against good-practice and publishing standards. |
 
-Due to display size restrictions, you may not see all of your plugins in the `Plugins` dropdown menu. You can always find your plugins either by using search Fiji or go to `Plugins > Utilities > Find Commands...` and searching it from there.
+In Conventional (advanced) mode, a typical analysis goes: understand what you need → pick the tool → agree on a plan with you → set up the project folder → write and test scripts → measure and run statistics → make plots → summarise and document → (optional) quality check.
 
-Users can also the agent to install additional plugins via chatting, or install them manually via `Help > Update…` in Fiji. **Be cautious with manual installs** — JAR version conflicts can break existing functionality and may require a container restart or volume reset to resolve. Additionally, since manually installed plugins do not come with predefined skills, the scripts or solutions may be less reliable.
+The assistant stops to ask you at important points: approving the plan, confirming channel names when the image information is missing or unclear, checking segmentation results on example images, correcting a model's mistakes when [fine-tuning](06_napari_and_fine_tuning.md), and before installing new plugins.
 
-If something breaks after installation, the safest recovery is to delete the affected named volumes and restart:
-  ```bash
-  docker compose down
-  docker volume rm imagent_j_fiji_plugins imagent_j_fiji_jars
-  docker compose up
-  ```
-  This re-seeds the volumes from the image, restoring the known-good state.
+### It learns from fixed errors
 
----
-
-## Deep learning plugins — important notes
-
-### StarDist (nuclei/cell segmentation)
-**Prefer the StarDist plugin** (`Plugins > StarDist > StarDist 2D`) over standalone DeepImageJ for StarDist models. StarDist runs natively in this container. There is also the option to run StarDist on TrackMate (`Plugins > Tracking > TrackMate`, choose StarDist detector)
-
-### Cellpose
-When you want to use CellPose, opt for the **TrackMate-Cellpose** (`Plugins > Tracking > TrackMate`, choose Cellpose detector). The Cellpose conda environment works automatically. For this, you can just choose `cellpose` as the Conda environment in the dropdown.
-
-**Cellpose-SAM** (the SAM-based Cellpose 4 model in TrackMate) is CPU-only in this container and is **very slow** on large images — expect several minutes per image. Use it only when no simpler segmentation approach is sufficient. For this, you can just choose `cellpose4` as the Conda environment in the dropdown TrackMate Cellpose detector view.
+When a script fails and gets fixed, Agentic-J writes down the lesson (what went wrong and how it was fixed) and reuses working scripts later. These notes are kept in `data/learned/`, so the same mistake is less likely to happen again. This happens automatically.
 
 ---
 
-## Getting help with dialog parameters
+## Help with a Fiji or napari window
 
-If you open a Fiji plugin dialog and are unsure what a parameter means, type in the chat box:
+If a Fiji plugin window (or napari) is open and you are unsure what a setting means, ask in the chat:
 
 > "What does this window do?"
 
 or
 
-> "Help me fill in the parameters for this dialog."
+> "Help me fill in the settings in this window."
 
-The agent will take a screenshot of the current Fiji window and give you real-time guidance on each parameter — including recommended values for your specific task.
+Agentic-J takes a screenshot of the window, explains each setting and suggests values for your task. Make sure the window is fully visible and not hidden behind another window. The screenshot is sent to the AI provider; see [Security and privacy](05_security.md).
+
+---
+
+## Plugins Agentic-J knows well
+
+Agentic-J comes with detailed instructions for these tools, so it uses them more reliably:
+
+3D ImageJ Suite · BigStitcher · Bio-Formats · BioVoxxel Toolbox · BoneJ · bUnwarpJ · Cellpose · CLIJ2 · Coloc 2 · CSBDeep · DeepImageJ · FeatureJ · ilastik · Labkit · MIST · MorphoLibJ · NeuronJ · OrientationJ · Sholl Analysis · SNT · StackReg · StarDist · TrackMate (including the StarDist and Cellpose detectors) · TransformJ · TurboReg · **napari** and **micro-sam** (see [chapter 06](06_napari_and_fine_tuning.md))
+
+The Fiji `Plugins` menu may be too long to show everything. To find a plugin, use the Fiji search bar or `Plugins > Utilities > Find Commands...`.
+
+You can ask the assistant to install other plugins, or install them yourself through `Help > Update...` in Fiji. **Be careful with installing by hand**: plugins can clash with each other and break things that worked before. Plugins without built-in instructions are also used less reliably.
+
+If something breaks after installing a plugin, you can reset Fiji's plugins to the original state:
+```bash
+docker compose down
+docker volume rm imagent_j_fiji_plugins imagent_j_fiji_jars
+docker compose up
+```
+
+---
+
+## Deep-learning tools: tips
+
+### StarDist (nuclei and round cells)
+Use the StarDist plugin (`Plugins > StarDist > StarDist 2D`) rather than running StarDist models through DeepImageJ. StarDist is also available as a detector in TrackMate (`Plugins > Tracking > TrackMate`).
+
+### Cellpose (cells of many shapes)
+In Fiji, use Cellpose through TrackMate (`Plugins > Tracking > TrackMate`, then choose the Cellpose detector) and select `cellpose` as the environment in the drop-down list.
+
+**Cellpose-SAM** (the newer Cellpose 4 model, environment `cellpose4`) is very slow without a graphics card: expect several minutes per image. Use it only when simpler methods are not good enough.
+
+### Your own Cellpose models
+If you have trained a Cellpose model yourself, put the model file in `data/fine-tuned-models/` and tell the assistant its name. Details are in [`data/fine-tuned-models/README.md`](../data/fine-tuned-models/README.md). Models that Agentic-J [fine-tunes for you](06_napari_and_fine_tuning.md) are saved in your project folder and used automatically.
+
+---
+
+## Settings (`imagentj_config.yaml`)
+
+`imagentj_config.yaml` in the project folder lets you change, without rebuilding anything:
+
+- **which AI model** each helper uses (for example a cheaper model for the data analyst);
+- **how much the models "think"** before answering (more thinking is slower and costs more, but can be more careful);
+- whether the Vision Judge and QA checker run in **unattended (automatic) runs**. In the normal chat window, the tick boxes decide.
+
+Changes take effect the next time you start Agentic-J. Deleting a line restores its default. With only an OpenAI key, only OpenAI models can be used; with an OpenRouter key, models from other companies can be chosen too.
+
+### Adding other tools (advanced)
+
+napari is connected to Agentic-J through the Model Context Protocol (MCP), a standard way of plugging tools into AI assistants. Other MCP tools can be added in `.imagentj/mcp.json` without rebuilding.
