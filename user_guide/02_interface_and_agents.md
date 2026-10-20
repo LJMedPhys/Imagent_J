@@ -46,12 +46,12 @@ To copy text out, select it on the virtual desktop, then open the clipboard box 
 
 ## Three modes
 
-Agentic-J works in one of three modes. It starts in **Conventional** and switches when your request changes. You can also ask for a mode directly, for example "just make a maximum projection of this stack, nothing else" or "teach me about thresholding".
+Agentic-J works in one of three modes. It starts in **Conventional (advanced)** mode and switches when your request changes. You can also ask for a mode directly, for example "just make a maximum projection of this stack, nothing else" or "teach me about thresholding".
 
 | Mode | When it is used | What happens |
 |------|-----------------|--------------|
-| **Conventional** | A real analysis project | It asks questions, proposes a plan, writes and tests scripts, runs statistics and plots, and documents everything in a project folder. |
-| **Exploratory** | A single operation | It does one thing quickly (for example, crop, convert, split channels) without planning and project set-up. |
+| **Conventional (advanced)** | A real analysis project | It asks questions, proposes a plan, writes and tests scripts, runs statistics and plots, and documents everything in a project folder. |
+| **Exploratory (quick)** | A single operation | It does one thing quickly (for example, crop, convert, split channels) without planning and project set-up. |
 | **Education** | Learning | It works as a tutor using a built-in bioimage analysis course. See [Learning mode](07_learning_mode.md). |
 
 ---
@@ -70,7 +70,7 @@ You only talk to one assistant (the *supervisor*). Behind the scenes it hands pa
 | **Vision Judge** (optional) | Looks at images and results and says whether they look right. See [Security and privacy](05_security.md#the-vision-judge). |
 | **QA checker** (optional) | Reviews the finished project folder against good-practice and publishing standards. |
 
-In Conventional mode, a typical analysis goes: understand what you need → pick the tool → agree on a plan with you → set up the project folder → write and test scripts → measure and run statistics → make plots → summarise and document → (optional) quality check.
+In Conventional (advanced) mode, a typical analysis goes: understand what you need → pick the tool → agree on a plan with you → set up the project folder → write and test scripts → measure and run statistics → make plots → summarise and document → (optional) quality check.
 
 The assistant stops to ask you at important points: approving the plan, confirming channel names when the image information is missing or unclear, checking segmentation results on example images, correcting a model's mistakes when [fine-tuning](06_napari_and_fine_tuning.md), and before installing new plugins.
 
