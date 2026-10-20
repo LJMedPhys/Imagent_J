@@ -19,7 +19,7 @@ The desktop is scaled to fit your browser window.
 | **Stop** | Asks the assistant to stop after the step it is doing now. It doesn't cut off a step halfway. Use it if the assistant is going the wrong way or taking too long. |
 | **Attach files** | Drag files or folders onto the chat window. Only their location (path) is shared with the assistant, not their contents. |
 | **Vision Judge** (tick box) | Lets an image-reading AI model look at your images and results and comment on them. **Off by default.** It costs extra and sends small copies of your images to the AI provider; see [What happens when the Vision Judge is on](05_security.md#the-vision-judge). The setting is saved per chat and can't be changed while the assistant is working. |
-| **QA Agent** (tick box) | At the end of an analysis, a checker reviews the project folder and writes `QA_Checklist_Report.md`. **Off by default**, and it adds a little cost. Set it before your first message. |
+| **QA Agent** (tick box) | At the end of an analysis, a checker reviews the project folder and writes `QA_Checklist_Report.md`. **Off by default**, and it adds to the cost. Set it before your first message. |
 | **Save Usage Report** | Saves a file with the number of AI tokens used and the estimated cost of this chat. |
 | **Report Issue** | Shows the GitHub issues link and the support email address, each with a Copy button (see [Reporting issues](04_data_history_and_reports.md#reporting-issues)). |
 
@@ -46,12 +46,12 @@ To copy text out, select it on the virtual desktop, then open the clipboard box 
 
 ## Three modes
 
-Agentic-J works in one of three modes. It starts in **Advanced** and switches when your request changes. You can also ask for a mode directly, for example "just make a maximum projection of this stack, nothing else" or "teach me about thresholding".
+Agentic-J works in one of three modes. It starts in **Conventional** and switches when your request changes. You can also ask for a mode directly, for example "just make a maximum projection of this stack, nothing else" or "teach me about thresholding".
 
 | Mode | When it is used | What happens |
 |------|-----------------|--------------|
-| **Advanced** | A real analysis project | It asks questions, proposes a plan, writes and tests scripts, runs statistics and plots, and documents everything in a project folder. |
-| **Quick** | A single operation | It does one thing quickly (for example, crop, convert, split channels) without planning and project set-up. |
+| **Conventional** | A real analysis project | It asks questions, proposes a plan, writes and tests scripts, runs statistics and plots, and documents everything in a project folder. |
+| **Exploratory** | A single operation | It does one thing quickly (for example, crop, convert, split channels) without planning and project set-up. |
 | **Education** | Learning | It works as a tutor using a built-in bioimage analysis course. See [Learning mode](07_learning_mode.md). |
 
 ---
@@ -70,7 +70,7 @@ You only talk to one assistant (the *supervisor*). Behind the scenes it hands pa
 | **Vision Judge** (optional) | Looks at images and results and says whether they look right. See [Security and privacy](05_security.md#the-vision-judge). |
 | **QA checker** (optional) | Reviews the finished project folder against good-practice and publishing standards. |
 
-In Advanced mode, a typical analysis goes: understand what you need → pick the tool → agree on a plan with you → set up the project folder → write and test scripts → measure and run statistics → make plots → summarise and document → (optional) quality check.
+In Conventional mode, a typical analysis goes: understand what you need → pick the tool → agree on a plan with you → set up the project folder → write and test scripts → measure and run statistics → make plots → summarise and document → (optional) quality check.
 
 The assistant stops to ask you at important points: approving the plan, confirming channel names when the image information is missing or unclear, checking segmentation results on example images, correcting a model's mistakes when [fine-tuning](06_napari_and_fine_tuning.md), and before installing new plugins.
 

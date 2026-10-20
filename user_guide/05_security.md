@@ -36,7 +36,7 @@ Check your AI provider's terms for how long they keep data and whether they use 
 
 The Vision Judge is an AI model that can look at pictures. Switch it on or off with the **Vision Judge** tick box in the chat window. It is **off by default**, and the setting is saved for each chat.
 
-### When it is on
+### If the Vision Judge is switched on
 
 - **At the start**, it looks at a representative input image and gives a general impression (for example: is it in focus, is it saturated, are the objects visible?).
 - **After every step that produces an image** (a processed image, a mask, an overlay), it looks at the result and checks whether it matches what was expected. For a segmentation, it gets a side-by-side picture of the original image, the mask and the mask laid over the original.
@@ -45,7 +45,7 @@ The Vision Judge is an AI model that can look at pictures. Switch it on or off w
 - **What it does with the answer:** its comments are **advice only**. The measurements, the image information and your own approval always count for more. Its comments are written into the project's `state_ledger.json`. If the Vision Judge fails or is unavailable, the analysis carries on without it.
 - **Cost:** each check is an extra AI call, so an analysis becomes somewhat slower and more expensive.
 
-### When it is off
+### When it is switched off
 
 The Vision Judge is removed for that chat completely: the assistant cannot call it. Your images are then processed only on your computer, and only the information in the table above (text, numbers, image information) is sent, plus screenshots in cases 2 and 3.
 

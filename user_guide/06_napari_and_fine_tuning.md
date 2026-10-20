@@ -11,19 +11,6 @@ You don't need to know how napari works. Just ask, for example "open this image 
 
 ---
 
-## Segmentation: which tool?
-
-| Your objects | Usually best |
-|---|---|
-| Nuclei, round cells | StarDist |
-| Cells of different shapes | Cellpose |
-| Unusual objects, difficult images (low contrast, electron microscopy, organoids, unusual stains) | micro-sam |
-| You want to click on objects and correct them by hand | micro-sam in napari |
-
-You don't have to choose: the assistant picks a tool and explains why. You can always ask for a different one.
-
----
-
 ## Teaching a model with your corrections (fine-tuning)
 
 Use this when a segmentation keeps making the same mistakes on your images, for example missing cells, merging two cells into one, or outlining debris. You correct a few small squares, and the model learns from them. This works for **micro-sam** and **Cellpose**.
