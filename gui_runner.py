@@ -8,11 +8,6 @@ import json
 import time
 import html as html_module
 import logging
-import smtplib
-import ssl
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.application import MIMEApplication
 import jpype
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
@@ -528,73 +523,22 @@ class MetricsPanelWidget(QWidget):
         self._lbl_soft.setText(  f("Soft errors", str(data["soft_error_tool_calls"]), "#e67e22"))
 
 # ---------------------------------------------------------------------------
-# Email helper
+# Report-issue dialog
 # ---------------------------------------------------------------------------
 
+_ISSUES_URL = "https://github.com/MMV-Lab/Agentic-J/issues/new"
 _REPORT_EMAIL = "agentj.help@gmail.com"
 
-def _send_report_email(subject: str, body: str, attachments: list[tuple[str, bytes]]) -> None:
-    """Send a report email from agentj.help@gmail.com to itself via Gmail SMTP.
-
-    Raises RuntimeError if GMAIL_APP_PASSWORD is not set or sending fails.
-    attachments: list of (filename, bytes) pairs.
-    """
-    app_password = os.environ.get("GMAIL_APP_PASSWORD", "").replace(" ", "")
-    if not app_password:
-        raise RuntimeError(
-            "GMAIL_APP_PASSWORD is not set in your .env file.\n"
-            "Generate an App Password at:\n"
-            "  Google Account → Security → 2-Step Verification → App Passwords"
-        )
-
-    msg = MIMEMultipart()
-    msg["From"] = _REPORT_EMAIL
-    msg["To"] = _REPORT_EMAIL
-    msg["Subject"] = subject
-    msg.attach(MIMEText(body, "plain"))
-
-    for filename, data in attachments:
-        part = MIMEApplication(data, Name=filename)
-        part["Content-Disposition"] = f'attachment; filename="{filename}"'
-        msg.attach(part)
-
-    ctx = ssl.create_default_context()
-    import socket
-
-    # Resolve to IPv4 — Docker containers often lack IPv6 (errno 97).
-    smtp_ip = socket.getaddrinfo("smtp.gmail.com", 587, socket.AF_INET)[0][4][0]
-    smtp_ip_465 = socket.getaddrinfo("smtp.gmail.com", 465, socket.AF_INET)[0][4][0]
-
-    raw = msg.as_bytes()
-    try:
-        # Port 587 with STARTTLS (preferred)
-        with smtplib.SMTP(smtp_ip, 587, timeout=15) as smtp:
-            smtp._host = "smtp.gmail.com"  # starttls verifies against hostname, not IP
-            smtp.ehlo()
-            smtp.starttls(context=ctx)
-            smtp.ehlo()
-            smtp.login(_REPORT_EMAIL, app_password)
-            smtp.sendmail(_REPORT_EMAIL, _REPORT_EMAIL, raw)
-    except (OSError, smtplib.SMTPException):
-        # Port 465 implicit TLS fallback (some networks block 587)
-        with smtplib.SMTP_SSL(smtp_ip_465, 465, context=ctx, timeout=15) as smtp:
-            smtp._host = "smtp.gmail.com"
-            smtp.login(_REPORT_EMAIL, app_password)
-            smtp.sendmail(_REPORT_EMAIL, _REPORT_EMAIL, raw)
-
-
-# ---------------------------------------------------------------------------
-# Feedback / Error-Report dialog
-# ---------------------------------------------------------------------------
 
 class FeedbackDialog(QDialog):
-    """Modal dialog for collecting user feedback and exporting an error report."""
+    """Points the user to GitHub issues or the support email address.
 
-    def __init__(self, tracker_cb, history_manager, current_thread_id, parent=None):
+    There is no browser inside the container, so both are shown as selectable
+    text with a Copy button; a copy lands in the noVNC clipboard panel.
+    """
+
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self._tracker_cb = tracker_cb
-        self._history_manager   = history_manager
-        self._current_thread_id = current_thread_id
         self.setWindowTitle("Report Issue")
         self.setMinimumWidth(480)
         self.setModal(True)
@@ -603,151 +547,51 @@ class FeedbackDialog(QDialog):
         layout.setSpacing(10)
         layout.setContentsMargins(14, 14, 14, 14)
 
-        desc_label = QLabel(
-            "<b>Describe the problem</b><br>"
+        intro = QLabel(
+            "<b>Found a problem or have a suggestion?</b><br>"
             "<span style='color:#555; font-size:11px;'>"
-            "What did you ask the agent to do, and what went wrong?</span>"
+            "Open an issue on GitHub (needs a GitHub account) or email us. "
+            "Please describe what you asked the agent to do and what went wrong.</span>"
         )
-        desc_label.setTextFormat(Qt.RichText)
-        desc_label.setWordWrap(True)
-        layout.addWidget(desc_label)
+        intro.setTextFormat(Qt.RichText)
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
 
-        self._text_edit = QPlainTextEdit()
-        self._text_edit.setPlaceholderText(
-            "e.g. 'The script ran but measured 0 cells on my fluorescence image.'"
-        )
-        self._text_edit.setFixedHeight(120)
-        layout.addWidget(self._text_edit)
+        layout.addWidget(self._copy_row("GitHub issue", _ISSUES_URL))
+        layout.addWidget(self._copy_row("Email", _REPORT_EMAIL))
 
-        options_box = QGroupBox("Export options")
-        options_layout = QVBoxLayout(options_box)
-        options_layout.setSpacing(4)
-        self._chk_usage = QCheckBox("Include usage stats (token counts, cost)")
-        self._chk_usage.setChecked(True)
-        options_layout.addWidget(self._chk_usage)
-        layout.addWidget(options_box)
-
-        conv_box = QGroupBox("Include conversations")
-        conv_layout = QVBoxLayout(conv_box)
-        conv_layout.setSpacing(2)
-        self._conv_list = QListWidget()
-        self._conv_list.setSelectionMode(QListWidget.NoSelection)
-        threads = self._history_manager.list_threads()
-        for thread_id, meta in threads:
-            title   = meta.get("title", thread_id)
-            display = f"{title[:45]}\u2026" if len(title) > 45 else title
-            item = QListWidgetItem(display)
-            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(
-                Qt.Checked if thread_id == self._current_thread_id else Qt.Unchecked
-            )
-            item.setData(Qt.UserRole, thread_id)
-            self._conv_list.addItem(item)
-        self._conv_list.setFixedHeight(min(len(threads), 6) * 22 + 6)
-        conv_layout.addWidget(self._conv_list)
-        sel_row = QHBoxLayout()
-        btn_all  = QPushButton("Select all")
-        btn_none = QPushButton("Select none")
-        btn_all.setFixedHeight(20)
-        btn_none.setFixedHeight(20)
-        btn_all.clicked.connect(lambda: self._set_all_checks(Qt.Checked))
-        btn_none.clicked.connect(lambda: self._set_all_checks(Qt.Unchecked))
-        sel_row.addWidget(btn_all)
-        sel_row.addWidget(btn_none)
-        conv_layout.addLayout(sel_row)
-        layout.addWidget(conv_box)
-
-        info = QLabel(
+        hint = QLabel(
             "<span style='color:#888; font-size:10px;'>"
-            "The report includes: error details and script code from selected conversation, "
-            "your description, and basic system info (OS, Python version). "
-            "No image data or raw file contents are included. Multiple conversations are exported as a ZIP.</span>"
+            "Copied text appears in the clipboard panel of the noVNC side bar, "
+            "from where you can paste it into your own browser or email program.</span>"
         )
-        info.setTextFormat(Qt.RichText)
-        info.setWordWrap(True)
-        layout.addWidget(info)
+        hint.setTextFormat(Qt.RichText)
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
 
-        btn_box = QDialogButtonBox()
-        btn_box.addButton("Send Report\u2026", QDialogButtonBox.AcceptRole)
-        btn_box.addButton("Cancel", QDialogButtonBox.RejectRole)
-        btn_box.accepted.connect(self._on_export)
+        self._status = QLabel("")
+        self._status.setStyleSheet("color:#27ae60; font-size:11px;")
+        layout.addWidget(self._status)
+
+        btn_box = QDialogButtonBox(QDialogButtonBox.Close)
         btn_box.rejected.connect(self.reject)
         layout.addWidget(btn_box)
 
-    def _set_all_checks(self, state):
-        for i in range(self._conv_list.count()):
-            self._conv_list.item(i).setCheckState(state)
+    def _copy_row(self, label: str, text: str) -> QGroupBox:
+        box = QGroupBox(label)
+        row = QHBoxLayout(box)
+        value = QLabel(text)
+        value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        row.addWidget(value, 1)
+        btn = QPushButton("Copy")
+        btn.setFixedWidth(70)
+        btn.clicked.connect(lambda: self._copy(label, text))
+        row.addWidget(btn)
+        return box
 
-    def _on_export(self):
-
-        selected = []
-        for i in range(self._conv_list.count()):
-            item = self._conv_list.item(i)
-            if item.checkState() == Qt.Checked:
-                selected.append(item.data(Qt.UserRole))
-
-        if not selected:
-            QMessageBox.warning(self, "Nothing selected",
-                                "Please select at least one conversation.")
-            return
-        
-        self._tracker_cb.set_user_feedback(self._text_edit.toPlainText().strip())
-
-        include_usage = self._chk_usage.isChecked()
-
-        import io, zipfile as _zipfile
-        timestamp = time.strftime('%Y%m%d_%H%M%S')
-        feedback_text = self._text_edit.toPlainText().strip()
-        try:
-            if len(selected) == 1:
-                report = self._tracker_cb.get_error_report_for_thread(
-                    selected[0], include_usage_stats=include_usage
-                )
-                fname = f"report_{selected[0][:8]}_{timestamp}.json"
-                attachments = [(fname, json.dumps(report, indent=2, ensure_ascii=False).encode())]
-            else:
-                buf = io.BytesIO()
-                with _zipfile.ZipFile(buf, "w", _zipfile.ZIP_DEFLATED) as zf:
-                    for thread_id in selected:
-                        report = self._tracker_cb.get_error_report_for_thread(
-                            thread_id, include_usage_stats=include_usage
-                        )
-                        zf.writestr(f"report_{thread_id[:8]}.json",
-                                    json.dumps(report, indent=2, ensure_ascii=False))
-                fname = f"agentic-j_issue_{timestamp}.zip"
-                attachments = [(fname, buf.getvalue())]
-
-            subject = f"[Agentic-J] Issue Report — {timestamp}"
-            body = f"User feedback:\n{feedback_text or '(none provided)'}\n\nAttached: {len(selected)} conversation(s)."
-            _send_report_email(subject, body, attachments)
-            QMessageBox.information(self, "Report Sent",
-                f"Issue report sent to {_REPORT_EMAIL}.\n\nThank you for the feedback!")
-            self.accept()
-        except Exception as e:
-            log.exception(f"Failed to send issue report: {e}")
-            reply = QMessageBox.warning(
-                self, "Send Failed",
-                f"Could not send the report by email:\n{e}\n\n"
-                "Would you like to save it to a file instead?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes,
-            )
-            if reply == QMessageBox.Yes:
-                default_name = os.path.expanduser(
-                    f"~/agentic-j_issue_{time.strftime('%Y%m%d_%H%M%S')}"
-                    f"{'zip' if len(attachments) == 1 and attachments[0][0].endswith('.zip') else 'json'}"
-                )
-                path, _ = QFileDialog.getSaveFileName(
-                    self, "Save Issue Report", default_name,
-                    "All files (*)",
-                )
-                if path:
-                    with open(path, "wb") as f:
-                        f.write(attachments[0][1])
-                    QMessageBox.information(self, "Report Saved",
-                        f"Report saved to:\n{path}\n\nPlease send it manually to {_REPORT_EMAIL}.")
-                    self.accept()
-        
+    def _copy(self, label: str, text: str) -> None:
+        QApplication.clipboard().setText(text)
+        self._status.setText(f"{label} copied.")
 
 
 # ---------------------------------------------------------------------------
@@ -1224,12 +1068,7 @@ class ImageJAgentGUI(QWidget):
 
 
     def _open_feedback_dialog(self):
-        dlg = FeedbackDialog(
-            self._tracker_cb,
-            self.history_manager,
-            self.current_thread_id,
-            parent=self,
-        )
+        dlg = FeedbackDialog(parent=self)
         dlg.exec()
 
     # ------------------------------------------------------------------
