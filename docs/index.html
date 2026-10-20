@@ -36,10 +36,8 @@
     </a>
     <nav class="nav-links" aria-label="primary">
       <a href="#engines">Engines</a>
-      <a href="#finetuning">Fine-tuning</a>
       <!-- <a href="#judge">VLM judge</a> -->
-      <a href="#education">Education</a>
-      <a href="#architecture">Architecture</a>
+      <!-- <a href="#education">Education</a> -->
       <a href="#quickstart">Get started</a>
       <a href="#paper">Paper</a>
       <a href="https://github.com/MMV-Lab/Agentic-J" target="_blank" rel="noopener" class="nav-cta">GitHub ↗</a>
@@ -138,7 +136,7 @@
         <p>The agent drives a live napari viewer over MCP for 3D and interactive work, with Segment Anything for Microscopy.</p>
         <span class="go">Engines →</span>
       </a>
-      <a href="#finetuning">
+      <a>
         <span class="no">03 <span class="new">NEW</span></span>
         <h3>Human-in-the-loop fine-tuning</h3>
         <p>You correct a handful of tiles and the agent trains micro-sam or Cellpose on them, then measures the result.</p>
@@ -150,13 +148,13 @@
         <p>A vision-language model looks at inputs, masks and plots and returns PASS, WARN or FAIL with reasons.</p>
         <span class="go">Visual QA →</span>
       </a>
-      <a href="#education">
+      <a>
         <span class="no">05 <span class="new">NEW</span></span>
         <h3>Education mode</h3>
         <p>A tutor that teaches <em>Introduction to Bioimage Analysis</em> chapter by chapter, with practicals and live demos in Fiji.</p>
         <span class="go">Education →</span>
       </a>
-      <a href="#guardrails">
+      <a>
         <span class="no">06 <span class="new">NEW</span></span>
         <h3>Watchdogs &amp; memory</h3>
         <p>Catches looping or stalled agents and scripts. A librarian agent keeps the pitfalls and recipes worth remembering.</p>
@@ -168,7 +166,7 @@
         <p>You get a re-runnable Groovy script, or step-by-step guidance through the Fiji menus. Your choice.</p>
         <span class="go">Engines →</span>
       </a>
-      <a href="#guardrails">
+      <a>
         <span class="no">08</span>
         <h3>Reproducible by default</h3>
         <p>Every run is a project folder with raw data, scripts, results, figures, logs, a state ledger and an optional QA report.</p>
@@ -268,81 +266,8 @@
   </div>
 </section>
 
-<!-- =================== FINE-TUNING =================== -->
-<section id="finetuning">
-  <div class="container">
-    <div class="section-head reveal">
-      <span class="fig-tag">Fig. 3 · Human-in-the-loop fine-tuning</span>
-      <h2 class="section-title">Fine-tune models <span class="outline">on your corrections.</span></h2>
-      <p class="section-sub">
-        Instead of annotating a whole image, you can pick a few tiles and correct them in napari, and the agent
-        does the rest: it trains, evaluates, and applies the model only after checking the result.
-      </p>
-    </div>
-
-    <div class="stepper reveal">
-      <div class="stage you">
-        <div class="bar"><span class="n">1</span><span class="rule"></span></div>
-        <h4>Pick tiles</h4>
-        <p>In napari, you choose the regions that matter, such as a crowded cluster or a dim cell. A blob count can't tell debris from a cell, but you can.</p>
-        <div class="meta"><span class="pill solid">you</span><span class="pill">~3 min</span></div>
-      </div>
-      <div class="stage you">
-        <div class="bar"><span class="n">2</span><span class="rule"></span></div>
-        <h4>Correct</h4>
-        <p>The current model pre-segments each tile, so you only fix its mistakes. You don't draw from scratch.</p>
-        <div class="meta"><span class="pill solid">you</span><span class="pill">2–4 min / tile</span></div>
-      </div>
-      <div class="stage">
-        <div class="bar"><span class="n">3</span><span class="rule"></span></div>
-        <h4>Train</h4>
-        <p>The agent fine-tunes <strong>micro-sam</strong> or <strong>Cellpose</strong> on your corrections, on the GPU when available.</p>
-        <div class="meta"><span class="pill">agent</span><span class="pill">10–20 min</span></div>
-      </div>
-      <div class="stage">
-        <div class="bar"><span class="n">4</span><span class="rule"></span></div>
-        <h4>Measure &amp; apply</h4>
-        <p>The new model is scored against the stock one before anything uses it. Then it runs on the whole dataset.</p>
-        <div class="meta"><span class="pill">agent</span><span class="pill">~1 s / image</span></div>
-      </div>
-    </div>
-
-    <div class="tiles frame reveal">
-      <svg viewBox="0 0 360 240" fill="none" aria-label="A micrograph divided into tiles; three tiles are selected for annotation">
-        <rect x=".5" y=".5" width="359" height="239" fill="#050505" stroke="rgba(255,255,255,.3)"/>
-        <g fill="rgba(255,255,255,.55)">
-          <ellipse cx="34" cy="30" rx="11" ry="9"/><ellipse cx="72" cy="52" rx="9" ry="10"/><ellipse cx="118" cy="24" rx="12" ry="8"/>
-          <ellipse cx="160" cy="70" rx="10" ry="10"/><ellipse cx="205" cy="34" rx="9" ry="11"/><ellipse cx="248" cy="60" rx="12" ry="9"/>
-          <ellipse cx="300" cy="28" rx="10" ry="9"/><ellipse cx="330" cy="84" rx="9" ry="8"/><ellipse cx="40" cy="110" rx="10" ry="11"/>
-          <ellipse cx="94" cy="130" rx="12" ry="9"/><ellipse cx="108" cy="146" rx="10" ry="9"/><ellipse cx="190" cy="126" rx="9" ry="10"/>
-          <ellipse cx="236" cy="150" rx="11" ry="9"/><ellipse cx="286" cy="130" rx="10" ry="11"/><ellipse cx="52" cy="196" rx="11" ry="9"/>
-          <ellipse cx="140" cy="206" rx="10" ry="10"/><ellipse cx="206" cy="210" rx="12" ry="8"/><ellipse cx="262" cy="200" rx="9" ry="10"/>
-          <ellipse cx="318" cy="190" rx="11" ry="9"/>
-        </g>
-        <g fill="rgba(255,255,255,.28)"><circle cx="148" cy="150" r="2.5"/><circle cx="156" cy="158" r="1.8"/><circle cx="330" cy="140" r="2"/><circle cx="90" cy="84" r="2"/></g>
-        <g stroke="rgba(255,255,255,.12)"><path d="M60 0v240M120 0v240M180 0v240M240 0v240M300 0v240M0 60h360M0 120h360M0 180h360"/></g>
-        <g stroke="#fff" stroke-width="1.6">
-          <rect x="61" y="121" width="58" height="58"/><rect x="121" y="121" width="58" height="58"/><rect x="301" y="61" width="58" height="58"/>
-        </g>
-        <g font-family="IBM Plex Mono, monospace" font-size="9" fill="#fff">
-          <text x="65" y="175">A touching</text><text x="125" y="175">B debris</text><text x="305" y="115">C dim</text>
-        </g>
-      </svg>
-      <div>
-        <h4>A few corrected tiles are usually enough.</h4>
-        <p>Fine-tuning works with both micro-sam and Cellpose. Stages 1 and 2 are shared, so you can run the stock models
-          first, compare their overlays, and fine-tune whichever is closest.</p>
-        <div class="quote">
-          <b>The agent notices when you're unhappy.</b> If you keep rejecting segmentations, the watchdog stops
-          retrying new parameters and suggests fine-tuning on your own annotations instead.
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
 <!-- =================== VLM JUDGE =================== -->
-<!-- Hidden for now: VLM judge section. Remove this wrapper to restore it (and renumber Figs 4-7 back to 5-8).
+<!-- Hidden for now: VLM judge section. Remove this wrapper to restore it (it becomes Fig. 3; renumber the figures after it).
 <section id="judge">
   <div class="container">
     <div class="split">
@@ -425,12 +350,13 @@
 -->
 
 <!-- =================== EDUCATION =================== -->
+<!-- Hidden for now: education section. Remove this wrapper to restore it (and renumber Fig. 3 · In action back to Fig. 4).
 <section id="education" class="paper">
   <div class="container">
     <div class="split">
       <div>
         <div class="section-head reveal">
-          <span class="fig-tag">Fig. 4 · Education mode</span>
+          <span class="fig-tag">Fig. 3 · Education mode</span>
           <h2 class="section-title">Learn bioimage analysis <span class="outline">as you go.</span></h2>
           <p class="section-sub">
             Switch to education mode and Agentic-J works as a tutor. It teaches Pete Bankhead's
@@ -482,123 +408,13 @@
     </div>
   </div>
 </section>
-
-<!-- =================== ARCHITECTURE =================== -->
-<section id="architecture">
-  <div class="container">
-    <div class="section-head reveal">
-      <span class="fig-tag">Fig. 5 · Architecture</span>
-      <h2 class="section-title">One supervisor, <span class="outline">seven specialists.</span></h2>
-      <p class="section-sub">
-        You only talk to the supervisor. It plans, delegates and synthesises, and each specialist is a focused
-        agent with its own tools, skills and model.
-      </p>
-    </div>
-
-    <div class="arch">
-      <div class="arch-diagram frame reveal">
-        <div class="arch-supervisor">
-          <b>Supervisor</b>
-          <small>plans · delegates · synthesises</small>
-        </div>
-        <div class="arch-wire"></div>
-        <div class="arch-specialists">
-          <div class="spec"><span class="name">Plugin Manager</span><span class="role">Picks the right tool from a 290-entry registry.</span></div>
-          <div class="spec"><span class="name">ImageJ Coder</span><span class="role">Writes Groovy against real plugin APIs.</span></div>
-          <div class="spec"><span class="name">ImageJ Debugger</span><span class="role">Reads the log and patches the failing lines.</span></div>
-          <div class="spec"><span class="name">Python Analyst</span><span class="role">Python in any env: segmentation, stats, plots.</span></div>
-          <div class="spec opt"><span class="name">VLM Judge</span><span class="role">Visual PASS / WARN / FAIL on images and plots.</span></div>
-          <div class="spec opt"><span class="name">QA Reporter</span><span class="role">Audits the finished project.</span></div>
-          <div class="spec"><span class="name">Librarian</span><span class="role">Curates learned pitfalls &amp; recipes.</span></div>
-          <div class="spec"><span class="name">Tutor</span><span class="role">Supervisor in education mode.</span><span class="model">mode, not an agent</span></div>
-        </div>
-        <div class="arch-mcp">
-          <span><b style="color:var(--text);font-weight:500">MCP host</b>: external tools plug in; napari is the first.</span>
-          <span class="pill">napari-mcp</span>
-        </div>
-      </div>
-
-      <div class="arch-text reveal">
-        <h3>Choose the model for each role.</h3>
-        <p>
-          Works with an OpenAI or an OpenRouter key. With OpenRouter, any provider's model can fill any role.
-          Set each role's model and reasoning effort in one file, and turn the optional agents on or off, without rebuilding.
-        </p>
-        <pre class="code"><button class="copy" data-copy>copy</button><span class="tok-c"># imagentj_config.yaml</span>
-<span class="tok-v">models</span>:
-  <span class="tok-v">supervisor</span>: <span class="tok-s">"openai/gpt-5.4"</span>
-  <span class="tok-v">worker</span>:     <span class="tok-s">"openai/gpt-5.3-codex"</span>  <span class="tok-c"># coder + debugger</span>
-  <span class="tok-v">analyst</span>:    <span class="tok-s">"openai/gpt-5.3-codex"</span>
-  <span class="tok-v">curator</span>:    <span class="tok-s">"openai/gpt-5.4-mini"</span>   <span class="tok-c"># librarian</span>
-  <span class="tok-v">vlm</span>:        <span class="tok-s">"google/gemini-3.5-flash"</span>
-<span class="tok-v">reasoning_effort</span>:
-  <span class="tok-v">vlm</span>: high</pre>
-      </div>
-    </div>
-
-    <div class="pipeline reveal" aria-label="Supervisor pipeline phases">
-      <div class="step"><b>1</b>Gather requirements</div>
-      <div class="step"><b>2</b>Plan</div>
-      <div class="step"><b>3</b>Set up workspace</div>
-      <div class="step"><b>4a</b>I/O check</div>
-      <div class="step"><b>4b</b>Process</div>
-      <div class="step"><b>4c</b>Statistics</div>
-      <div class="step"><b>4d</b>Plot</div>
-      <div class="step"><b>5</b>Summarise</div>
-      <div class="step"><b>6</b>Document</div>
-      <div class="step"><b>7</b>QA</div>
-    </div>
-  </div>
-</section>
-
-<!-- =================== GUARDRAILS =================== -->
-<section id="guardrails">
-  <div class="container">
-    <div class="section-head reveal">
-      <span class="fig-tag">Fig. 6 · Guardrails</span>
-      <h2 class="section-title">Safeguards <span class="outline">on every turn.</span></h2>
-      <p class="section-sub">These checks run alongside the agent and step in when something goes wrong.</p>
-    </div>
-    <div class="guards">
-      <div class="guard frame reveal">
-        <svg class="ico" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="17" cy="17" r="14"/><path d="M17 8v9l6 4"/></svg>
-        <h3>Agent watchdog</h3>
-        <p>Detects an agent that repeats the same call, stalls on a hung tool, or runs on without end, and stops it cleanly so the supervisor still gets a structured hand-off.</p>
-      </div>
-      <div class="guard frame reveal">
-        <svg class="ico" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h12l6 6v20H9z"/><path d="M21 4v6h6"/><path d="m13 20 3 3 6-7"/></svg>
-        <h3>Script watchdog</h3>
-        <p>Supervises every Groovy and Python run and ends runaway scripts instead of letting them block the session.</p>
-      </div>
-      <div class="guard frame reveal">
-        <svg class="ico" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7c4-2 8-2 12 1 4-3 8-3 12-1v20c-4-2-8-2-12 1-4-3-8-3-12-1z"/><path d="M17 8v20"/></svg>
-        <h3>Learned memory</h3>
-        <p>A background librarian records the pitfalls and working recipes from past runs, and the agents recall them the next time the same problem comes up.</p>
-      </div>
-      <div class="guard frame reveal">
-        <svg class="ico" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6h22v22H6z"/><path d="M6 12h22M12 12v16"/></svg>
-        <h3>State ledger &amp; phases</h3>
-        <p>A shared <code>state_ledger.json</code> records every step. A phase guard stops the pipeline from skipping ahead, for example to plotting before the I/O check.</p>
-      </div>
-      <div class="guard frame reveal">
-        <svg class="ico" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5h18v24H8z"/><path d="M12 11h10M12 16h10M12 21h6"/></svg>
-        <h3>QA reporter</h3>
-        <p>An optional, read-only auditor that checks the project against community checklists for publishing image data and writes a report.</p>
-      </div>
-      <div class="guard frame reveal">
-        <svg class="ico" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3 6 8v8c0 7 4.7 12.5 11 15 6.3-2.5 11-8 11-15V8z"/></svg>
-        <h3>Secure by design</h3>
-        <p>Bound to <code>localhost</code>, runs as a non-root user with all Linux capabilities dropped, and sees only <code>./data/</code>. Your data stay on your machine.</p>
-      </div>
-    </div>
-  </div>
-</section>
+-->
 
 <!-- =================== SCREENSHOTS =================== -->
 <section id="screenshots">
   <div class="container">
     <div class="section-head reveal">
-      <span class="fig-tag">Fig. 7 · In action</span>
+      <span class="fig-tag">Fig. 3 · In action</span>
       <h2 class="section-title">What a session <span class="outline">looks like.</span></h2>
       <p class="section-sub">A typical session: describe the task in plain English, then watch the agent plan, write the script, run it and explain the result.</p>
     </div>
@@ -792,10 +608,8 @@ cd Agentic-J</pre>
       <div>
         <h5>Project</h5>
         <a href="#engines">Engines</a>
-        <a href="#finetuning">Fine-tuning</a>
         <!-- <a href="#judge">VLM judge</a> -->
-        <a href="#education">Education mode</a>
-        <a href="#architecture">Architecture</a>
+        <!-- <a href="#education">Education mode</a> -->
       </div>
 
       <div>
