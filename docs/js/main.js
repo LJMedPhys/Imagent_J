@@ -35,7 +35,7 @@ document.querySelectorAll('.code [data-copy]').forEach((btn) => {
 });
 
 // 3) Active nav link as you scroll
-const sections = ['engines', 'finetuning', 'judge', 'education', 'architecture', 'quickstart', 'paper']
+const sections = ['overview', 'install', 'demos', 'reproducibility', 'docs', 'paper']
   .map((id) => document.getElementById(id))
   .filter(Boolean);
 const navLinks = new Map(
@@ -52,3 +52,38 @@ const navIO = new IntersectionObserver((entries) => {
   });
 }, { rootMargin: '-45% 0px -45% 0px' });
 sections.forEach((s) => navIO.observe(s));
+
+// 4) YouTube slots: set data-youtube="<video id>" on a .video element to embed it
+document.querySelectorAll('.video[data-youtube]').forEach((slot) => {
+  const id = slot.dataset.youtube.trim();
+  if (!id) return;
+  const f = document.createElement('iframe');
+  f.src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?rel=0`;
+  f.title = slot.dataset.title || 'Agentic-J video';
+  f.loading = 'lazy';
+  f.allow = 'accelerometer; encrypted-media; gyroscope; picture-in-picture; fullscreen';
+  f.allowFullscreen = true;
+  slot.classList.remove('empty');
+  slot.replaceChildren(f);
+});
+
+// 5) Demo tabs
+const tabs = Array.from(document.querySelectorAll('.tabs [role="tab"]'));
+function selectTab(tab) {
+  tabs.forEach((t) => {
+    const on = t === tab;
+    t.setAttribute('aria-selected', String(on));
+    t.tabIndex = on ? 0 : -1;
+    document.getElementById(t.getAttribute('aria-controls')).hidden = !on;
+  });
+}
+tabs.forEach((tab, i) => {
+  tab.addEventListener('click', () => selectTab(tab));
+  tab.addEventListener('keydown', (e) => {
+    const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+    if (!step) return;
+    const next = tabs[(i + step + tabs.length) % tabs.length];
+    selectTab(next);
+    next.focus();
+  });
+});

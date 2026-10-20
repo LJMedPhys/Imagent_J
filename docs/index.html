@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <meta name="color-scheme" content="dark" />
 <title>Agentic-J</title>
-<meta name="description" content="Agentic-J is a containerised multi-agent assistant for microscopy image analysis. It plans analyses and runs them in Fiji, Python and napari, checks results with a vision judge, fine-tunes segmentation models on your corrections, and teaches bioimage analysis in education mode." />
+<meta name="description" content="Agentic-J is an AI agent for microscopy image analysis that works with the tools the bioimage community already uses: Fiji and its plugins, the scientific Python stack and napari. It adapts the analysis to your data, runs locally and documents every project so it can be reproduced." />
 
 <!-- Open Graph -->
 <meta property="og:title" content="Agentic-J — an AI agent for microscopy image analysis" />
@@ -20,7 +20,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Open+Sans:ital,wght@0,400..700;1,400..600&display=swap" rel="stylesheet">
 
-<link rel="stylesheet" href="css/styles.css" />
+<link rel="stylesheet" href="css/styles.css?v=2026-10-20b" />
 <script>document.documentElement.classList.remove('no-js');</script>
 </head>
 <body>
@@ -35,11 +35,12 @@
       <span class="brand-name">Agentic-J</span>
     </a>
     <nav class="nav-links" aria-label="primary">
-      <a href="#engines">Engines</a>
-      <!-- <a href="#judge">VLM judge</a> -->
-      <!-- <a href="#education">Education</a> -->
-      <a href="#quickstart">Get started</a>
-      <a href="#paper">Paper</a>
+      <a href="#overview">Overview</a>
+      <a href="#install">Install</a>
+      <a href="#demos">Demos</a>
+      <a href="#reproducibility">Reproducibility</a>
+      <a href="#docs">Docs</a>
+      <a href="#paper">Cite</a>
       <a href="https://github.com/MMV-Lab/Agentic-J" target="_blank" rel="noopener" class="nav-cta">GitHub ↗</a>
     </nav>
   </div>
@@ -48,7 +49,7 @@
 <main>
 
 <!-- =================== HERO =================== -->
-<section class="hero">
+<section class="hero" id="overview">
   <div class="container">
     <div class="hero-grid">
       <div>
@@ -58,13 +59,13 @@
           <span class="outline">in one conversation.</span>
         </h1>
         <p class="lead reveal">
-          Agentic-J runs <strong>Fiji</strong>, <strong>Python</strong> and <strong>napari</strong> in one container, next to a
-          chat panel. It plans the analysis, writes and debugs the code, can check every result with a
-          vision-language judge, fine-tunes segmentation models on your corrections and documents the whole project.
-          It can also teach you bioimage analysis from the ground up.
+          Agentic-J is an AI agent that analyses microscopy images with the tools the community already trusts:
+          <strong>Fiji</strong> and its plugins, the scientific <strong>Python</strong> stack and <strong>napari</strong>.
+          Describe your question in plain English. It adapts the analysis to your data, picks the right plugin or library,
+          writes and debugs the code, and documents the whole project. If a tool is missing, it can install it.
         </p>
         <div class="hero-actions reveal">
-          <a class="btn btn-primary" href="#quickstart">Get started →</a>
+          <a class="btn btn-primary" href="#install">Get started →</a>
           <a class="btn btn-ghost" href="https://arxiv.org/abs/2606.02080" target="_blank" rel="noopener">Read the paper</a>
         </div>
         <p class="trust reveal" aria-label="Privacy and security highlights">
@@ -93,7 +94,7 @@
       <div class="stat"><div class="num">25</div><div class="lbl">Fiji plugin skill packs</div></div>
       <div class="stat"><div class="num">11</div><div class="lbl">Python &amp; napari skills</div></div>
       <div class="stat"><div class="num">7</div><div class="lbl">specialist agents</div></div>
-      <div class="stat"><div class="num">3</div><div class="lbl">modes: analysis (script-based, click-by-click), education</div></div>
+      <div class="stat"><div class="num">3</div><div class="lbl">modes: full analysis, quick edits, teaching</div></div>
     </div>
 
     <div class="hero-visual reveal">
@@ -105,73 +106,8 @@
         <img src="images/01_chat_and_fiji.png" alt="Agentic-J chat panel next to a live Fiji desktop in the browser" />
       </figure>
       <div class="figcap">
-        <span><b>FIG. 1</b>&nbsp;&nbsp;The chat panel and a live Fiji desktop, served to your browser by noVNC.</span>
+        <span>The chat panel and a live Fiji desktop, served to your browser by noVNC.</span>
       </div>
-    </div>
-  </div>
-</section>
-
-<!-- =================== INDEX =================== -->
-<section id="features">
-  <div class="container">
-    <div class="section-head reveal">
-      <span class="fig-tag">What's inside</span>
-      <h2 class="section-title">More than <span class="outline">Fiji scripting.</span></h2>
-      <p class="section-sub">
-        Agentic-J started as an agent for Fiji scripting. It now covers the rest of the workflow too: Python science
-        libraries, interactive napari work, model training, visual quality control and teaching.
-      </p>
-    </div>
-
-    <div class="index reveal">
-      <a href="#engines">
-        <span class="no">01 <span class="new">NEW</span></span>
-        <h3>Python environments</h3>
-        <p>Cellpose, Cellpose-SAM, Big-FISH, cp_measure, BrainGlobe, scikit-image, scikit-learn and statistics, each in its own conda env.</p>
-        <span class="go">Engines →</span>
-      </a>
-      <a href="#engines">
-        <span class="no">02 <span class="new">NEW</span></span>
-        <h3>napari &amp; micro-sam</h3>
-        <p>The agent drives a live napari viewer over MCP for 3D and interactive work, with Segment Anything for Microscopy.</p>
-        <span class="go">Engines →</span>
-      </a>
-      <a>
-        <span class="no">03 <span class="new">NEW</span></span>
-        <h3>Human-in-the-loop fine-tuning</h3>
-        <p>You correct a handful of tiles and the agent trains micro-sam or Cellpose on them, then measures the result.</p>
-        <span class="go">Fine-tuning →</span>
-      </a>
-      <a>
-        <span class="no">04 <span class="new">NEW</span></span>
-        <h3>VLM judge</h3>
-        <p>A vision-language model looks at inputs, masks and plots and returns PASS, WARN or FAIL with reasons.</p>
-        <span class="go">Visual QA →</span>
-      </a>
-      <a>
-        <span class="no">05 <span class="new">NEW</span></span>
-        <h3>Education mode</h3>
-        <p>A tutor that teaches <em>Introduction to Bioimage Analysis</em> chapter by chapter, with practicals and live demos in Fiji.</p>
-        <span class="go">Education →</span>
-      </a>
-      <a>
-        <span class="no">06 <span class="new">NEW</span></span>
-        <h3>Watchdogs &amp; memory</h3>
-        <p>Catches looping or stalled agents and scripts. A librarian agent keeps the pitfalls and recipes worth remembering.</p>
-        <span class="go">Guardrails →</span>
-      </a>
-      <a href="#engines">
-        <span class="no">07</span>
-        <h3>Groovy or the UI</h3>
-        <p>You get a re-runnable Groovy script, or step-by-step guidance through the Fiji menus. Your choice.</p>
-        <span class="go">Engines →</span>
-      </a>
-      <a>
-        <span class="no">08</span>
-        <h3>Reproducible by default</h3>
-        <p>Every run is a project folder with raw data, scripts, results, figures, logs, a state ledger and an optional QA report.</p>
-        <span class="go">Guardrails →</span>
-      </a>
     </div>
   </div>
 </section>
@@ -180,13 +116,12 @@
 <section id="engines">
   <div class="container">
     <div class="section-head reveal">
-      <span class="fig-tag">Fig. 2 · Three engines</span>
+      <span class="fig-tag">Community tools</span>
       <h2 class="section-title">Fiji, Python and napari <span class="outline">in the same chat.</span></h2>
       <p class="section-sub">
-        The agent picks the right tool for each step. It might segment in Python, measure in Fiji and inspect
-        the result in napari, all from the same chat and within the same project folder.
-        Each tool below comes with a curated skill (API notes, UI guides, tested workflows) that the agent loads
-        when needed. Need something else? Ask the agent to install it, or use Fiji's <code>Help → Update…</code> menu.
+        Agentic-J builds on the plugins and libraries the bioimage community develops and validates, and picks the right one
+        for each step. Each tool below comes with a curated skill that the agent loads when needed. Need something else?
+        Ask the agent to install it.
       </p>
     </div>
 
@@ -199,10 +134,6 @@
         <h3>Fiji / ImageJ</h3>
         <span class="kicker">GROOVY · MACROS · UI GUIDANCE</span>
         <p>A full Fiji with curated plugins. The coder writes Groovy against real plugin APIs, and the debugger reads the ImageJ log and fixes the script with surgical edits.</p>
-        <ul>
-          <li><strong>UI mode</strong>: "do this through the menus" and it walks you through Fiji</li>
-          <li><strong>Dialog help</strong>: it screenshots an open plugin dialog and explains each parameter</li>
-        </ul>
         <div class="skills">
           <div class="chips">
             <span class="chip">3D ImageJ Suite</span><span class="chip">BigStitcher</span><span class="chip">Bio-Formats</span>
@@ -226,12 +157,6 @@
         <h3>Python</h3>
         <span class="kicker">CONDA ENVS · STATS · PUBLICATION PLOTS</span>
         <p>The Python analyst writes scripts for the scientific Python stack. A one-line header selects which of the container's conda environments the script runs in.</p>
-        <ul>
-          <li><strong>Segmentation</strong>: Cellpose 3 and Cellpose-SAM, batch over folders</li>
-          <li><strong>Spots &amp; features</strong>: Big-FISH, cp_measure (the CellProfiler feature set)</li>
-          <li><strong>Atlases</strong>: BrainGlobe registration to neuroanatomical atlases</li>
-          <li><strong>Stats &amp; plots</strong>: scikit-learn, rigorous tests, 300-DPI PNG + SVG figures</li>
-        </ul>
         <div class="skills">
           <div class="chips">
             <span class="chip">Cellpose 3</span><span class="chip">Cellpose-SAM</span><span class="chip">Big-FISH</span>
@@ -249,12 +174,6 @@
         <h3>napari</h3>
         <span class="kicker">MCP · 3D · INTERACTIVE</span>
         <p>A napari viewer is available through the Model Context Protocol. The agent opens layers, adjusts views and hands you tools, and napari opens only when a task needs it.</p>
-        <ul>
-          <li><strong>micro-sam</strong>: Segment Anything for Microscopy, automatic or promptable</li>
-          <li><strong>3D &amp; n-D</strong>: volumes and time series that 2D viewers struggle with</li>
-          <li><strong>Object classifier</strong>: train on a few clicks, then apply to a batch</li>
-          <li><strong>Annotation</strong>: the viewer where you correct masks for fine-tuning</li>
-        </ul>
         <div class="skills">
           <div class="chips">
             <span class="chip">napari viewer</span><span class="chip">micro-sam</span><span class="chip">object classifier</span>
@@ -267,7 +186,7 @@
 </section>
 
 <!-- =================== VLM JUDGE =================== -->
-<!-- Hidden for now: VLM judge section. Remove this wrapper to restore it (it becomes Fig. 3; renumber the figures after it).
+<!-- Hidden for now: VLM judge section. Remove this wrapper to restore it (give it its own Fig. number).
 <section id="judge">
   <div class="container">
     <div class="split">
@@ -349,115 +268,11 @@
 </section>
 -->
 
-<!-- =================== EDUCATION =================== -->
-<!-- Hidden for now: education section. Remove this wrapper to restore it (and renumber Fig. 3 · In action back to Fig. 4).
-<section id="education" class="paper">
-  <div class="container">
-    <div class="split">
-      <div>
-        <div class="section-head reveal">
-          <span class="fig-tag">Fig. 3 · Education mode</span>
-          <h2 class="section-title">Learn bioimage analysis <span class="outline">as you go.</span></h2>
-          <p class="section-sub">
-            Switch to education mode and Agentic-J works as a tutor. It teaches Pete Bankhead's
-            <em>Introduction to Bioimage Analysis</em> (CC-BY 4.0) in order, one chapter at a time, and explains
-            concepts rather than doing the analysis for you.
-          </p>
-        </div>
-
-        <ul class="checklist reveal">
-          <li><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m5 12 5 5 9-10"/></svg>
-            <span><strong>ImageJ and Python tracks</strong> for each chapter, so you learn the concept once and practise it in both tools.</span></li>
-          <li><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m5 12 5 5 9-10"/></svg>
-            <span><strong>Figures open large in Fiji</strong>, and short live demos run on real sample images from the book.</span></li>
-          <li><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m5 12 5 5 9-10"/></svg>
-            <span><strong>Practicals with solutions</strong> that are revealed only when you ask. Progress is saved per chat.</span></li>
-          <li><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m5 12 5 5 9-10"/></svg>
-            <span><strong>Ready for your own data?</strong> The tutor hands you over to exploratory or conventional mode.</span></li>
-        </ul>
-
-        <div class="edu-stats reveal">
-          <div><b>22</b><span>chapters in 5 parts</span></div>
-          <div><b>73</b><span>practicals</span></div>
-          <div><b>24</b><span>bundled sample images</span></div>
-        </div>
-      </div>
-
-      <div class="syllabus reveal" aria-label="Example course progress">
-        <div class="head">
-          <h4>Introduction to Bioimage Analysis</h4>
-          <span>bioimagebook.github.io · CC-BY 4.0</span>
-        </div>
-        <ol>
-          <li class="part">Part 1 · Introducing images</li>
-          <li class="done"><span class="cn">1.1</span><span class="t">Images &amp; pixels</span><span class="tr"><i>IJ</i><i>PY</i></span></li>
-          <li class="done"><span class="cn">1.2</span><span class="t">Measurements &amp; histograms</span><span class="tr"><i>IJ</i><i>PY</i></span></li>
-          <li class="here"><span class="cn">1.3</span><span class="t">Types &amp; bit-depths</span><span class="tr"><i>IJ</i><i>PY</i></span></li>
-          <li><span class="cn">1.4</span><span class="t">Channels &amp; colors</span><span class="tr"><i>IJ</i><i>PY</i></span></li>
-          <li><span class="cn">1.5</span><span class="t">Pixel size &amp; dimensions</span><span class="tr"><i>IJ</i><i>PY</i></span></li>
-          <li class="part">Part 2 · Processing &amp; analysis</li>
-          <li><span class="cn">2.3</span><span class="t">Thresholding</span><span class="tr"><i>IJ</i></span></li>
-          <li><span class="cn">2.4</span><span class="t">Filters</span><span class="tr"><i>IJ</i></span></li>
-          <li><span class="cn">2.5</span><span class="t">Morphological operations</span><span class="tr"><i>IJ</i></span></li>
-          <li class="part">Part 3 · Fluorescence microscopy</li>
-          <li><span class="cn">3.2</span><span class="t">Blur &amp; the PSF</span><span class="tr"></span></li>
-          <li><span class="cn">3.3</span><span class="t">Noise</span><span class="tr"></span></li>
-        </ol>
-        <div class="foot"><span>Now: practical 1.3 (ImageJ). Has this image been clipped?</span><span class="mono">2 / 22 done</span></div>
-      </div>
-    </div>
-  </div>
-</section>
--->
-
-<!-- =================== SCREENSHOTS =================== -->
-<section id="screenshots">
+<!-- =================== INSTALL =================== -->
+<section id="install">
   <div class="container">
     <div class="section-head reveal">
-      <span class="fig-tag">Fig. 3 · In action</span>
-      <h2 class="section-title">What a session <span class="outline">looks like.</span></h2>
-      <p class="section-sub">A typical session: describe the task in plain English, then watch the agent plan, write the script, run it and explain the result.</p>
-    </div>
-
-    <div class="shots">
-      <figure class="shot frame reveal">
-        <img src="images/04_setup_wizard.png" alt="First-run setup wizard" loading="lazy" />
-        <figcaption>
-          <span class="ttl"><b>7a</b>First-run setup wizard</span>
-          <span class="sub">If no API key is found, a wizard asks for one before Fiji launches.</span>
-        </figcaption>
-      </figure>
-      <figure class="shot frame reveal">
-        <img src="images/01_chat_and_fiji.png" alt="The full Agentic-J workspace" loading="lazy" />
-        <figcaption>
-          <span class="ttl"><b>7b</b>The full workspace</span>
-          <span class="sub">Chat panel on the left, live Fiji desktop on the right, both in the browser.</span>
-        </figcaption>
-      </figure>
-      <figure class="shot frame reveal">
-        <img src="images/02_generated_script.png" alt="A generated Groovy script" loading="lazy" />
-        <figcaption>
-          <span class="ttl"><b>7c</b>A real, runnable script</span>
-          <span class="sub">Saved under <code>scripts/</code> with version history, so you can re-run it outside the agent.</span>
-        </figcaption>
-      </figure>
-      <figure class="shot frame reveal">
-        <img class="fit" src="images/03_results_plots.png" alt="Stats and plots" loading="lazy" />
-        <figcaption>
-          <span class="ttl"><b>7d</b>Publication-quality figures</span>
-          <span class="sub">Statistics and plots from the Python analyst, with CSV tables ready to share.</span>
-        </figcaption>
-      </figure>
-    </div>
-  </div>
-</section>
-
-
-<!-- =================== QUICK START =================== -->
-<section id="quickstart">
-  <div class="container">
-    <div class="section-head reveal">
-      <span class="fig-tag">Get started</span>
+      <span class="fig-tag">Install</span>
       <h2 class="section-title">Install <span class="outline">in four steps.</span></h2>
       <p class="section-sub">You'll need Docker, about 8 GB of RAM, about 30 GB of free disk, and an OpenAI <em>or</em> OpenRouter API key.</p>
     </div>
@@ -468,7 +283,8 @@
         <h4>Clone the repo</h4>
         <p>Install <a href="https://git-scm.com/downloads" target="_blank" rel="noopener">Git</a> and <a href="https://git-lfs.com/" target="_blank" rel="noopener">Git LFS</a>, because the knowledge base is stored with LFS.</p>
         <pre class="code"><button class="copy" data-copy>copy</button>git lfs install
-git clone https://github.com/MMV-Lab/Agentic-J.git
+git clone \
+  https://github.com/MMV-Lab/Agentic-J.git
 cd Agentic-J</pre>
       </div>
       <div class="qs-step frame reveal">
@@ -504,6 +320,244 @@ cd Agentic-J</pre>
         <a href="https://github.com/MMV-Lab/Agentic-J#gpu-support-optional" target="_blank" rel="noopener" style="text-decoration:underline;text-underline-offset:3px">GPU guide →</a></p>
       <pre class="code"><button class="copy" data-copy>copy</button>docker compose -f docker-compose.yml \
   -f docker-compose.gpu.yml up -d</pre>
+    </div>
+
+    <figure class="media install-video reveal">
+      <div class="frame window">
+        <div class="win-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">Installing Agentic-J</div></div>
+        <!-- To embed the video, put its YouTube ID in data-youtube, e.g. data-youtube="abc123XYZ". -->
+        <div class="video empty" data-youtube="" data-title="Installing Agentic-J">
+          <span class="play" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
+          <span class="soon">Installation video · coming soon</span>
+        </div>
+      </div>
+    </figure>
+
+    <div class="files reveal">
+      <h3 class="sub-title">Where your files live</h3>
+      <p class="muted-p">The container sees one folder of your computer. Put your images there, and everything the agent writes appears there straight away.</p>
+      <svg font-family="IBM Plex Mono, ui-monospace, monospace" class="mount-svg wide" viewBox="0 0 920 250" role="img" aria-labelledby="mount-t">
+        <title id="mount-t">./data on your computer and /app/data inside the container are the same folder</title>
+        <defs>
+          <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" class="s-head" fill="#a6a5a0"/></marker>
+        </defs>
+        <rect class="s-box" fill="#111111" stroke="rgba(255,255,255,.26)" x="1" y="1" width="378" height="248" rx="6"/>
+        <text class="t-cap" fill="#6f6e6a" font-size="11.5" x="28" y="40">YOUR COMPUTER</text>
+        <text class="t-path" fill="#f3f2ee" font-size="22" x="28" y="84">./data/</text>
+        <text class="t-mono" fill="#a6a5a0" font-size="14" x="28" y="126">├── my_image.tif</text><text class="t-note" fill="#6f6e6a" font-size="13" x="196" y="126">your images</text>
+          <text class="t-mono" fill="#a6a5a0" font-size="14" x="28" y="158">├── projects/</text><text class="t-note" fill="#6f6e6a" font-size="13" x="196" y="158">one folder per analysis</text>
+          <text class="t-mono" fill="#a6a5a0" font-size="14" x="28" y="190">└── chats/</text><text class="t-note" fill="#6f6e6a" font-size="13" x="196" y="190">chat history</text>
+        <rect class="s-box" fill="#111111" stroke="rgba(255,255,255,.26)" x="541" y="1" width="378" height="248" rx="6"/>
+        <text class="t-cap" fill="#6f6e6a" font-size="11.5" x="568" y="40">AGENTIC-J CONTAINER</text>
+        <text class="t-path" fill="#f3f2ee" font-size="22" x="568" y="84">/app/data/</text>
+        <rect class="s-pill" fill="none" stroke="rgba(255,255,255,.26)" x="568" y="112" width="58" height="28" rx="14"/><text class="t-pill" fill="#f3f2ee" font-size="12.5" x="597.0" y="130.5" text-anchor="middle">Fiji</text>
+          <rect class="s-pill" fill="none" stroke="rgba(255,255,255,.26)" x="636" y="112" width="80" height="28" rx="14"/><text class="t-pill" fill="#f3f2ee" font-size="12.5" x="676.0" y="130.5" text-anchor="middle">Python</text>
+          <rect class="s-pill" fill="none" stroke="rgba(255,255,255,.26)" x="726" y="112" width="80" height="28" rx="14"/><text class="t-pill" fill="#f3f2ee" font-size="12.5" x="766.0" y="130.5" text-anchor="middle">napari</text>
+        <text class="t-note" fill="#6f6e6a" font-size="13" x="568" y="186">read your images and write</text>
+        <text class="t-note" fill="#6f6e6a" font-size="13" x="568" y="206">every result back here</text>
+        <line class="s-arrow" stroke="#a6a5a0" stroke-width="1.2" x1="392" y1="112" x2="528" y2="112" marker-end="url(#ah)"/>
+        <line class="s-arrow" stroke="#a6a5a0" stroke-width="1.2" x1="392" y1="140" x2="528" y2="140" marker-start="url(#ah)"/>
+        <text class="t-link" fill="#a6a5a0" font-size="12" x="460" y="94" text-anchor="middle">same folder</text>
+      </svg>
+      <svg font-family="IBM Plex Mono, ui-monospace, monospace" class="mount-svg narrow" style="display:none" viewBox="0 0 360 520" role="img" aria-labelledby="mount-t2">
+        <title id="mount-t2">./data on your computer and /app/data inside the container are the same folder</title>
+        <defs>
+          <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" class="s-head" fill="#a6a5a0"/></marker>
+        </defs>
+        <rect class="s-box" fill="#111111" stroke="rgba(255,255,255,.26)" x="1" y="1" width="358" height="210" rx="6"/>
+        <text class="t-cap" fill="#6f6e6a" font-size="11.5" x="24" y="38">YOUR COMPUTER</text>
+        <text class="t-path" fill="#f3f2ee" font-size="22" x="24" y="80">./data/</text>
+        <text class="t-mono" fill="#a6a5a0" font-size="14" x="24" y="120">├── my_image.tif</text><text class="t-note" fill="#6f6e6a" font-size="13" x="192" y="120">your images</text>
+          <text class="t-mono" fill="#a6a5a0" font-size="14" x="24" y="152">├── projects/</text><text class="t-note" fill="#6f6e6a" font-size="13" x="192" y="152">one folder per analysis</text>
+          <text class="t-mono" fill="#a6a5a0" font-size="14" x="24" y="184">└── chats/</text><text class="t-note" fill="#6f6e6a" font-size="13" x="192" y="184">chat history</text>
+        <line class="s-arrow" stroke="#a6a5a0" stroke-width="1.2" x1="164" y1="224" x2="164" y2="296" marker-end="url(#ah2)"/>
+        <line class="s-arrow" stroke="#a6a5a0" stroke-width="1.2" x1="196" y1="224" x2="196" y2="296" marker-start="url(#ah2)"/>
+        <text class="t-link" fill="#a6a5a0" font-size="12" x="214" y="264">same folder</text>
+        <rect class="s-box" fill="#111111" stroke="rgba(255,255,255,.26)" x="1" y="309" width="358" height="210" rx="6"/>
+        <text class="t-cap" fill="#6f6e6a" font-size="11.5" x="24" y="346">AGENTIC-J CONTAINER</text>
+        <text class="t-path" fill="#f3f2ee" font-size="22" x="24" y="388">/app/data/</text>
+        <rect class="s-pill" fill="none" stroke="rgba(255,255,255,.26)" x="24" y="414" width="58" height="28" rx="14"/><text class="t-pill" fill="#f3f2ee" font-size="12.5" x="53.0" y="432.5" text-anchor="middle">Fiji</text>
+          <rect class="s-pill" fill="none" stroke="rgba(255,255,255,.26)" x="92" y="414" width="80" height="28" rx="14"/><text class="t-pill" fill="#f3f2ee" font-size="12.5" x="132.0" y="432.5" text-anchor="middle">Python</text>
+          <rect class="s-pill" fill="none" stroke="rgba(255,255,255,.26)" x="182" y="414" width="80" height="28" rx="14"/><text class="t-pill" fill="#f3f2ee" font-size="12.5" x="222.0" y="432.5" text-anchor="middle">napari</text>
+        <text class="t-note" fill="#6f6e6a" font-size="13" x="24" y="476">read your images and write</text>
+        <text class="t-note" fill="#6f6e6a" font-size="13" x="24" y="496">every result back here</text>
+      </svg>
+    </div>
+  </div>
+</section>
+
+<!-- =================== DEMOS =================== -->
+<section id="demos">
+  <div class="container">
+    <div class="section-head reveal">
+      <span class="fig-tag">Demonstrations</span>
+      <h2 class="section-title">One agent, <span class="outline">four ways to work.</span></h2>
+      <p class="section-sub">Let it run the analysis, fine-tune a model with you, guide you click by click, or teach you.</p>
+    </div>
+
+    <div class="demo-tabs reveal">
+      <div class="tabs" role="tablist" aria-label="Ways to work">
+        <button class="tab" role="tab" id="tab-prompt" aria-controls="panel-prompt" aria-selected="true">Plugins from a prompt</button>
+        <button class="tab" role="tab" id="tab-finetune" aria-controls="panel-finetune" aria-selected="false" tabindex="-1">Fine-tuning</button>
+        <button class="tab" role="tab" id="tab-ui" aria-controls="panel-ui" aria-selected="false" tabindex="-1">Click by click</button>
+        <button class="tab" role="tab" id="tab-teach" aria-controls="panel-teach" aria-selected="false" tabindex="-1">Teaching mode</button>
+      </div>
+      <div class="demo-panel" role="tabpanel" id="panel-prompt" aria-labelledby="tab-prompt">
+        <div class="frame window">
+          <div class="win-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">Plugins from a prompt</div></div>
+          <div class="video empty" data-youtube="" data-title="Plugins from a prompt">
+            <span class="play" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
+            <span class="soon">Demo video · coming soon</span>
+          </div>
+        </div>
+        <p class="demo-desc">Describe what you want to measure. The agent picks a suitable plugin, such as TrackMate, StarDist or MorphoLibJ, writes a Groovy script against its real API, runs it in Fiji and fixes it when the ImageJ log shows an error. You keep the script and can re-run it outside the agent.</p>
+      </div>
+      <div class="demo-panel" role="tabpanel" id="panel-finetune" aria-labelledby="tab-finetune" hidden>
+        <div class="frame window">
+          <div class="win-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">Fine-tuning</div></div>
+          <div class="video empty" data-youtube="" data-title="Fine-tuning">
+            <span class="play" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
+            <span class="soon">Demo video · coming soon</span>
+          </div>
+        </div>
+        <p class="demo-desc">Pick a few tiles in napari and correct the current model's mistakes instead of drawing from scratch. The agent fine-tunes <strong>micro-sam</strong> or <strong>Cellpose</strong> on your corrections, scores the new model against the stock one, and only then runs it on the whole dataset.</p>
+      </div>
+      <div class="demo-panel" role="tabpanel" id="panel-ui" aria-labelledby="tab-ui" hidden>
+        <div class="frame window">
+          <div class="win-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">Click by click</div></div>
+          <div class="video empty" data-youtube="Kmk4LGmj-OE" data-title="Click by click">
+            <span class="play" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
+            <span class="soon">Demo video · coming soon</span>
+          </div>
+        </div>
+        <p class="demo-desc">Prefer to stay in control? Say "do this through the menus" and the agent walks you through Fiji step by step instead of writing a script. It can also read an open plugin dialog and explain each parameter.</p>
+      </div>
+      <div class="demo-panel" role="tabpanel" id="panel-teach" aria-labelledby="tab-teach" hidden>
+        <div class="frame window">
+          <div class="win-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">Teaching mode</div></div>
+          <div class="video empty" data-youtube="" data-title="Teaching mode">
+            <span class="play" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
+            <span class="soon">Demo video · coming soon</span>
+          </div>
+        </div>
+        <p class="demo-desc">In education mode Agentic-J works as a tutor. It teaches Pete Bankhead's <em>Introduction to Bioimage Analysis</em> (CC-BY 4.0) one chapter at a time, with ImageJ and Python practicals and live demos on the book's sample images.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =================== REPRODUCIBILITY =================== -->
+<!-- Folder tree: setup_analysis_workspace (src/imagentj/tools/file_tools.py) + user_guide/04.
+     Ledger: verbatim excerpt of data/projects/earthworm_mouse_trabecular_architecture/state_ledger.json, long values cut with "...".
+     Report headings: skills/workflow/workflow-documentation/SKILL.md. -->
+<section id="reproducibility">
+  <div class="container">
+    <div class="section-head reveal">
+      <span class="fig-tag">Reproducibility</span>
+      <h2 class="section-title">Reproducible <span class="outline">by default.</span></h2>
+      <p class="section-sub">
+        Every analysis becomes a self-contained project folder with the raw data, scripts, results, figures and logs.
+        A state ledger records each step as it happens, and at the end the agent writes a workflow report from it.
+      </p>
+    </div>
+
+    <div class="repro">
+      <div class="reveal">
+        <h3 class="sub-title">The project folder</h3>
+        <p class="muted-p">Created by the agent when an analysis starts.</p>
+        <div class="frame window">
+          <div class="win-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">data/projects/my_project/</div></div>
+          <pre class="code bare">├── raw_images/              <span class="tok-c">copy of your source images</span>
+├── processed_images/
+│   ├── channels/            <span class="tok-c">split or pre-processed TIFFs</span>
+│   └── montages/            <span class="tok-c">overview images</span>
+├── scripts/
+│   ├── imagej/              <span class="tok-c">generated Groovy scripts</span>
+│   └── python/              <span class="tok-c">stats &amp; plotting scripts</span>
+├── data/                    <span class="tok-c">measurement CSVs, tables</span>
+├── figures/                 <span class="tok-c">plots, publication figures</span>
+├── logs/                    <span class="tok-c">execution logs</span>
+├── <b>state_ledger.json</b>
+├── <b>Workflow_Documentation.md</b>
+└── <b>QA_Checklist_Report.md</b>   <span class="tok-c">if QA is enabled</span></pre>
+        </div>
+      </div>
+
+      <div class="reveal">
+        <h3 class="sub-title">The state ledger</h3>
+        <p class="muted-p">Excerpt from a real project: BoneJ trabecular morphometry of micro-CT scans. Long values are shortened.</p>
+        <div class="frame window">
+          <div class="win-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">state_ledger.json</div></div>
+          <pre class="code bare">{
+  <span class="tok-v">"project_root"</span>: <span class="tok-s">"/app/data/projects/earthworm_mouse_trabecular_architecture"</span>,
+  <span class="tok-v">"scientific_goal"</span>: <span class="tok-s">"Quantify L3 trabecular bone volume fraction, ..."</span>,
+  <span class="tok-v">"operating_mode"</span>: <span class="tok-s">"script"</span>,
+  <span class="tok-v">"key_decisions"</span>: [ ... ],
+  <span class="tok-v">"image_metadata"</span>: {
+    <span class="tok-v">"bit_depth"</span>: 8, ..., <span class="tok-v">"n_images"</span>: 67, ..., <span class="tok-v">"modality"</span>: <span class="tok-s">"microCT"</span>, ...
+  },
+  ...
+  <span class="tok-v">"recommended_plugin"</span>: <span class="tok-s">"BoneJ"</span>,
+  <span class="tok-v">"completed_steps"</span>: [
+    ...
+    {
+      <span class="tok-v">"phase"</span>: <span class="tok-s">"4b"</span>,
+      <span class="tok-v">"step"</span>: <span class="tok-s">"bonej_batch_measurement"</span>,
+      <span class="tok-v">"status"</span>: <span class="tok-s">"completed"</span>,
+      <span class="tok-v">"details"</span>: <span class="tok-s">"Approved BoneJ pipeline processed all 66 ..."</span>,
+      <span class="tok-v">"timestamp"</span>: <span class="tok-s">"2026-10-05T14:55:00Z"</span>,
+      <span class="tok-v">"script_path"</span>: <span class="tok-s">".../scripts/imagej/phase4b_batch_bonej_all_specimens.groovy"</span>,
+      <span class="tok-v">"output_paths"</span>: [ <span class="tok-s">".../data/specimens_bonej_raw.csv"</span>, ... ],
+      <span class="tok-v">"parameters"</span>: { ..., <span class="tok-v">"processed_specimens"</span>: 66, <span class="tok-v">"errors"</span>: 0, ... }
+    },
+    ...
+  ],
+  <span class="tok-v">"current_phase"</span>: <span class="tok-s">"7"</span>
+}</pre>
+        </div>
+        <p class="muted-p small">The ledger lives on disk and its list of steps is append-only, so it survives context compaction in long sessions.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =================== DOCS =================== -->
+<section id="docs">
+  <div class="container">
+    <div class="section-head reveal">
+      <span class="fig-tag">Documentation</span>
+      <h2 class="section-title">Read <span class="outline">the docs.</span></h2>
+      <p class="section-sub">Each guide is a single page, and together they take about 15 minutes to read.</p>
+    </div>
+
+    <div class="doc-grid reveal">
+      <a class="doc-card" href="https://github.com/MMV-Lab/Agentic-J/blob/main/user_guide/01_getting_started.md" target="_blank" rel="noopener">
+        <span class="num">01</span><h4>Getting started</h4><p>Prerequisites, <code>.env</code> setup, API keys, starting the container.</p><span class="arrow">Read →</span>
+      </a>
+      <a class="doc-card" href="https://github.com/MMV-Lab/Agentic-J/blob/main/user_guide/02_interface_and_agents.md" target="_blank" rel="noopener">
+        <span class="num">02</span><h4>Interface &amp; agents</h4><p>The noVNC interface, the agent architecture, supported plugins.</p><span class="arrow">Read →</span>
+      </a>
+      <a class="doc-card" href="https://github.com/MMV-Lab/Agentic-J/blob/main/user_guide/03_prompting.md" target="_blank" rel="noopener">
+        <span class="num">03</span><h4>Prompting</h4><p>How to write effective prompts, with before-and-after examples.</p><span class="arrow">Read →</span>
+      </a>
+      <a class="doc-card" href="https://github.com/MMV-Lab/Agentic-J/blob/main/user_guide/04_data_history_and_reports.md" target="_blank" rel="noopener">
+        <span class="num">04</span><h4>Data &amp; reports</h4><p>Where files live, chat history, usage reports, issue reporting.</p><span class="arrow">Read →</span>
+      </a>
+      <a class="doc-card" href="https://github.com/MMV-Lab/Agentic-J/blob/main/user_guide/05_security.md" target="_blank" rel="noopener">
+        <span class="num">05</span><h4>Security</h4><p>Local-only by default, container hardening, key handling.</p><span class="arrow">Read →</span>
+      </a>
+      <a class="doc-card" href="https://github.com/MMV-Lab/Agentic-J#gpu-support-optional" target="_blank" rel="noopener">
+        <span class="num">06</span><h4>GPU setup</h4><p>CUDA builds, driver requirements, CDI, and verifying the GPU is used.</p><span class="arrow">Read →</span>
+      </a>
+    </div>
+
+    <div class="cta-band frame reveal">
+      <h3>Try it on <span class="outline">your own data.</span></h3>
+      <p>Put a TIFF in <code>./data/</code>, describe what you want, and the agent takes it from there to masks, tables and plots. Found a bug or have an idea? Let us know.</p>
+      <div class="actions">
+        <a class="btn btn-primary" href="#install">Get started →</a>
+        <a class="btn btn-ghost" href="https://github.com/MMV-Lab/Agentic-J" target="_blank" rel="noopener">Star on GitHub ★</a>
+      </div>
     </div>
   </div>
 </section>
@@ -544,46 +598,6 @@ cd Agentic-J</pre>
   </div>
 </section>
 
-<!-- =================== DOCS =================== -->
-<section id="docs">
-  <div class="container">
-    <div class="section-head reveal">
-      <span class="fig-tag">Documentation</span>
-      <h2 class="section-title">Read <span class="outline">the docs.</span></h2>
-      <p class="section-sub">Each guide is a single page, and together they take about 15 minutes to read.</p>
-    </div>
-
-    <div class="doc-grid reveal">
-      <a class="doc-card" href="https://github.com/MMV-Lab/Agentic-J/blob/main/user_guide/01_getting_started.md" target="_blank" rel="noopener">
-        <span class="num">01</span><h4>Getting started</h4><p>Prerequisites, <code>.env</code> setup, API keys, starting the container.</p><span class="arrow">Read →</span>
-      </a>
-      <a class="doc-card" href="https://github.com/MMV-Lab/Agentic-J/blob/main/user_guide/02_interface_and_agents.md" target="_blank" rel="noopener">
-        <span class="num">02</span><h4>Interface &amp; agents</h4><p>The noVNC interface, the agent architecture, supported plugins.</p><span class="arrow">Read →</span>
-      </a>
-      <a class="doc-card" href="https://github.com/MMV-Lab/Agentic-J/blob/main/user_guide/03_prompting.md" target="_blank" rel="noopener">
-        <span class="num">03</span><h4>Prompting</h4><p>How to write effective prompts, with before-and-after examples.</p><span class="arrow">Read →</span>
-      </a>
-      <a class="doc-card" href="https://github.com/MMV-Lab/Agentic-J/blob/main/user_guide/04_data_history_and_reports.md" target="_blank" rel="noopener">
-        <span class="num">04</span><h4>Data &amp; reports</h4><p>Where files live, chat history, usage reports, issue reporting.</p><span class="arrow">Read →</span>
-      </a>
-      <a class="doc-card" href="https://github.com/MMV-Lab/Agentic-J/blob/main/user_guide/05_security.md" target="_blank" rel="noopener">
-        <span class="num">05</span><h4>Security</h4><p>Local-only by default, container hardening, key handling.</p><span class="arrow">Read →</span>
-      </a>
-      <a class="doc-card" href="https://github.com/MMV-Lab/Agentic-J#gpu-support-optional" target="_blank" rel="noopener">
-        <span class="num">06</span><h4>GPU setup</h4><p>CUDA builds, driver requirements, CDI, and verifying the GPU is used.</p><span class="arrow">Read →</span>
-      </a>
-    </div>
-
-    <div class="cta-band frame reveal">
-      <h3>Try it on <span class="outline">your own data.</span></h3>
-      <p>Put a TIFF in <code>./data/</code>, describe what you want, and the agent takes it from there to masks, tables and plots. Found a bug or have an idea? Let us know.</p>
-      <div class="actions">
-        <a class="btn btn-primary" href="#quickstart">Get started →</a>
-        <a class="btn btn-ghost" href="https://github.com/MMV-Lab/Agentic-J" target="_blank" rel="noopener">Star on GitHub ★</a>
-      </div>
-    </div>
-  </div>
-</section>
 
 </main>
 
@@ -607,9 +621,11 @@ cd Agentic-J</pre>
 
       <div>
         <h5>Project</h5>
-        <a href="#engines">Engines</a>
-        <!-- <a href="#judge">VLM judge</a> -->
-        <!-- <a href="#education">Education mode</a> -->
+        <a href="#overview">Overview</a>
+        <a href="#install">Install</a>
+        <a href="#demos">Demos</a>
+        <a href="#reproducibility">Reproducibility</a>
+        <a href="#paper">Cite</a>
       </div>
 
       <div>
@@ -637,6 +653,6 @@ cd Agentic-J</pre>
   </div>
 </footer>
 
-<script src="js/main.js"></script>
+<script src="js/main.js?v=2026-10-20b"></script>
 </body>
 </html>
