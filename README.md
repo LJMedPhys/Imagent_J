@@ -8,7 +8,7 @@ Prerequisites:
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or Docker Engine + Compose on Linux)
 - [Git](https://git-scm.com/downloads) **and** [Git LFS](https://git-lfs.com/) — the RAG vector database (`qdrant_data/**/storage.sqlite`) is stored via Git LFS, so a plain clone without LFS will give you stub files that won't work.
-- ~8 GB RAM and ~30 GB free disk
+- ~12 GB RAM and ~30 GB free disk
 - An OpenAI **or** OpenRouter API key
 
 > The optional VLM Judge uses `google/gemini-3.5-flash` when

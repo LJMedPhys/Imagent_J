@@ -3,7 +3,7 @@
 ## What you need
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (on Linux, Docker Engine with Compose also works). Docker runs Agentic-J in its own isolated box (a "container"), so you don't have to install Fiji, napari or Python yourself.
-- At least 8 GB of RAM (16 GB is more comfortable for large images) and 50 GB of free disk space.
+- At least 12 GB of RAM (16 GB is more comfortable for large images) and 50 GB of free disk space.
 - An API key from **OpenAI** or **OpenRouter**. This is what lets Agentic-J use the AI models. Usage is billed by the provider (see [Usage reports](04_data_history_and_reports.md#usage-reports)).
 
 ---

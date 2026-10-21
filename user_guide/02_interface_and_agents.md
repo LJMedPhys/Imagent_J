@@ -98,7 +98,7 @@ Agentic-J takes a screenshot of the window, explains each setting and suggests v
 
 Agentic-J comes with detailed instructions for these tools, so it uses them more reliably:
 
-3D ImageJ Suite · BigStitcher · Bio-Formats · BioVoxxel Toolbox · BoneJ · bUnwarpJ · Cellpose · CLIJ2 · Coloc 2 · CSBDeep · DeepImageJ · FeatureJ · ilastik · Labkit · MIST · MorphoLibJ · NeuronJ · OrientationJ · Sholl Analysis · SNT · StackReg · StarDist · TrackMate (including the StarDist and Cellpose detectors) · TransformJ · TurboReg · **napari** and **micro-sam** (see [chapter 06](06_napari_and_fine_tuning.md))
+3D ImageJ Suite · BigStitcher · Bio-Formats · BioVoxxel Toolbox · BoneJ · bUnwarpJ · Cellpose · CLIJ2 · Coloc 2 · CSBDeep · DeepImageJ · FeatureJ · Labkit · MorphoLibJ · NeuronJ · OrientationJ · Sholl Analysis · SNT · StackReg · StarDist · TrackMate (including the StarDist and Cellpose detectors) · TransformJ · TurboReg · **napari** and **micro-sam** (see [chapter 06](06_napari_and_fine_tuning.md))
 
 The Fiji `Plugins` menu may be too long to show everything. To find a plugin, use the Fiji search bar or `Plugins > Utilities > Find Commands...`.
 
