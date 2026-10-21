@@ -20,7 +20,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Open+Sans:ital,wght@0,400..700;1,400..600&display=swap" rel="stylesheet">
 
-<link rel="stylesheet" href="css/styles.css?v=2026-10-21d" />
+<link rel="stylesheet" href="css/styles.css?v=2026-10-21e" />
 <script>document.documentElement.classList.remove('no-js');</script>
 </head>
 <body>
@@ -425,11 +425,9 @@ docker compose up</pre>
       </div>
       <div class="demo-panel" role="tabpanel" id="panel-finetune" aria-labelledby="tab-finetune" hidden>
         <div class="frame window">
-          <div class="win-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">Fine-tuning</div></div>
-          <div class="video empty" data-youtube="" data-title="Fine-tuning">
-            <span class="play" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
-            <span class="soon">Demo video · coming soon</span>
-          </div>
+          <div class="win-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">napari — Annotation Helper</div></div>
+          <img src="images/05_finetuning_annotation.jpg" width="1800" height="873" loading="lazy"
+               alt="napari with the Agentic-J annotation helper: tile 3 of 20 of a micrograph, with objects outlined inside a cell and buttons to add, draw or delete objects and move to the next tile" />
         </div>
         <p class="demo-desc">Pick a few tiles in napari and correct the current model's mistakes instead of drawing from scratch. The agent fine-tunes <strong>micro-sam</strong> or <strong>Cellpose</strong> on your corrections, scores the new model against the stock one, and only then runs it on the whole dataset.</p>
       </div>
@@ -670,6 +668,6 @@ docker compose up</pre>
   </div>
 </footer>
 
-<script src="js/main.js?v=2026-10-21d"></script>
+<script src="js/main.js?v=2026-10-21e"></script>
 </body>
 </html>
