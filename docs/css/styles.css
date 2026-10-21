@@ -505,7 +505,7 @@ h2.section-title {
 .qs-step h4 { font-size: 17px; font-weight: 500; margin-bottom: 8px; }
 .qs-step p { color: var(--muted); font-size: 14px; margin-bottom: 14px; }
 .qs-step p a { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--line-2); }
-.qs-step .code { margin-top: auto; }
+.qs-step .code { flex: 1; }
 .gpu-note {
   margin-top: 20px; padding: 20px 22px;
   display: grid; grid-template-columns: auto 1fr auto; gap: 18px; align-items: center;
@@ -657,3 +657,10 @@ a.ul { text-decoration: underline; text-underline-offset: 3px; }
 @media (max-width: 520px) { .qs-step .code, .gpu-note .code { font-size: 11px; } }
 .yt-link { display: inline-block; margin-top: 10px; font-size: 13px; color: var(--faint); text-decoration: underline; text-underline-offset: 3px; }
 .yt-link:hover { color: var(--text); }
+
+/* Changing the API key later */
+.key-note { margin-top: 20px; padding: 20px 22px; border: 1px dashed var(--line-2); border-radius: var(--radius); }
+.key-note h4 { font-size: 17px; font-weight: 500; }
+.key-note p { color: var(--muted); font-size: 14px; margin-top: 8px; max-width: 760px; }
+.key-note .code { margin-top: 12px; }
+kbd { font-family: var(--font-mono); font-size: .86em; padding: 1px 5px; border: 1px solid var(--line-2); border-radius: 3px; color: var(--text); }

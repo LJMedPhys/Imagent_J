@@ -20,7 +20,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Open+Sans:ital,wght@0,400..700;1,400..600&display=swap" rel="stylesheet">
 
-<link rel="stylesheet" href="css/styles.css?v=2026-10-21a" />
+<link rel="stylesheet" href="css/styles.css?v=2026-10-21d" />
 <script>document.documentElement.classList.remove('no-js');</script>
 </head>
 <body>
@@ -290,9 +290,10 @@ cd Agentic-J</pre>
       <div class="qs-step frame reveal">
         <span class="num">ii.</span>
         <h4>Add your key</h4>
-        <p>Copy the template and fill in one key. If you skip this step, a setup wizard will ask for it.</p>
+        <p>Copy the template, open it in a text editor and fill in one key. In <code>nano</code>, save with <kbd>Ctrl+O</kbd>, <kbd>Enter</kbd> and exit with <kbd>Ctrl+X</kbd>; on Windows, <code>notepad .env</code> works too. If you skip this step, a setup wizard will ask for the key.</p>
         <pre class="code"><button class="copy" data-copy>copy</button>cp .env.template .env
-<span class="tok-c"># then set one of:</span>
+nano .env
+<span class="tok-c"># set one of:</span>
 <span class="tok-v">OPENAI_API_KEY</span>=<span class="tok-s">sk-...</span>
 <span class="tok-v">OPEN_ROUTER_API_KEY</span>=<span class="tok-s">sk-...</span></pre>
       </div>
@@ -314,6 +315,16 @@ cd Agentic-J</pre>
       </div>
     </div>
 
+    <div class="key-note reveal">
+      <h4>Changing the key later</h4>
+      <p>Edit <code>.env</code> again (<code>nano .env</code>), then restart so the container reads it:</p>
+      <pre class="code"><button class="copy" data-copy>copy</button>docker compose down
+docker compose up</pre>
+      <p>If you entered a key in the setup wizard, it is saved inside the container and takes precedence over <code>.env</code>.
+        Remove it once before restarting:</p>
+      <pre class="code"><button class="copy" data-copy>copy</button>docker compose exec imagentj rm /home/imagentj/api_keys.env</pre>
+    </div>
+
     <div class="gpu-note frame reveal">
       <h4>Have an NVIDIA GPU?</h4>
       <p>The GPU build accelerates Cellpose, StarDist, micro-sam and fine-tuning. It needs driver 560+, nvidia-container-toolkit and CDI enabled in Docker.
@@ -326,7 +337,7 @@ cd Agentic-J</pre>
       <div class="frame window">
         <div class="win-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">Installing Agentic-J</div></div>
         <!-- To embed the video, put its YouTube ID in data-youtube, e.g. data-youtube="abc123XYZ". -->
-        <div class="video empty" data-youtube="" data-title="Installing Agentic-J">
+        <div class="video empty" data-youtube="5NiPm7hRKfk" data-title="Installing Agentic-J">
           <span class="play" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
           <span class="soon">Installation video · coming soon</span>
         </div>
@@ -659,6 +670,6 @@ cd Agentic-J</pre>
   </div>
 </footer>
 
-<script src="js/main.js?v=2026-10-21a"></script>
+<script src="js/main.js?v=2026-10-21d"></script>
 </body>
 </html>
