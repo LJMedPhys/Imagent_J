@@ -114,6 +114,33 @@ print(f'[entrypoint] fine-tuned Cellpose models: {linked} linked, {pruned} stale
       f'symlinks pruned, {len(current_names)} custom names registered', flush=True)
 PYEOF
 
+# ── Guarantee a writable micro_sam model cache ───────────────────────────────
+# MICROSAM_CACHEDIR is baked into the image and the checkpoints are pre-fetched there,
+# but /home/imagentj is a NAMED VOLUME. On any deployment whose volume predates that
+# bake, the volume shadows the image layer: ~/.cache/micro_sam survives as an empty,
+# ROOT-OWNED directory, and this entrypoint runs as imagentj, so it cannot be chowned
+# or written into. Every micro_sam model load then dies with
+#   PermissionError: [Errno 13] '/home/imagentj/.cache/micro_sam/models'
+# — the annotator, automatic segmentation, and the whole fine-tuning workflow alike,
+# with a traceback that points at pooch and gives no hint that a stale volume is the
+# cause. Probe it for real (mkdir + write, not a permission bit) and fall back to the
+# data bind mount, which is writable by construction.
+_MS_CACHE="${MICROSAM_CACHEDIR:-$HOME/.cache/micro_sam}"
+if ! ( mkdir -p "$_MS_CACHE/models" && touch "$_MS_CACHE/models/.writable" ) 2>/dev/null; then
+    export MICROSAM_CACHEDIR=/app/data/.micro_sam_cache
+    mkdir -p "$MICROSAM_CACHEDIR/models"
+    echo "[entrypoint] WARNING: $_MS_CACHE is not writable (stale named volume?) —"
+    echo "[entrypoint]          micro_sam model cache redirected to $MICROSAM_CACHEDIR"
+    # Backfill whatever the image baked, so the redirect costs no re-download.
+    for _seed in "$_MS_CACHE/models" /home/imagentj.seed/.cache/micro_sam/models \
+                 /opt/imagentj-seed/.cache/micro_sam/models; do
+        [ -d "$_seed" ] && cp -n "$_seed"/* "$MICROSAM_CACHEDIR/models/" 2>/dev/null || true
+    done
+    echo "[entrypoint]          cache now holds: $(ls "$MICROSAM_CACHEDIR/models" 2>/dev/null | tr '\n' ' ')"
+else
+    rm -f "$_MS_CACHE/models/.writable"
+fi
+
 # ── Lock environment snapshot read-only ──────────────────────────────────────
 # The agent reads this file via check_environment() to know what's installed.
 # It must never be edited at runtime — frozen artifact of the image build.

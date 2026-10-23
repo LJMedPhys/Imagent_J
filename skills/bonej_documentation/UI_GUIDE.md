@@ -1,6 +1,6 @@
 # BoneJ — UI Guide
 
-This guide keeps to the BoneJ menu surface that is either container-validated in this repo or directly documented on the official BoneJ page.
+Menu paths and dialog labels below were read from the installed BoneJ 7.2.2 commands (`CommandService`) in the container Fiji.
 
 ## Installation
 
@@ -17,7 +17,7 @@ Enable BoneJ from Fiji's updater:
 
 Menu path: `Plugins > BoneJ > Table > Clear BoneJ results`
 
-BoneJ measurement wrappers share one BoneJ results table. Clear it before starting a new measurement chain if you want a fresh row or a fresh set of columns.
+BoneJ measurement wrappers share one BoneJ results table, with one row per image name. Clear it before starting a new measurement chain if you want a fresh row or a fresh set of columns.
 
 ## Thickness
 
@@ -39,7 +39,10 @@ Documented controls:
 Expected outputs:
 
 - summary values for `Tb.Th` and/or `Tb.Sp`
-- one or two 32-bit thickness map windows when map display is enabled
+- one or two 32-bit thickness map windows (`<name>_Tb.Th`, `<name>_Tb.Sp`) when map display is enabled
+- values are local-thickness diameters in the image's calibrated unit
+
+If the image is calibrated in `µm`, the menu command may fail with `Cannot parse unit: µm`. In that case set `Image > Properties > Unit of length` to `micron` and run it again.
 
 ## Area/Volume Fraction
 
@@ -59,9 +62,9 @@ Expected outputs:
 
 When this command is run after another BoneJ measurement without clearing the BoneJ table first, the same BoneJ results row can gain additional columns.
 
-## Connectivity (Modern)
+## Connectivity
 
-Menu path: `Plugins > BoneJ > Connectivity > Connectivity (Modern)`
+Menu path: `Plugins > BoneJ > Connectivity`
 
 Official input rules:
 
@@ -74,10 +77,16 @@ Official caveat:
 
 Expected outputs:
 
-- `Euler char. (χ)`
-- `Corr. Euler (χ + Δχ)`
+- `Euler ch.`
+- `Δ(χ)`
 - `Connectivity`
-- `Conn.D`
+- `Conn.D (unit^-3)`
+
+## Purify
+
+Menu path: `Plugins > BoneJ > Purify`
+
+Keeps the largest foreground particle and the largest background particle, which fills cavities. Controls: `Performance Log` and `Make copy`. The copy is named `<name>_purified`, and BoneJ results for it go into a separate table row.
 
 ## Surface Fraction
 
@@ -131,11 +140,13 @@ Documented controls:
 - `Directions`
 - `Lines per direction`
 - `Sampling increment`
-- `Recommended minimum`
+- `Recommended minimums`
 - `Show radii`
 - `Show Eigens`
 - `Display MIL vectors`
 - `Print MIL vectors`
+
+Defaults: 2000 directions × 10000 lines. The `Sampling increment` must be filled in.
 
 Practical note from the validated container pass:
 
@@ -160,9 +171,10 @@ Expected outputs in the UI docs:
 - `Surface area`
 - optional STL export
 
-Practical note from the validated container pass:
+Practical notes from the validated container pass:
 
-- The menu item is part of BoneJ's official UI surface, but the checked-in scripting path in this repo uses lower-level marching-cubes and boundary-size ops because `SurfaceAreaWrapper` canceled silently in the local Fiji runtime.
+- The `STL directory` field is required even when `Export STL` is unchecked. Leaving it empty opens a directory chooser.
+- BoneJ appends the file name to the chosen path without a `/`. Choosing `/data/meshes` writes `/data/meshesimage_.stl`, next to the folder rather than inside it.
 
 ## Skeletonise
 
@@ -192,22 +204,30 @@ Official input rules:
 
 Documented controls:
 
-- `Prune cycle method`
+- `Cycle pruning method` (`None`, `Shortest branch`, `Lowest intensity voxel`, `Lowest intensity branch`)
 - `Prune ends`
-- `Calculate shortest paths`
-- `Verbose`
-- `Display skeletons`
+- `Calculate largest shortest paths`
+- `Show detailed info`
+- `Display skeleton images`
 
 Expected outputs:
 
-- a skeleton statistics table
-- optional labelled skeleton and shortest-path images when those outputs are requested
+- a skeleton statistics table, one row per skeleton (connected component)
+- optional tagged/labelled skeleton and shortest-path images when those outputs are requested
+- a `Skeleton of <name>` window when the input was a mask and not already a skeleton
 
 ## Other BoneJ Menus In Scope As Documentation Only
 
-These menus are part of BoneJ's official UI surface, but they are not the checked-in automation path in this skill:
+These menus exist in the installed BoneJ but are not part of this skill's validated workflows:
 
 - `Plugins > BoneJ > Slice Geometry`
+- `Plugins > BoneJ > Moments of Inertia`
+- `Plugins > BoneJ > Particle Analyser`
+- `Plugins > BoneJ > Fit Sphere`, `Fit ellipsoid`
+- `Plugins > BoneJ > Ellipsoid Factor`
+- `Plugins > BoneJ > Inter-trabecular angles`
+- `Plugins > BoneJ > Analyze > Calibrate SCANCO`, `Orientation`
+- `Image > Stacks > Check Voxel Depth`, `Delete Slice Range`
 
 ## BoneJ Plus Menu
 

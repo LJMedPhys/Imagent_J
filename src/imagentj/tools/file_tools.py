@@ -22,7 +22,7 @@ import platform
 
 
 # Limits for CPU-optimized performance
-MAX_CONTEXT_CHARS = 30000  # ~6,000 to 8,000 tokens
+MAX_CONTEXT_CHARS = 60000  # ~15,000 tokens; covers every skill doc (largest ~53k chars), which must be read whole, not RAG-chunked
 MAX_CONTEXT_PDF_PAGES = 3  # Small enough for immediate reading
 
 def shadow_ingest_upgrade(file_path: str, vector_store, file_hash: str):
@@ -168,7 +168,7 @@ def smart_file_reader(file_path: str):
     an agent falls into a save→read→save loop that never terminates.
 
     Logic:
-    - Small files (<15KB or <3 pages): Returns 'context' type. You must prepend
+    - Small files (<60,000 characters or <=3 pages): Returns 'context' type. You must prepend
       this content to your prompt immediately for 100% accuracy.
     - Large files: Returns 'rag' type. The file is indexed into the Qdrant store.
       You should then perform a similarity search to answer questions.
