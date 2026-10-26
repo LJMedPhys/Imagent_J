@@ -244,7 +244,11 @@ class ChatScrollArea(QWidget):
         self._msg_layout = QVBoxLayout(self._container)
         self._msg_layout.setContentsMargins(2,2,2,2)
         self._msg_layout.setSpacing(6)
-        self._msg_layout.setAlignment(Qt.AlignTop)
+        # Top-align via a trailing stretch, NOT setAlignment(Qt.AlignTop): an
+        # aligned layout is squeezed to its sizeHint() height instead of its
+        # heightForWidth(), and a long word-wrapped QLabel's sizeHint assumes a
+        # much wider line than the chat column, so long bubbles got cut off.
+        self._msg_layout.addStretch(1)
         self._last_bubble = None
 
         self._scroll.setWidget(self._container)
@@ -260,7 +264,7 @@ class ChatScrollArea(QWidget):
         """Scroll to make `widget` visible, or to the last bubble if None.
 
         Uses ensureWidgetVisible so we land on actual content rather than the
-        empty space Qt leaves below AlignTop layouts in a resizable scroll area.
+        empty space the trailing stretch leaves below the bubbles.
         The zero-delay timer defers the call until after Qt's layout pass.
         """
         def _do_scroll():
@@ -274,7 +278,7 @@ class ChatScrollArea(QWidget):
 
     def add_message(self, role: str, text: str, *, auto_scroll: bool = True) -> MessageBubble:
         bubble = MessageBubble(text, role)
-        self._msg_layout.addWidget(bubble)
+        self._msg_layout.insertWidget(self._msg_layout.count() - 1, bubble)
         self._last_bubble = bubble
         if auto_scroll:
             self.scroll_to_bottom(bubble)
@@ -282,7 +286,7 @@ class ChatScrollArea(QWidget):
  
     def clear_messages(self):
         self._last_bubble = None
-        while self._msg_layout.count() > 0:
+        while self._msg_layout.count() > 1:  # keep the trailing stretch
             item = self._msg_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
