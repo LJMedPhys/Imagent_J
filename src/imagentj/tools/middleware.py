@@ -266,12 +266,21 @@ except ImportError:  # pragma: no cover
 # ── mode helpers ────────────────────────────────────────────────────────────
 # The supervisor runs in one of several modes (advanced | quick | education),
 # stored per-chat in graph state. "advanced" (or unset) is the full pipeline.
+# `features.mode` in imagentj_config.yaml moves the starting mode, and
+# `features.lock_mode` pins it (see config.mode_locked).
 
-DEFAULT_MODE = "advanced"
+try:
+    from .. import config as _config
+    DEFAULT_MODE = _config.start_mode("advanced")
+    MODE_LOCKED = _config.mode_locked()
+except Exception:  # pragma: no cover — a config problem must never break startup
+    DEFAULT_MODE, MODE_LOCKED = "advanced", False
 
 
 def _state_mode(state) -> str:
     """Read the active mode from an agent state dict/object; default advanced."""
+    if MODE_LOCKED:
+        return DEFAULT_MODE
     if state is None:
         return DEFAULT_MODE
     if isinstance(state, dict):

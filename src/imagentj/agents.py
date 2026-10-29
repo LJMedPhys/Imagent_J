@@ -1775,6 +1775,15 @@ def init_agent():
         "quick":     ModeSpec(prompt=build_quick_prompt(), tools=quick_tools),
         "education": ModeSpec(prompt=build_tutor_prompt, tools=education_tools, model=llm_analyst),
     }
+    # features.lock_mode: every turn runs in features.mode (enforced in
+    # ModeMiddleware), and set_mode is removed from every mode's offer, so the
+    # model is never told it could switch.
+    if config.mode_locked():
+        modes["advanced"].exclude_tools = modes["advanced"].exclude_tools + [set_mode.name]
+        modes["quick"] = ModeSpec(prompt=build_quick_prompt(locked=True),
+                                  tools=[t for t in quick_tools if t is not set_mode])
+        modes["education"].tools = [t for t in education_tools if t is not set_mode]
+        print(f"[mode] locked to {config.start_mode()!r}; set_mode hidden", flush=True)
 
     supervisor_middleware = [
         ToolOutputLimitMiddleware(),

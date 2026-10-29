@@ -175,3 +175,35 @@ def use_vlm() -> bool:
 def use_qa() -> bool:
     """True when the QA reporter should run (benchmark auto-pilot)."""
     return _agent_flag("qa", False)
+
+
+_MODES = ("advanced", "quick", "education")
+
+
+def _features() -> dict:
+    block = _CFG.get("features")
+    return block if isinstance(block, dict) else {}
+
+
+def start_mode(default: str = "advanced") -> str:
+    """The mode every chat starts in: ``features.mode`` (advanced | quick | education).
+
+    A missing block or an unknown value gives ``default``, so a typo never silently
+    puts a deployment into a reduced mode.
+    """
+    val = str(_features().get("mode") or default).strip().lower()
+    return val if val in _MODES else default
+
+
+def mode_locked() -> bool:
+    """``features.lock_mode``: hold every turn in ``start_mode()`` and hide ``set_mode``.
+
+    Without the lock, ``features.mode`` only moves the starting point and the model can
+    still switch — and the quick prompt tells it to escalate to advanced whenever a
+    request needs statistics or plots, so an unlocked quick run of a full analysis
+    leaves quick mode on its first turn.
+    """
+    val = _features().get("lock_mode", False)
+    if isinstance(val, bool):
+        return val
+    return str(val).strip().lower() in _TRUE

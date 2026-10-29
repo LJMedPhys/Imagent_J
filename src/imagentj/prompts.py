@@ -1815,8 +1815,22 @@ pipeline. If the user instead wants to LEARN the concepts, call
 """.strip()
 
 
-def build_quick_prompt() -> str:
-    return _quick_prompt
+_QUICK_LOCKED_NOTE = """
+LOCKED: this run is fixed to QUICK mode and cannot switch modes. If the request
+needs several steps, statistics or plots, still complete it here: chain the
+operations yourself with the tools above, one after another, and report the
+result.
+""".strip()
+
+
+def build_quick_prompt(locked: bool = False) -> str:
+    """The quick-mode prompt; ``locked`` (features.lock_mode) drops every mention of
+    set_mode — the tool is not offered then — including the ESCALATE paragraph."""
+    if not locked:
+        return _quick_prompt
+    lines = [l for l in _quick_prompt.split("\n") if "`set_mode(mode)`" not in l]
+    text = "\n".join(lines)
+    return text[:text.index("ESCALATE:")].rstrip() + "\n\n" + _QUICK_LOCKED_NOTE
 
 
 # ===========================================================================
