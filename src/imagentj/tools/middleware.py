@@ -44,16 +44,72 @@ def _truncate_tool_text(text: str, max_chars: int) -> str:
     return text[:head_chars] + marker + (text[-tail_chars:] if tail_chars else "")
 
 
-def _bounded_tool_content(content, max_chars: int):
+_MEDIA_BLOCK_TYPES = frozenset({"image", "image_url", "input_image", "audio", "video", "file"})
+# What both OpenAI and vLLM decode in an image block; anything else (TIFF from a
+# raw read_file) is rejected by the provider and would kill the turn.
+_VIEWABLE_IMAGE_MIME = frozenset({"image/png", "image/jpeg", "image/webp", "image/gif"})
+
+
+def _is_media_block(block) -> bool:
+    return isinstance(block, dict) and block.get("type") in _MEDIA_BLOCK_TYPES
+
+
+def _serialize(content) -> str:
+    try:
+        return json.dumps(content, ensure_ascii=False, default=str)
+    except Exception:
+        return str(content)
+
+
+def _media_placeholder(block: dict, reason: str) -> dict:
+    return {
+        "type": "text",
+        "text": f"[{block.get('type')} block ({block.get('mime_type', 'unknown type')}) not attached: "
+                f"{reason}. Save a downscaled PNG copy and read that instead.]",
+    }
+
+
+def _bounded_media_content(content: list, max_chars: int, max_media_chars: int):
+    """Bound a block list that carries images: keep each viewable image intact
+    and bound only the text around it.
+
+    Serializing the whole list instead (the generic path below) turns every
+    read_file image into ``max_chars`` of base64 text: the model never sees the
+    picture, and each such read costs tens of thousands of tokens, enough for a
+    few reads to overflow a 262k-token local model, summary call included.
+    Image blocks themselves cost a fixed ~85 tokens to the summarizer's counter
+    and are left out of the summary prompt.
+    """
+    kept, changed = [], False
+    for block in content:
+        if _is_media_block(block):
+            size = len(_serialize(block))
+            mime = block.get("mime_type")
+            if size > max_media_chars:
+                block, changed = _media_placeholder(block, f"{size} encoded characters exceed the {max_media_chars} limit"), True
+            elif block.get("type") == "image" and "base64" in block and mime not in _VIEWABLE_IMAGE_MIME:
+                block, changed = _media_placeholder(block, "the model only accepts PNG, JPEG, WebP or GIF"), True
+        kept.append(block)
+    others = [b for b in kept if not _is_media_block(b)]
+    if not others or len(_serialize(others)) <= max_chars:
+        return kept if changed else content
+    text = {"type": "text", "text": _truncate_tool_text(_serialize(others), max_chars)}
+    return [text] + [b for b in kept if _is_media_block(b)]
+
+
+def _bounded_tool_content(content, max_chars: int, max_media_chars: int = 8_000_000):
     """Return ToolMessage-compatible content no larger than ``max_chars``.
 
     Function-call outputs in this application are normally strings. For a list of
     content blocks, serialize the list only when it is too large; this preserves
     normal multimodal blocks while ensuring an oversized block cannot bypass the
-    provider's per-output limit.
+    provider's per-output limit. Image blocks are bounded separately, see
+    :func:`_bounded_media_content`.
     """
     if isinstance(content, str):
         return _truncate_tool_text(content, max_chars)
+    if isinstance(content, list) and any(_is_media_block(b) for b in content):
+        return _bounded_media_content(content, max_chars, max_media_chars)
     try:
         serialized = json.dumps(content, ensure_ascii=False, default=str)
     except Exception:
@@ -63,8 +119,8 @@ def _bounded_tool_content(content, max_chars: int):
     return _truncate_tool_text(serialized, max_chars)
 
 
-def _bounded_tool_message(message: ToolMessage, max_chars: int) -> ToolMessage:
-    bounded = _bounded_tool_content(message.content, max_chars)
+def _bounded_tool_message(message: ToolMessage, max_chars: int, max_media_chars: int = 8_000_000) -> ToolMessage:
+    bounded = _bounded_tool_content(message.content, max_chars, max_media_chars)
     if bounded is message.content or bounded == message.content:
         return message
     _log.warning(
@@ -178,11 +234,13 @@ class ToolOutputLimitMiddleware(AgentMiddleware):
             os.environ.get("IMAGENTJ_MAX_TOOL_OUTPUT_CHARS", "100000")
         )
         self.max_chars = max(2_000, min(int(configured), 1_000_000))
+        # One image block, base64 included; under the providers' 10 MiB per-output cap.
+        self.max_media_chars = int(os.environ.get("IMAGENTJ_MAX_TOOL_MEDIA_CHARS", "8000000"))
 
     def wrap_tool_call(self, request: ToolCallRequest, handler):
         result = handler(request)
         if isinstance(result, ToolMessage):
-            return _bounded_tool_message(result, self.max_chars)
+            return _bounded_tool_message(result, self.max_chars, self.max_media_chars)
         if isinstance(result, str):
             return _truncate_tool_text(result, self.max_chars)
         return result
@@ -190,7 +248,7 @@ class ToolOutputLimitMiddleware(AgentMiddleware):
     def wrap_model_call(self, request, handler):
         messages = list(request.messages)
         bounded = [
-            _bounded_tool_message(message, self.max_chars)
+            _bounded_tool_message(message, self.max_chars, self.max_media_chars)
             if isinstance(message, ToolMessage)
             else message
             for message in messages
