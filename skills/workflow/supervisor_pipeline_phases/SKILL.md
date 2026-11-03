@@ -1,13 +1,13 @@
 ---
 name: supervisor_pipeline_phases
 description: >
-  Detailed step-by-step instructions for each phase of the ADVANCED analysis pipeline.
+  Detailed step-by-step instructions for each phase of the CONVENTIONAL analysis pipeline.
   The supervisor MUST read the relevant phase file BEFORE entering that phase.
-  Advanced (multi-phase study) follows the sequence
+  Conventional (multi-phase study) follows the sequence
   1(gather) → 2(plan) → 3(setup) → 4a(io) → 4b(process) →
   4c(stats) → 4d(plot) → 5(summarize) → 6(document) → 7(qa).
-  A single self-contained operation is not a study — it is handled by quick mode
-  (set_mode("quick")), not by these phases.
+  A single self-contained operation is not a study — it is handled by exploratory mode
+  (set_mode("exploratory")), not by these phases.
 ---
 
 ## File Index
