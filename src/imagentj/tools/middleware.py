@@ -207,19 +207,27 @@ except ImportError:  # pragma: no cover
 
 
 # ── mode helpers ────────────────────────────────────────────────────────────
-# The supervisor runs in one of several modes (advanced | quick | education),
-# stored per-chat in graph state. "advanced" (or unset) is the full pipeline.
+# The supervisor runs in one of several modes (conventional | exploratory |
+# education), stored per-chat in graph state. "conventional" (or unset) is the
+# full pipeline.
 
-DEFAULT_MODE = "advanced"
+DEFAULT_MODE = "conventional"
+
+# The modes were renamed (advanced -> conventional, quick -> exploratory). Chats
+# checkpointed before the rename still carry the old value in state, and a model
+# may still emit it, so both are mapped instead of silently falling back.
+LEGACY_MODE_ALIASES = {"advanced": "conventional", "quick": "exploratory"}
 
 
 def _state_mode(state) -> str:
-    """Read the active mode from an agent state dict/object; default advanced."""
+    """Read the active mode from an agent state dict/object; default conventional."""
     if state is None:
         return DEFAULT_MODE
     if isinstance(state, dict):
-        return state.get("mode") or DEFAULT_MODE
-    return getattr(state, "mode", None) or DEFAULT_MODE
+        mode = state.get("mode") or DEFAULT_MODE
+    else:
+        mode = getattr(state, "mode", None) or DEFAULT_MODE
+    return LEGACY_MODE_ALIASES.get(mode, mode)
 
 
 def _request_mode(request) -> str:
@@ -239,7 +247,7 @@ def _tool_name(t) -> str:
 class NarrationReminderMiddleware(AgentMiddleware):
     # Keeps the narration rule in the most-recent position on every turn so it
     # doesn't drift out of attention as tool history grows. Not persisted to state.
-    # Only meaningful for the full pipeline, so it no-ops outside advanced mode.
+    # Only meaningful for the full pipeline, so it no-ops outside conventional mode.
     REMINDER = (
         """Reminder: before this turn's tool call(s), emit ONE short
         biologist-friendly sentence describing your intent. If a tool just
@@ -248,7 +256,7 @@ class NarrationReminderMiddleware(AgentMiddleware):
     )
 
     def wrap_model_call(self, request, handler):
-        if _request_mode(request) != "advanced":
+        if _request_mode(request) != "conventional":
             return handler(request)
         request = request.override(messages=list(request.messages) + [SystemMessage(content=self.REMINDER)])
         return handler(request)
@@ -355,7 +363,7 @@ def _take_last(old, new):
 
 class AgentModeState(AgentState):
     """State fields for multi-mode operation, persisted per-chat (thread)."""
-    mode: NotRequired[Annotated[str, _take_last]]           # advanced | quick | education
+    mode: NotRequired[Annotated[str, _take_last]]           # conventional | exploratory | education
     course_plan: NotRequired[Annotated[list, _take_last]]   # ordered chapter-id playlist
     course_progress: NotRequired[Annotated[dict, _take_last]]  # {current, completed, notes}
 
@@ -366,7 +374,7 @@ class ModeSpec:
 
     prompt: a system-prompt string, or a callable(state)->str (so the prompt can
             embed live state, e.g. the student's progress). None => keep the
-            deep-agent-composed prompt (used by "advanced").
+            deep-agent-composed prompt (used by "conventional").
     tools:  the exact tool subset to expose this turn. None => keep the full
             registered tool set. Tools MUST be registered on the graph at build;
             this only narrows what the model is offered.
@@ -377,7 +385,7 @@ class ModeSpec:
     model: Any = None
     # Tool NAMES to drop from whatever is offered this turn, WITHOUT replacing the
     # whole set — so deepagents-injected tools (todos, filesystem, skills) and every
-    # other tool are preserved. Used by "advanced" to hide the education tools while
+    # other tool are preserved. Used by "conventional" to hide the education tools while
     # keeping its own tools + builtins. Ignored when `tools` is also set.
     exclude_tools: Optional[list] = None
 
@@ -387,8 +395,8 @@ class ModeMiddleware(AgentMiddleware):
 
     Sits in the user-middleware slot, which is *inner* to the deep-agent's
     prompt-composing base middleware — so overriding `system_message` here
-    replaces the composed prompt for non-advanced modes, and overriding `tools`
-    narrows the offered tools. "advanced" (the default) typically passes through
+    replaces the composed prompt for non-conventional modes, and overriding `tools`
+    narrows the offered tools. "conventional" (the default) typically passes through
     untouched, preserving the current behaviour exactly.
     """
 
@@ -509,10 +517,10 @@ class PhaseGuardMiddleware(AgentMiddleware):
 
     def before_model(self, state, runtime=None):
         # Numbered pipeline phases only exist in the full analysis pipeline;
-        # stay silent in quick/education modes. This single mode check replaces
+        # stay silent in exploratory/education modes. This single mode check replaces
         # the old fast/full "track" gate: a single self-contained operation is
-        # quick mode now, so it never reaches this middleware at all.
-        if _state_mode(state) != "advanced":
+        # exploratory mode now, so it never reaches this middleware at all.
+        if _state_mode(state) != "conventional":
             return None
         msgs = list(state.get("messages", []))
         already = list(state.get("phase_reminders_sent") or [])

@@ -35,13 +35,15 @@ from langchain_core.tools import tool, InjectedToolCallId
 from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
 
+from .middleware import LEGACY_MODE_ALIASES
+
 COURSE_ROOT = Path(os.getenv("TUTOR_COURSE_ROOT", "/app/skills/bioimage_course"))
 
 # Real sample images from the book's official "practical-data" set, bundled so
 # live demos have data to run on.
 SAMPLES_DIR = COURSE_ROOT / "samples"
 
-VALID_MODES = ("advanced", "quick", "education")
+VALID_MODES = ("conventional", "exploratory", "education")
 
 
 # ── internal helpers ────────────────────────────────────────────────────────
@@ -446,17 +448,18 @@ def set_mode(mode: str, tool_call_id: Annotated[str, InjectedToolCallId]) -> Com
     """
     Switch the agent's operating mode for this chat.
 
-    - "advanced":  full multi-phase image-analysis pipeline (planning, coding,
-                   statistics, QA) — for real analysis projects.
-    - "quick":     fast single-operation image processing, minimal ceremony.
-    - "education":  tutor mode — teach bioimage-analysis concepts from the course.
+    - "conventional": full multi-phase image-analysis pipeline (planning, coding,
+                      statistics, QA) — for real analysis projects.
+    - "exploratory":  fast single-operation image processing, minimal ceremony.
+    - "education":    tutor mode — teach bioimage-analysis concepts from the course.
 
     Switch when the user's intent clearly changes (e.g. "teach me about
-    thresholding" → education; "now threshold my images" → quick/advanced).
+    thresholding" → education; "now threshold my images" → exploratory/conventional).
 
     Args:
-        mode: one of "advanced", "quick", "education".
+        mode: one of "conventional", "exploratory", "education".
     """
+    mode = LEGACY_MODE_ALIASES.get(mode, mode)
     if mode not in VALID_MODES:
         return Command(update={"messages": [ToolMessage(
             f"ERROR: invalid mode '{mode}'. Choose one of {VALID_MODES}.",

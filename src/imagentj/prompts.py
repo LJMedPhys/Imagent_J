@@ -1576,30 +1576,31 @@ SINGLE routing decision (there is no separate "track"):
 
 - LEARN the concepts ("teach me…", "explain how thresholding works", "I want to
   understand PSF") rather than process their own images → call `set_mode("education")`
-  (the tutor). They can return to analysis anytime via `set_mode("quick"/"advanced")`.
+  (the tutor). They can return to analysis anytime via `set_mode("exploratory"/"conventional")`.
 
 - ONE self-contained image operation — segment / threshold / count / measure-once /
   filter / convert / register a SINGLE dataset, where the output is the processed
   image, a mask, or a simple count, with NO comparison across conditions, no
-  statistics, no plots, and no publication/QA write-up → call `set_mode("quick")`
+  statistics, no plots, and no publication/QA write-up → call `set_mode("exploratory")`
   (the lean single-operation path).
 
 - EVERYTHING ELSE — multiple chained processing steps, comparison across
   groups/conditions, statistics, plotting/figures, a documented reproducible study,
-  QA, or a goal ambiguous enough to need real clarification → STAY in advanced and
+  QA, or a goal ambiguous enough to need real clarification → STAY in conventional and
   run the numbered pipeline below.
 
-When unsure between quick and advanced, default to ADVANCED (the full pipeline). A
-quick request can be ESCALATED back here anytime (quick calls `set_mode("advanced")`):
+When unsure between exploratory and conventional, default to CONVENTIONAL (the full
+pipeline). An exploratory request can be ESCALATED back here anytime (exploratory
+calls `set_mode("conventional")`):
 start at Phase 1, or Phase 2 if a workspace/metadata already exist.
 
 ────────────────────────────────────────
-PIPELINE (advanced — follow the phases in order)
+PIPELINE (conventional — follow the phases in order)
 ────────────────────────────────────────
 The detailed rules for each phase live in separate skill files. You MUST
 `smart_file_reader` the matching file BEFORE doing any work in that phase.
 Do NOT begin a phase from memory. (A single self-contained operation is not a
-project — route it to quick mode via ROUTING instead of running these phases.)
+project — route it to exploratory mode via ROUTING instead of running these phases.)
 
 | Phase | When to read |  File path |
 |-------|--------------|------------|
@@ -1755,11 +1756,11 @@ there is nothing new and no duplicate to fix, do nothing and stop.
 
 
 # ===========================================================================
-# QUICK mode — lean, single-operation image processing
+# EXPLORATORY mode — lean, single-operation image processing
 # ===========================================================================
 
-_quick_prompt = """
-You are a fast, practical bioimage-analysis assistant running in QUICK mode.
+_exploratory_prompt = """
+You are a fast, practical bioimage-analysis assistant running in EXPLORATORY mode.
 
 SCOPE: ONE self-contained image operation — e.g. threshold, filter, convert,
 project, count, or segment a single dataset. Minimal ceremony: no multi-phase
@@ -1790,14 +1791,14 @@ FLOW
 4. `show_in_imagej_gui` the result and report in plain, biologist-friendly language. Stop.
 
 ESCALATE: if the request actually needs multiple chained steps, statistics,
-plotting, or QA, say so and call `set_mode("advanced")` to enter the full
+plotting, or QA, say so and call `set_mode("conventional")` to enter the full
 pipeline. If the user instead wants to LEARN the concepts, call
 `set_mode("education")`.
 """.strip()
 
 
-def build_quick_prompt() -> str:
-    return _quick_prompt
+def build_exploratory_prompt() -> str:
+    return _exploratory_prompt
 
 
 # ===========================================================================
@@ -1818,8 +1819,8 @@ WHAT YOU ARE (and are NOT)
   always tied back to the idea being taught. Code is shown to reveal a concept
   ("here's what this does"), never as a syntax lesson.
 - ONLY if the student wants to process THEIR OWN images / real data: say you'll
-  switch them out of tutoring, then call set_mode("quick") (one operation) or
-  set_mode("advanced") (full analysis). Otherwise, always stay the tutor.
+  switch them out of tutoring, then call set_mode("exploratory") (one operation) or
+  set_mode("conventional") (full analysis). Otherwise, always stay the tutor.
 - If the student has a plugin dialog open in Fiji and asks about it (what a field
   means, why a button is greyed out, etc.), call capture_ui_window() yourself
   to see it — it screenshots every visible plugin dialog and returns its fields,

@@ -34,7 +34,7 @@ from .prompts import (
     imagej_coder_prompt,
     imagej_debugger_prompt,
     build_supervisor_prompt,
-    build_quick_prompt,
+    build_exploratory_prompt,
     build_tutor_prompt,
     python_analyst_prompt,
     qa_reporter_prompt,
@@ -1440,8 +1440,8 @@ def init_agent():
     vision_prompt = build_supervisor_prompt(enable_qa=True, enable_vision=True)
     no_vision_prompt = build_supervisor_prompt(enable_qa=True, enable_vision=False)
 
-    # ── Advanced mode = the full pipeline toolset (current behaviour) ────────
-    advanced_tools = [
+    # ── Conventional mode = the full pipeline toolset (current behaviour) ────────
+    conventional_tools = [
         # subagents as tools (return typed JSON)
         *subagent_tools,
         plugin_manager,
@@ -1450,7 +1450,7 @@ def init_agent():
         inspect_all_ui_windows,
         capture_ui_window,
         # Rebase note (2026-09-07): these three landed on main after this branch
-        # was cut (cellpose diameter estimation). advanced_tools replaces main's
+        # was cut (cellpose diameter estimation). conventional_tools replaces main's
         # explicit supervisor tool list, so they must be carried over here or the
         # supervisor silently loses them.
         estimate_cellpose_diameter_manual,
@@ -1498,7 +1498,7 @@ def init_agent():
     demo_tools = [save_script, execute_script, show_in_imagej_gui, inspect_all_ui_windows,
                   capture_ui_window, close_imagej_windows]
 
-    quick_tools = [
+    exploratory_tools = [
         imagej_coder, imagej_debugger, plugin_manager, execute_script, save_script, load_script,
         get_script_history, smart_file_reader, inspect_folder_tree,
         extract_image_metadata, setup_analysis_workspace, inspect_all_ui_windows,
@@ -1517,19 +1517,19 @@ def init_agent():
                 seen.add(id(t))
                 out.append(t)
         return out
-    registered_tools = _dedup(advanced_tools + quick_tools + education_tools)
+    registered_tools = _dedup(conventional_tools + exploratory_tools + education_tools)
 
     # ── Mode registry ────────────────────────────────────────────────────────
-    #   advanced  → pass-through: deep-agent-composed supervisor prompt + full tools.
-    #   quick     → lean single-operation prompt + a minimal tool subset.
+    #   conventional → pass-through: deep-agent-composed supervisor prompt + full tools.
+    #   exploratory  → lean single-operation prompt + a minimal tool subset.
     #   education → tutor prompt (with live per-chat progress) + tutor/demo tools.
-    # advanced offers the deep-agent's full toolset EXCEPT the education/tutor
-    # tools (hidden by name so the injected builtins + advanced tools + set_mode
-    # all survive). quick/education replace the toolset outright.
+    # conventional offers the deep-agent's full toolset EXCEPT the education/tutor
+    # tools (hidden by name so the injected builtins + conventional tools + set_mode
+    # all survive). exploratory/education replace the toolset outright.
     modes = {
-        "advanced":  ModeSpec(exclude_tools=[t.name for t in tutor_tools]),
-        "quick":     ModeSpec(prompt=build_quick_prompt(), tools=quick_tools),
-        "education": ModeSpec(prompt=build_tutor_prompt, tools=education_tools, model=llm_analyst),
+        "conventional": ModeSpec(exclude_tools=[t.name for t in tutor_tools]),
+        "exploratory":  ModeSpec(prompt=build_exploratory_prompt(), tools=exploratory_tools),
+        "education":    ModeSpec(prompt=build_tutor_prompt, tools=education_tools, model=llm_analyst),
     }
 
     supervisor_middleware = [
@@ -1567,13 +1567,13 @@ def init_agent():
         # Rebase note (2026-08-03): main's VisionOptionMiddleware and the educator
         # branch's ModeMiddleware both claimed the "innermost, final say on the
         # system prompt" slot. Both are kept, in this order, because they compose:
-        #   - ModeMiddleware runs first. For "advanced" its ModeSpec sets no prompt,
+        #   - ModeMiddleware runs first. For "conventional" its ModeSpec sets no prompt,
         #     so the deep-agent-composed supervisor prompt passes through untouched.
-        #     For quick/education it substitutes that mode's own prompt.
+        #     For exploratory/education it substitutes that mode's own prompt.
         #   - VisionOptionMiddleware runs last and swaps the vision-on supervisor
-        #     base for its vision-off variant by substring. In advanced mode the
+        #     base for its vision-off variant by substring. In conventional mode the
         #     base is present, so the swap works exactly as it does on main today.
-        #     In quick/education the substring is absent, so it is a no-op — those
+        #     In exploratory/education the substring is absent, so it is a no-op — those
         #     modes simply don't carry the vision instructions.
         # UNVERIFIED AT RUNTIME — this ordering is the reviewed intent, not a
         # tested behaviour. Exercise all three modes with vision on AND off.
