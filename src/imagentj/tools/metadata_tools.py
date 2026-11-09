@@ -663,8 +663,39 @@ def quick_analyze(ij, dataset=None, show_plot: bool = True,
 # Standalone file metadata extraction (no ImageJ needed)
 # ---------------------------------------------------------------------------
 
+def _has_inverting_lut(file_path: str, suffix: str) -> bool:
+    """True when the file's grey LUT runs white→black (ImageJ's "inverting LUT").
+
+    ImageJ's `" dark"` threshold suffix refers to the DISPLAYED image, while the
+    background-mode heuristic below is measured on pixel values — so for these
+    files the suffix must flip. blobs.gif is the classic case: high-valued blobs
+    shown dark; "Otsu dark" there yields one object covering 66 % of the frame.
+    """
+    try:
+        if suffix in ('.tif', '.tiff'):
+            with tifffile.TiffFile(file_path) as tif:
+                page = tif.pages[0]
+                if int(page.photometric) == 0:          # MINISWHITE
+                    return True
+                cmap = page.colormap
+                if cmap is not None and cmap.ndim == 2 and cmap.shape[0] == 3:
+                    grey = (cmap[0] == cmap[1]).all() and (cmap[1] == cmap[2]).all()
+                    return bool(grey and cmap[0][0] > cmap[0][-1])
+            return False
+        from PIL import Image
+        with Image.open(file_path) as im:
+            if im.mode != 'P' or not im.getpalette():
+                return False
+            pal = np.asarray(im.getpalette()[:768]).reshape(-1, 3)
+            grey = (pal[:, 0] == pal[:, 1]).all() and (pal[:, 1] == pal[:, 2]).all()
+            return bool(grey and len(pal) > 1 and pal[0, 0] > pal[-1, 0])
+    except Exception:
+        return False
+
+
 def _suggest_threshold_from_stats(stats: Dict[str, Any],
-                                   calibration: Dict[str, Any]) -> Dict[str, Any]:
+                                   calibration: Dict[str, Any],
+                                   inverting_lut: bool = False) -> Dict[str, Any]:
     if not stats or 'error' in stats:
         return {}
     suggestions: Dict[str, Any] = {
@@ -687,6 +718,14 @@ def _suggest_threshold_from_stats(stats: Dict[str, Any],
             suggestions['background_mode']     = 'bright'
             suggestions['threshold_suffix']    = ''
             suggestions['threshold_call_hint'] = 'IJ.setAutoThreshold(imp, "Otsu")  // dark signal on bright BG (brightfield/H&E)'
+        if inverting_lut:
+            bright_objects = suggestions['background_mode'] == 'dark'
+            suggestions['inverting_lut'] = True
+            suggestions['threshold_suffix'] = '' if bright_objects else ' dark'
+            suggestions['threshold_call_hint'] = (
+                f'IJ.setAutoThreshold(imp, "Otsu{suggestions["threshold_suffix"]}")  '
+                '// INVERTING LUT: objects are HIGH pixel values but shown dark — '
+                'the " dark" suffix follows the display, so it is flipped here')
 
     x_info = calibration.get('X')
     if x_info and x_info.get('unit') not in (None, 'pixel'):
@@ -1133,7 +1172,8 @@ def extract_file_metadata(file_path: str) -> Dict[str, Any]:
         result['intensity_statistics_error'] = stats['message']
     elif stats:
         result['intensity_statistics']  = stats
-        result['threshold_suggestions'] = _suggest_threshold_from_stats(stats, scales)
+        result['threshold_suggestions'] = _suggest_threshold_from_stats(
+            stats, scales, inverting_lut=_has_inverting_lut(file_path, suffix))
         result['filter_suggestions']    = _suggest_filter_from_stats(stats)
 
     return result

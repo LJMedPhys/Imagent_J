@@ -9,7 +9,7 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ToolCallRequest, AgentState
 from langchain_core.messages import ToolMessage, SystemMessage, AIMessage, HumanMessage
 from langgraph.types import Command
-from langchain.agents.middleware import TodoListMiddleware
+from langchain.agents.middleware import TodoListMiddleware, FilesystemFileSearchMiddleware
 
 from .. import interject
 from ..safety_filter import (
@@ -251,6 +251,51 @@ def _tool_name(t) -> str:
     if isinstance(t, dict):
         return t.get("name") or (t.get("function") or {}).get("name") or ""
     return ""
+
+
+class RealPathFileSearchMiddleware(FilesystemFileSearchMiddleware):
+    """FilesystemFileSearchMiddleware that speaks REAL absolute paths.
+
+    The upstream middleware treats ``path`` as relative to a virtual root and
+    returns virtual paths. Every other file tool here uses real paths, so the
+    model passes ``path="/data"`` (what the prompts tell it) and the search runs
+    in ``/app/data/data`` — "No files found" for a folder that exists, seen live
+    on Kimi-K3 2026-11-04 (three misses before it fell back to ``ls``). A hit
+    came back as ``/tasks/...``, a path that does not exist either.
+
+    Here an absolute path under the root (or under an alias mount of the same
+    directory, e.g. ``/data`` == ``/app/data``) is accepted as-is, and every
+    returned path is rewritten to its real absolute form. The search scope is
+    unchanged: anything outside the root is still refused.
+    """
+
+    def __init__(self, *, root_path: str, aliases: tuple[str, ...] = (), **kwargs):
+        super().__init__(root_path=root_path, **kwargs)
+        root = str(self.root_path)
+        self._prefixes = [root]
+        for alias in aliases:
+            try:
+                if os.path.samefile(alias, root):
+                    self._prefixes.append(os.path.abspath(alias).rstrip("/"))
+            except OSError:
+                pass
+
+    def _validate_and_resolve_path(self, path: str):
+        for prefix in self._prefixes:
+            if path == prefix or path.startswith(prefix + "/"):
+                path = path[len(prefix):] or "/"
+                break
+        return super()._validate_and_resolve_path(path)
+
+    def wrap_tool_call(self, request: ToolCallRequest, handler):
+        result = handler(request)
+        if request.tool_call.get("name") not in ("glob_search", "grep_search"):
+            return result
+        if isinstance(result, ToolMessage) and isinstance(result.content, str):
+            root = str(self.root_path).rstrip("/")
+            content = re.sub(r"(?m)^/", root + "/", result.content)
+            return result.model_copy(update={"content": content})
+        return result
 
 
 class NarrationReminderMiddleware(AgentMiddleware):
@@ -579,6 +624,41 @@ class UnparsedToolCallRetryMiddleware(AgentMiddleware):
                 continue
             cleaned = text.split("<tool_call>", 1)[0].rstrip()
             msg.content = cleaned + note
+
+
+class EmptyResponseRetryMiddleware(AgentMiddleware):
+    """Re-ask once when the model returns nothing at all.
+
+    Kimi-K3 occasionally ends a turn with reasoning only — no text, no tool call
+    (2 of 520 calls on 2026-11-04, streamed and unstreamed alike). For the
+    supervisor that silently ends the run: the user sees no reply and the chat
+    just stops, typically right after "yes, go ahead". One nudged retry recovers
+    it; a second empty reply is passed through unchanged.
+    """
+
+    def wrap_model_call(self, request, handler):
+        response = handler(request)
+        if not self._empty(response):
+            return response
+        _log.warning("Model returned an empty reply (no text, no tool call); retrying once.")
+        request = request.override(
+            messages=list(getattr(request, "messages", []) or [])
+            + [SystemMessage(content=(
+                "Your last reply was empty — no message and no tool call. Continue the "
+                "task: call the next tool, or answer the user."
+            ))]
+        )
+        return handler(request)
+
+    @staticmethod
+    def _empty(response) -> bool:
+        msgs = [m for m in (getattr(response, "result", None) or []) if isinstance(m, AIMessage)]
+        return bool(msgs) and all(
+            not getattr(m, "tool_calls", None)
+            and not getattr(m, "invalid_tool_calls", None)
+            and not _message_text(m).strip()
+            for m in msgs
+        )
 
 
 class SafeToolLoggerMiddleware(AgentMiddleware):

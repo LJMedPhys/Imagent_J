@@ -48,8 +48,31 @@ def _fill_missing_image_detail(node: Any) -> None:
             _fill_missing_image_detail(value)
 
 
+def _drop_stale_reasoning(items: list) -> list:
+    """Drop ``reasoning`` items that precede the last user message.
+
+    OpenAI's server discards reasoning from earlier turns on its own. vLLM does
+    not: Kimi K3's chat template renders every replayed reasoning item back into
+    the prompt (measured 2026-11-04: a 2.6k-token stale reasoning item raised a
+    two-turn prompt from 169 to 2,370 input tokens). On a long supervisor thread
+    that was ~14k tokens of dead reasoning resent on every call. Reasoning inside
+    the current turn's tool loop (after the last user message) is kept.
+    """
+    last_user = max(
+        (i for i, item in enumerate(items)
+         if isinstance(item, dict) and item.get("role") == "user"),
+        default=-1,
+    )
+    return [
+        item for i, item in enumerate(items)
+        if i >= last_user
+        or not (isinstance(item, dict) and item.get("type") == "reasoning")
+    ]
+
+
 class LocalResponsesChatOpenAI(ChatOpenAI):
-    """ChatOpenAI whose Responses payloads always satisfy vLLM's strict schema."""
+    """ChatOpenAI whose Responses payloads satisfy vLLM's strict schema and
+    carry no reasoning from earlier turns."""
 
     def _get_request_payload(self, input_, *, stop=None, **kwargs):
         payload = super()._get_request_payload(input_, stop=stop, **kwargs)
@@ -57,4 +80,5 @@ class LocalResponsesChatOpenAI(ChatOpenAI):
         # carry `messages` and pass through untouched.
         if isinstance(payload.get("input"), list):
             _fill_missing_image_detail(payload["input"])
+            payload["input"] = _drop_stale_reasoning(payload["input"])
         return payload

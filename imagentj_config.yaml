@@ -22,8 +22,8 @@
 #     non-openai/ model is rejected.
 models:
   supervisor: "openai/gpt-5.6-sol"      # orchestrator / planner
-  worker:     "openai/gpt-5.3-codex"    # imagej_coder + imagej_debugger
-  analyst:    "openai/gpt-5.3-codex"    # python_data_analyst
+  worker:     "openai/gpt-5.3-codex"    # imagej_coder + imagej_debugger + python_data_analyst
+  analyst:    "openai/gpt-5.3-codex"    # QA reporter + plugin manager + education tutor
   nano:       "openai/gpt-5.6-luna"     # fast-path / lightweight calls
   curator:    "openai/gpt-5.4-mini"     # background Librarian + deep recall
   vlm:        "openai/gpt-5.6-luna"     # Vision judge
@@ -53,7 +53,9 @@ local_llm:
 # IMAGENTJ_REASONING_EFFORT environment override.
 reasoning_effort:
   supervisor: max
-  worker:     max
+  # high, not max: worker also backs python_data_analyst, and max made Kimi K3
+  # spend minutes (44k output tokens on one turn) thinking before each script.
+  worker:     high
   analyst:    high
   nano:       high
   curator:    high

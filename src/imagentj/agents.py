@@ -58,6 +58,8 @@ from .tools import (
     VisionOptionMiddleware,
     NapariComputeGuardMiddleware,
     NarrationReminderMiddleware, PhaseGuardMiddleware, ToolOutputLimitMiddleware,
+    RealPathFileSearchMiddleware,
+    EmptyResponseRetryMiddleware,
     BioRefusalRetryMiddleware, InterjectMiddleware,
     update_state_ledger, read_state_ledger, set_ledger_metadata, get_ledger_context,
     check_environment,
@@ -421,7 +423,17 @@ def _agent_reasoning_kwargs(
 # — a request either answers inside ~80 s or never answers at all — so a 240 s
 # deadline can only ever fire on a dead stream. Re-issuing works: all 13 stalls
 # observed so far returned 200 OK on the very next attempt, in 1.4-2.5 s.
-_LLM_TIMEOUT_S = float(os.environ.get("IMAGENTJ_LLM_TIMEOUT", "240"))
+#
+# A LOCAL endpoint streams instead (IMAGENTJ_LOCAL_STREAMING=0 turns it off). There
+# the read timeout is the gap between two chunks, not the whole response: a thinking
+# model on a shared vLLM legitimately generates for minutes (Kimi-K3: 200-300 s
+# script-writing turns), which a whole-response timeout would discard, while a
+# connection that dies in the ssh tunnel to the GPU node goes silent at once. Seen
+# 2026-11-04: a coder's first ~5 s call hung 15 min with nothing on the server, and
+# a 269 s call was a 240 s dead wait plus a 29 s retry. Tool calls parse identically
+# streamed and unstreamed on this vLLM (6/6, incl. parallel calls and full scripts).
+_LOCAL_STREAMING = use_local and os.environ.get("IMAGENTJ_LOCAL_STREAMING", "1") not in ("0", "false", "False")
+_LLM_TIMEOUT_S = float(os.environ.get("IMAGENTJ_LLM_TIMEOUT", "120" if _LOCAL_STREAMING else "240"))
 _LLM_MAX_RETRIES = int(os.environ.get("IMAGENTJ_LLM_MAX_RETRIES", "2"))
 
 # ---------------------------------------------------------------------------
@@ -459,6 +471,11 @@ def _seed_kwargs() -> dict:
     """`seed` only when explicitly opted into; otherwise send nothing."""
     return {"seed": _LLM_SEED} if _LLM_SEED is not None else {}
 
+
+def _stream_kwargs() -> dict:
+    """Stream on a local endpoint — see the timeout note above."""
+    return {"streaming": True} if _LOCAL_STREAMING else {}
+
 # Local endpoints get a thin ChatOpenAI subclass per wire format:
 #   chat_completions -> KimiChatOpenAI keeps reasoning fields round-tripping;
 #   responses        -> LocalResponsesChatOpenAI stamps `detail` onto image
@@ -478,6 +495,7 @@ llm_supervisor = _chat_model_class(
     temperature=0.,
     **_agent_reasoning_kwargs(_reasoning_effort("supervisor", "max")),
     **_seed_kwargs(),
+    **_stream_kwargs(),
     timeout=_LLM_TIMEOUT_S,
     max_retries=_LLM_MAX_RETRIES,
     verbose=True,
@@ -491,6 +509,7 @@ llm_worker = _chat_model_class(
     temperature=0.,
     **_agent_reasoning_kwargs(_reasoning_effort("worker", "high")),
     **_seed_kwargs(),
+    **_stream_kwargs(),
     timeout=_LLM_TIMEOUT_S,
     max_retries=_LLM_MAX_RETRIES,
     verbose=True,
@@ -504,6 +523,7 @@ llm_analyst = _chat_model_class(
     temperature=0.,
     **_agent_reasoning_kwargs(_reasoning_effort("analyst", "high")),
     **_seed_kwargs(),
+    **_stream_kwargs(),
     timeout=_LLM_TIMEOUT_S,
     max_retries=_LLM_MAX_RETRIES,
     verbose=True,
@@ -517,6 +537,7 @@ llm_nano = _chat_model_class(
     temperature=0.,
     **_agent_reasoning_kwargs(_reasoning_effort("nano", "high")),
     **_seed_kwargs(),
+    **_stream_kwargs(),
     # Shorter: this backs the watchdogs and the fast path, where a slow call is
     # worse than no call — a watchdog that hangs supervises nothing.
     timeout=90,
@@ -534,6 +555,7 @@ llm_curator = _chat_model_class(
     temperature=0.,
     **_agent_reasoning_kwargs(_reasoning_effort("curator", "high")),
     **_seed_kwargs(),
+    **_stream_kwargs(),
     timeout=30,          # never let a stalled call hang the curator thread or
     max_retries=1,       # the (gated) hot-path deep-recall fallback forever
     verbose=True,
@@ -551,6 +573,7 @@ if use_local:
         base_url=base_url,
         temperature=0.,
         **_agent_reasoning_kwargs(_reasoning_effort("vlm", "high")),
+        **_stream_kwargs(),
         timeout=90,
         max_retries=1,
         verbose=True,
@@ -633,7 +656,7 @@ def _make_coder_agent(model, name, system_prompt):
         middleware=[
             ToolOutputLimitMiddleware(),
             agent_watchdog.middleware(),
-            FilesystemFileSearchMiddleware(
+            RealPathFileSearchMiddleware(
                 # Scoped to /app/skills/ — the workflow templates / SKILL.md the coder
                 # copies from. Do NOT widen to /app/: /app/data is ~66 GB of images and
                 # a broad glob/grep that descends into it stalls for minutes (looks like
@@ -656,6 +679,7 @@ def _make_coder_agent(model, name, system_prompt):
             # This agent reads /app/skills/ through the search middleware above,
             # which is exactly where a name the server will not parse comes from.
             UnparsedToolCallRetryMiddleware(),
+            EmptyResponseRetryMiddleware(),
             # Innermost — see BioRefusalRetryMiddleware. Must stay last.
             BioRefusalRetryMiddleware(),
         ],
@@ -884,6 +908,33 @@ _vlm_agent = (
 _RECURSION_LIMIT = int(os.environ.get("AGENT_RECURSION_LIMIT", "45"))
 
 
+def _is_unedited_template(script_path: str, skills_root: str = "/app/skills") -> bool:
+    """True when `script_path` is still a byte-identical copy of a skill template.
+
+    copy_file seeds a script from a template and the agent then edits it. Killed in
+    between, the copy is "a script created this run" — and was salvaged as
+    success=True, so the supervisor would have run the stock template (it opens a
+    sample image from the internet) against the user's data (seen 2026-11-04).
+    """
+    try:
+        size = os.path.getsize(script_path)
+        with open(script_path, "rb") as f:
+            data = f.read()
+        for root, _dirs, files in os.walk(skills_root):
+            for fn in files:
+                if not fn.lower().endswith((".py", ".groovy")):
+                    continue
+                cand = os.path.join(root, fn)
+                try:
+                    if os.path.getsize(cand) == size and open(cand, "rb").read() == data:
+                        return True
+                except OSError:
+                    continue
+    except OSError:
+        pass
+    return False
+
+
 def _salvage_or_fail_script(script_path, kind):
     """Build a graceful ScriptHandoff for a subagent that hit the recursion cap.
 
@@ -893,6 +944,8 @@ def _salvage_or_fail_script(script_path, kind):
     was saved, fail cleanly with a retry hint and NO internal 'recursion' wording.
     """
     has_script = bool(script_path) and os.path.isfile(script_path) and os.path.getsize(script_path) > 0
+    if has_script and _is_unedited_template(script_path):
+        has_script = False
     if has_script:
         return ScriptHandoff(
             script_path=script_path,
@@ -1262,7 +1315,8 @@ def python_data_analyst(task: str, input_path: str, output_dir: str, project_roo
 
     def _on_cap():
         path = _newest_script_since(output_dir, pre_scripts)
-        has = bool(path) and os.path.isfile(path) and os.path.getsize(path) > 0
+        has = (bool(path) and os.path.isfile(path) and os.path.getsize(path) > 0
+               and not _is_unedited_template(path))
         if has:
             return AnalystHandoff(
                 script_path=path,
@@ -1797,8 +1851,11 @@ def init_agent():
                 ),
             ],
         ),
-        FilesystemFileSearchMiddleware(
+        RealPathFileSearchMiddleware(
             root_path="/app/data/",
+            # The prompts address user images as /data/<file>; in the standard
+            # deployment that is the same mount as /app/data.
+            aliases=("/data",),
             use_ripgrep=True,
         ),
         NarrationReminderMiddleware(),
@@ -1832,6 +1889,7 @@ def init_agent():
         # because the name was not on that list — on a local endpoint that
         # arrives as prose, not as an error.
         UnparsedToolCallRetryMiddleware(),
+        EmptyResponseRetryMiddleware(),
         # Last line before a provider biological-risk refusal unwinds the whole
         # supervisor loop. create_deep_agent inserts user middleware after its
         # own Skills/Filesystem/SubAgent stack, so this sees their injected

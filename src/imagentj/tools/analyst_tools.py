@@ -49,6 +49,15 @@ _DEFAULT_ENV = "main"
 
 _ENV_HEADER_RE = re.compile(r"^#\s*imagentj-env:\s*([A-Za-z0-9_.-]+)\s*$")
 
+# A script that touches a torch model gets its env's real torch build and the
+# container's GPU probe printed at the top of its output, and a script that
+# forces CPU on a GPU container gets a warning. On 2026-11-04 Kimi K3 hard-coded
+# `USE_GPU = False` and, when asked, invented a "torch +cpu" build to justify it.
+# The banner reads package metadata only: calling torch.cuda here would
+# initialise CUDA before the script's own setup and break forked workers.
+_TORCH_USER_RE = re.compile(r"\b(torch|cellpose|micro_sam|torch_em)\b")
+_FORCED_CPU_RE = re.compile(r"\b(gpu|use_gpu|USE_GPU)\s*=\s*False\b")
+
 
 def _parse_env_header(code: str) -> str:
     """Return the env named by a `# imagentj-env: <name>` comment in the first 5 lines."""
@@ -592,6 +601,15 @@ def run_python_code(code: str, output_directory: str, purpose: str = ""):
             '    sns.set_theme(style="whitegrid")',
             "    plt.rcParams['figure.dpi'] = 300",
         ]
+    if _TORCH_USER_RE.search(code):
+        header_lines += [
+            "    try:",
+            "        from importlib.metadata import version as _ij_version",
+            "        print(f\"[harness] torch {_ij_version('torch')} in this env; container GPU \"",
+            "              f\"probe: IMAGENTJ_GPU={os.environ.get('IMAGENTJ_GPU', 'unset')}\", flush=True)",
+            "    except Exception:",
+            "        pass",
+        ]
     header_lines.append("    # --- AGENT CODE START ---")
     header = "\n".join(header_lines)
 
@@ -607,6 +625,14 @@ def run_python_code(code: str, output_directory: str, purpose: str = ""):
     indented_code = textwrap.indent(code, "    ")
     
     full_script = f"{header}\n{indented_code}\n{footer}"
+
+    forced_cpu_note = ""
+    if os.environ.get("IMAGENTJ_GPU", "").lower() == "true" and _FORCED_CPU_RE.search(code):
+        forced_cpu_note = (
+            "NOTE: this container has a working CUDA GPU, but the script forces CPU "
+            "(gpu=False). Unless the user asked for CPU or this is an except-branch "
+            "fallback, rerun on the GPU (gpu=True); it is much faster.\n"
+        )
 
     script_path = os.path.join(tempfile.gettempdir(), "supervisor_py_exec.py")
     with open(script_path, "w", encoding="utf-8") as f:
@@ -641,7 +667,7 @@ def run_python_code(code: str, output_directory: str, purpose: str = ""):
             # The leading "SUCCESS:" is load-bearing: learned_memory._run_succeeded gates the
             # background Librarian on out.lstrip().startswith("SUCCESS:"). Keep the colon
             # immediately after SUCCESS or Python runs stop being learned as recipes.
-            return f"SUCCESS: (env='{env}')\n{stdout}"
+            return f"SUCCESS: (env='{env}')\n{forced_cpu_note}{stdout}"
         except Exception as e:
             return f"SYSTEM ERROR: {str(e)}"
 

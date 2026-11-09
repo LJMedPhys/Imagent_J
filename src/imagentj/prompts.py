@@ -1,3 +1,26 @@
+import os
+
+
+def gpu_status_note() -> str:
+    """One prompt bullet with the container's live GPU state.
+
+    The entrypoint probes CUDA from the cellpose env's torch and exports
+    IMAGENTJ_GPU=true|false. Without this in the prompt the agent only learns the
+    GPU state if it thinks to call check_environment("gpu"); on 2026-11-04 Kimi K3
+    didn't, hard-coded CPU, and then invented a "+cpu" torch build to explain it.
+    """
+    flag = os.environ.get("IMAGENTJ_GPU", "").strip().lower()
+    if flag in ("1", "true", "yes", "on"):
+        return ("- GPU: an NVIDIA GPU is available and CUDA works (probed at container "
+                "start). Run Cellpose, micro_sam and StarDist on it (`gpu=True`, or "
+                "`torch.cuda.is_available()`). Never hard-code CPU unless the user asks.")
+    if flag in ("0", "false", "no", "off"):
+        return ("- GPU: none. CUDA is not usable in this container, so deep-learning "
+                "tools run on CPU; expect slow runs and keep test batches small.")
+    return ("- GPU: unknown. Detect it in the script with `torch.cuda.is_available()`; "
+            "never hard-code CPU or GPU.")
+
+
 vlm_judge_prompt = """
 You are a Visual Language Model (VLM) Judge Agent for ImageJ/Fiji image analysis pipelines.
 You inspect image pixels and return a typed, evidence-backed handoff to the Supervisor.
@@ -552,6 +575,8 @@ python_analyst_prompt = r"""
          Scripts run in the MAIN conda env by default. It has: pandas, numpy, matplotlib,
          seaborn, scipy, scikit-image, scikit-learn, cp_measure, tifffile.
 
+         {{GPU_STATUS}}
+
          `brainglobe` is NOT in the main env — it lives in its own. To run there, make the
          FIRST line of the script this magic comment:
 
@@ -757,7 +782,7 @@ python_analyst_prompt = r"""
 
          You are the final step in the pipeline. Your output is the scientific conclusion of the study.
          Your plots must meet publication standards for Nature, Science, Cell, and other high-impact journals.
-         """
+         """.replace("{{GPU_STATUS}}", gpu_status_note())
 
 
 
@@ -974,9 +999,14 @@ imagej_coder_prompt = """
      Setting the `bioformats.windowless` IJ preference does NOT work — only this setter does.
      Plain `.tif/.png/.jpg` are unaffected; keep using `IJ.openImage` for those.
    - GROOVY PATTERNS — apply unconditionally:
-     • Thresholding: never hardcode `" dark"`. Pick at runtime:
-       `def s = imp.getStatistics(); IJ.setAutoThreshold(imp, "Otsu" + (s.median <= (s.min+s.max)/2 ? " dark" : ""))`.
-       PROJECT STATE `background_mode` overrides the runtime check if present.
+     • Thresholding: never hardcode `" dark"`. Pick at runtime — the median MUST be
+       requested explicitly (plain `imp.getStatistics()` leaves it 0) and the suffix
+       flips for an inverting LUT (`" dark"` refers to the DISPLAYED image):
+       `def s = imp.getStatistics(Measurements.MEDIAN | Measurements.MIN_MAX)`
+       `boolean brightObjects = s.median <= (s.min + s.max) / 2`
+       `IJ.setAutoThreshold(imp, "Otsu" + ((brightObjects ^ imp.isInvertedLut()) ? " dark" : ""))`.
+       PROJECT STATE `background_mode` (measured on pixel values) replaces
+       `brightObjects` if present — still apply the inverted-LUT flip.
      • RGB: `getNChannels()` returns 1 for 24-bit RGB. Branch on
        `imp.getType() == ImagePlus.COLOR_RGB` BEFORE any channel-count check, then
        `ChannelSplitter.split(imp)` to get R/G/B as `ImagePlus[3]`.
@@ -1339,6 +1369,9 @@ ENVIRONMENT (running container)
 - NEVER ask the user whether a plugin, package, or tool is installed. You have
   `check_environment` and `check_plugin_installed` — use them. If `check_environment`
   confirms something IS installed, NEVER suggest reinstalling it as a debugging step.
+{{GPU_STATUS}}
+- Any fact you state about the environment (package versions, builds, devices,
+  paths) must come from a tool output in this conversation. If you assumed it, say so.
 
 ────────────────────────────────────────
 CORE CONSTRAINTS
@@ -1715,6 +1748,7 @@ def build_supervisor_prompt(enable_qa: bool = False, enable_vision: bool = False
         .replace("{{STATE_LEDGER_METADATA_ENTRY}}", ledger_entry)
         .replace("{{VISION_CHECKPOINTS}}", vision_checkpoints)
         .replace("{{VISION_DIAMETER_CROSSCHECK}}", diameter_crosscheck)
+        .replace("{{GPU_STATUS}}", gpu_status_note())
     )
 
 

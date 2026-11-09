@@ -86,6 +86,14 @@ REPEAT_LIMIT = int(os.environ.get("IMAGENTJ_AGENT_WATCHDOG_REPEATS", "6"))
 # of the whole allowance.
 STALL_SECONDS = float(os.environ.get("IMAGENTJ_AGENT_WATCHDOG_STALL", "300"))
 
+# A model call that is still generating is NOT a hung tool. On a local server a
+# script-writing turn legitimately takes minutes (Kimi-K3 at reasoning=max: 209 s
+# for one edit_script turn at ~45 tok/s under load), and counting that as silence
+# killed imagej_coder mid-generation — "no tool activity for 5.0 minutes between
+# tool calls" — with nothing salvaged (2026-11-04). A dead HTTP call is still
+# caught: by the client read timeout, and at the latest by this ceiling.
+MODEL_CALL_MAX_SECONDS = float(os.environ.get("IMAGENTJ_AGENT_WATCHDOG_MODEL_MAX", "900"))
+
 # Total agent-turn runtime that trips the LLM verdict.
 MAX_RUNTIME_SECONDS = float(os.environ.get("IMAGENTJ_AGENT_WATCHDOG_MAX_RUNTIME", "900"))
 
@@ -366,6 +374,7 @@ class AgentHandle:
         self._calls: list[tuple[str, str, float]] = []   # (tool, digest, at)
         self._last_event = time.monotonic()
         self._inflight: Optional[str] = None
+        self._model_since: Optional[float] = None
 
     # ── recorded by the middleware ───────────────────────────────────────────
     def call_started(self, tool: str, args) -> None:
@@ -380,14 +389,30 @@ class AgentHandle:
             self._last_event = time.monotonic()
             self._inflight = None
 
+    def model_started(self) -> None:
+        with self._lock:
+            self._model_since = time.monotonic()
+
+    def model_finished(self) -> None:
+        with self._lock:
+            self._model_since = None
+            self._last_event = time.monotonic()
+
     # ── read by the supervisor ───────────────────────────────────────────────
     @property
     def elapsed(self) -> float:
         return time.monotonic() - self.started
 
     def quiet_for(self) -> float:
+        """Seconds without tool activity; an in-flight model call counts as activity."""
         with self._lock:
+            if self._model_since is not None:
+                return 0.0
             return time.monotonic() - self._last_event
+
+    def model_running_for(self) -> float:
+        with self._lock:
+            return 0.0 if self._model_since is None else time.monotonic() - self._model_since
 
     def inflight(self) -> Optional[str]:
         with self._lock:
@@ -533,7 +558,12 @@ def _supervise(handle: AgentHandle) -> None:
         except Exception:
             log.debug("agent watchdog: retry check failed", exc_info=True)
 
-        # Tier 1 — a tool that never returned.
+        # Tier 1 — a model call or a tool that never returned.
+        generating = handle.model_running_for()
+        if generating >= MODEL_CALL_MAX_SECONDS:
+            _kill(handle, f"a model call has not returned after {_human(generating)} — "
+                          f"treating as a hung call")
+            return
         quiet = handle.quiet_for()
         if quiet >= STALL_SECONDS:
             inflight = handle.inflight()
@@ -615,6 +645,22 @@ def _install_middleware_class():
                 if handle is not None:
                     try:
                         handle.call_finished(name)
+                    except Exception:
+                        pass
+
+        def wrap_model_call(self, request, handler):
+            handle = CURRENT.get()
+            if handle is not None:
+                try:
+                    handle.model_started()
+                except Exception:
+                    pass
+            try:
+                return handler(request)
+            finally:
+                if handle is not None:
+                    try:
+                        handle.model_finished()
                     except Exception:
                         pass
 
