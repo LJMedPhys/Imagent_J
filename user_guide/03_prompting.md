@@ -15,7 +15,7 @@ The more you say up front, the fewer questions it needs to ask.
 | **Where they are** | "The images are in `/data/experiment_01/`" or "the image open in Fiji" |
 | **What you want back** | "A table with one row per nucleus, and a mask image for each image" |
 | **How you want to work** | "Show me how to do it in the Fiji menus" or "write a script that does it" |
-| **Tool (optional)** | "Use StarDist if possible" or "use napari" |
+| **Tool (optional)** | "Use Cellpose if possible" or "use napari" |
 | **Comparison (optional)** | "Compare treated and control; the condition is in the file name" |
 
 ---
@@ -26,7 +26,7 @@ The more you say up front, the fewer questions it needs to ask.
 > "Segment my cells."
 
 **Better:**
-> "Segment the DAPI-stained nuclei in the 16-bit TIFFs in `/data/batch_01/`. Use StarDist. Save a table (area, mean brightness) and a mask for each image."
+> "Segment the DAPI-stained nuclei in the 16-bit TIFFs in `/data/batch_01/`. Use Cellpose. Save a table (area, mean brightness) and a mask for each image."
 
 **Many images at once:**
 > "Run the same nuclei segmentation on all `.tif` files in `/data/`. Save one table per image, named `<image name>_results.csv`, in `/data/results/`."

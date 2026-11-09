@@ -1,8 +1,9 @@
 # Cellpose Python API — verified reference
 
-Verified against the installed package in the `cellpose` conda env on this deployment:
-**cellpose 3.1.1.2**, torch **2.11.0+cu126**, CUDA available. All identifiers below were
-checked by importing them, not from upstream docs.
+Verified against the installed package in the `cellpose` env (`/opt/uv/envs/cellpose`):
+**cellpose 3.1.1.2**, torch **2.11.0** (CPU wheel on the CPU image, cu126 on the GPU image).
+All identifiers below were checked by importing them, not from upstream docs. Only `cyto3` is
+pre-installed; other model names download on first use (needs network once).
 
 Every script using this API must start with `# imagentj-env: cellpose`.
 
@@ -70,27 +71,10 @@ plausible masks from the wrong network. `tissuenet` and `livecell` (the bare nam
 the `_cp3` suffix) are exactly this trap. Validate the name against the list above before
 constructing — `WORKFLOW_BATCH_SEGMENTATION.py` does.
 
-### cpsam (Cellpose-SAM) — different env, different API
+### cpsam (Cellpose-SAM) — not available
 
-**cpsam is not in this env.** It needs `# imagentj-env: cellpose4` (cellpose 4.1.1), where
-`models.Cellpose` **does not exist at all** and `model_type=` is accepted but ignored with a
-warning. It is the default weight, so you need no model argument, and no diameter:
-
-```python
-# imagentj-env: cellpose4
-from cellpose import models
-
-model = models.CellposeModel(gpu=True)      # pretrained_model="cpsam" is the default
-masks, flows, styles = model.eval(imgs)     # 3-tuple; imgs may be a LIST (batches like v3)
-```
-
-- **No `diameter` needed** — omitting it is the intended use, and cpsam is channel-agnostic
-  so `channels=` is unnecessary too.
-- **But `diameter` is not ignored if you pass one.** The default behaves like `diameter=30`;
-  passing a different value changes the segmentation. Leave it out unless you mean it.
-- `eval()` takes a list and batches internally, so the batch structure of
-  `WORKFLOW_BATCH_SEGMENTATION.py` carries over — swap the class, drop `diameter`/`channels`,
-  and take a 3-tuple instead of 4.
+Cellpose 4 / `cpsam` is **not installed** in this image (removed to keep it small). Use a
+Cellpose 3 model — `cyto3` is the generalist.
 
 ## `eval()`
 

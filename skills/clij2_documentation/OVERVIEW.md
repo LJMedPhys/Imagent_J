@@ -13,7 +13,7 @@ analysis. Everything runs on GPU memory buffers (`ClearCLBuffer`), not on `Image
 objects, so a workflow is: **push once → chain many operations → pull once**.
 
 **OpenCL is not CUDA.** CLIJ2 does not use, need, or benefit from the CUDA/cuDNN stack that
-cellpose, StarDist and PyTorch use. The two are independent: a container can have working
+cellpose and PyTorch use. The two are independent: a container can have working
 CUDA and still run CLIJ2 on the CPU (see *GPU requirements* below).
 
 ## When to use it — and when not to
@@ -25,7 +25,7 @@ CUDA and still run CLIJ2 on the CPU (see *GPU requirements* below).
 | Batch of many images, same pipeline | **Yes** — but release buffers inside the loop |
 | Per-label statistics on thousands of objects | **Yes** — `statisticsOfLabelledPixels` is one kernel |
 | A single small 2D filter on one image | **No** — the host↔device transfer costs more than the filter saves |
-| Deep-learning segmentation (cellpose, StarDist) | **No** — different stack; those use CUDA |
+| Deep-learning segmentation (cellpose) | **No** — different stack; it uses CUDA |
 | Sub-pixel/geometry work needing ImageJ ROIs, overlays, calibration | **No** — CLIJ2 is calibration- and ROI-blind |
 
 Measure before committing: `GROOVY_BENCHMARK_GPU_VS_CPU.groovy` prints the real numbers for

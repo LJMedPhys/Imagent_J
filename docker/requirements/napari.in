@@ -1,0 +1,6 @@
+# napari-mcp env (Python 3.13) — the in-container interactive napari viewer,
+# driven by the supervisor over MCP (stdio). No micro_sam / torch.
+# napari pinned to the version patch_napari_mcp/ was validated against.
+napari[pyqt6]==0.8.0
+napari-mcp
+fastmcp>=2.10.3,<3

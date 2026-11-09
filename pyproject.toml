@@ -13,9 +13,9 @@ authors = [
     { name = "ISAS e.V.", email = "agentj.help@gmail.com" },
 ]
 keywords = ["imagej", "fiji", "bioimage", "agent", "llm"]
-# Runtime dependencies are managed via environment.yml (conda + pip).
-# This block stays empty so that `pip install .` does not try to resolve
-# them from PyPI alone.
+# Runtime dependencies are managed as uv lock files in docker/requirements/
+# (main.txt for this package's own env). This block stays empty so that
+# `pip install .` does not try to resolve them on its own.
 dependencies = []
 classifiers = [
     "Programming Language :: Python :: 3",

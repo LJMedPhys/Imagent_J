@@ -85,7 +85,7 @@ Your images, results, scripts, installed plugins and chat history are kept when 
 
 ## 5. Using a graphics card (optional)
 
-Agentic-J runs on the processor (CPU) by default. If your computer has an NVIDIA graphics card (GPU), you can use it to make deep-learning steps much faster: Cellpose, StarDist, micro-sam and, above all, [fine-tuning a model](06_napari_and_fine_tuning.md). Fine-tuning takes 10–20 minutes on a GPU, but hours on a CPU.
+Agentic-J runs on the processor (CPU) by default. If your computer has an NVIDIA graphics card (GPU), you can use it to make deep-learning steps much faster: Cellpose segmentation and, above all, [fine-tuning a model](06_napari_and_fine_tuning.md). Fine-tuning takes minutes on a GPU, and much longer on a CPU.
 
 The setup steps are in the main [README](../README.md#gpu-support-optional). In short, you start Agentic-J with an extra file:
 

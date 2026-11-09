@@ -11,12 +11,11 @@ A raw PyTorch `state_dict` (`torch.save(model.state_dict(), path)`), not a full 
 model, ONNX, or safetensors file — Cellpose loads it with `weights_only=True`, which
 rejects anything else.
 
-The key names must match whichever architecture you fine-tuned from — the two are **not
-interchangeable**:
-- Fine-tuned from a **v3 model** (`cyto3`, `nucleitorch_0`, ...) → use the `Cellpose`
-  Groovy command (`env_path = ".../envs/cellpose"`).
-- Fine-tuned from **Cellpose-SAM** (`cpsam`) → use the `CellposeSAM` Groovy command
-  (`env_path = ".../envs/cellpose4"`) instead.
+The key names must match the Cellpose 3 architecture: the model must be fine-tuned from a
+**v3 model** (`cyto3`, `nucleitorch_0`, ...). Use it with the `Cellpose` Groovy command
+(`env_path = "/opt/uv/envs/cellpose"`) or the Python API in env `cellpose`. A model fine-tuned
+from **Cellpose-SAM** (`cpsam`, Cellpose 4) will NOT load — Cellpose 4 is not installed in this
+image.
 
 Optional: a companion `size_<name>.npy` file next to the model enables `diameter=0`
 auto-estimation (like the stock `size_cyto3.npy`); without it, just pass `cp.diameter`

@@ -1,7 +1,7 @@
 # scikit-image — Python Script API
 
 Introspected from the installed build: **scikit-image 0.26.0**, main env
-`/opt/conda/envs/local_imagent_J`. Every signature, property name and behaviour below
+`/opt/uv/envs/main`. Every signature, property name and behaviour below
 was verified by running it.
 
 ## Verified signatures

@@ -81,10 +81,10 @@
      record, downstream phases have no skill pointer for the debugger to
      reference.
      The plugin manager is the TOOL ROUTER: it surveys Fiji plugins, Python packages,
-     AND napari plugins (micro_sam), and returns a structured recommendation with a
+     AND napari (viewer / fine-tuning windows), and returns a structured recommendation with a
      `backend` per tool ("imagej_coder" / "python_data_analyst" / "napari" / "core").
      For a MULTI-STEP task it also returns `pipeline_steps` — each step routed to its own
-     backend (e.g. Fiji-register → micro_sam-segment → Python-measure). Prefer a
+     backend (e.g. Fiji-register → Cellpose-segment (Python) → Python-measure). Prefer a
      specialised tool over custom code, but honour each step's backend — do NOT force
      everything onto Groovy/imagej_coder.
 

@@ -1,11 +1,9 @@
 # napari, Segmentation and Fine-Tuning
 
-Besides Fiji, Agentic-J can use **napari**, an image viewer for Python, in the same chat. Through napari it also offers **micro-sam**, a segmentation tool based on Meta's "Segment Anything" model adapted for microscopy. With these, the assistant can:
+Besides Fiji, Agentic-J can use **napari**, an image viewer for Python, in the same chat. With it, the assistant can:
 
 - show images, masks and results in napari, layer by layer;
-- segment objects that standard tools (StarDist, Cellpose) don't handle well;
-- **learn from your corrections**: you fix a few small squares of your images, and it trains (fine-tunes) the model on them;
-- **sort objects into groups** (for example infected / uninfected) after you mark a few examples.
+- **learn from your corrections**: you fix a few small squares of your images by drawing the right outlines, and it trains (fine-tunes) **Cellpose** on them.
 
 You don't need to know how napari works. Just ask, for example "open this image in napari" or "show me the mask on top of the image".
 
@@ -13,13 +11,13 @@ You don't need to know how napari works. Just ask, for example "open this image 
 
 ## Teaching a model with your corrections (fine-tuning)
 
-Use this when a segmentation keeps making the same mistakes on your images, for example missing cells, merging two cells into one, or outlining debris. You correct a few small squares, and the model learns from them. This works for **micro-sam** and **Cellpose**.
+Use this when a segmentation keeps making the same mistakes on your images, for example missing cells, merging two cells into one, or outlining debris. You correct a few small squares, and **Cellpose** learns from them.
 
 **What you need:**
 - About **20–30 minutes** of your time to correct the squares.
-- A **graphics card (GPU)** is strongly recommended. Training takes 10–20 minutes with a GPU, but hours on a CPU. The assistant tells you how long it will take before you start. See [Using a graphics card](01_getting_started.md#5-using-a-graphics-card-optional).
+- A **graphics card (GPU)** is strongly recommended. Training takes minutes with a GPU, and much longer on a CPU. The assistant tells you how long it will take before you start. See [Using a graphics card](01_getting_started.md#5-using-a-graphics-card-optional).
 
-**Is it worth it?** The assistant first tries the model as it is and shows you the result. Standard images (for example ordinary fluorescent nuclei or common cell lines) are often already segmented well, and then fine-tuning won't help. It pays off most for unusual samples. If you want to sort objects into categories rather than fix their outlines, use [sorting objects into groups](#sorting-objects-into-groups) instead.
+**Is it worth it?** The assistant first tries the model as it is and shows you the result. Standard images (for example ordinary fluorescent nuclei or common cell lines) are often already segmented well, and then fine-tuning won't help. It pays off most for unusual samples. If you want to sort objects into categories rather than fix their outlines, see [sorting objects into groups](#sorting-objects-into-groups) instead.
 
 ### Step 1: pick the squares (you, about 2–3 minutes)
 
@@ -40,21 +38,21 @@ A napari window opens with the first square and an **Annotation Helper** panel o
 
 **The rule:** inside the square, every object must be outlined, and nothing else. Leave outlines that are already right alone. You don't need to touch anything outside the square.
 
+You add objects by **drawing** them: what you trace is exactly the outline that is saved.
+
 | Button | What it does |
 |---|---|
-| **➕ ADD objects** | Click the middle of a missed object, then press **S**, then **C**. |
-| **✏ DRAW round objects** | Click round an object and double-click to close; then **S** and **C**. Use it when clicking keeps getting an object wrong. A rough outline is fine. |
-| **☐ My drawn shape IS the outline** | Tick this if the computer keeps getting an object wrong. What you draw is then saved exactly as the outline, so trace the edge carefully. |
-| **✖ DELETE objects** | Click on an outline that shouldn't be there. |
-| **⌫ CLEAR my clicks & boxes** | Removes your clicks and shapes; outlines stay. |
+| **✏ DRAW objects** | Press, drag round a missed object and release. Draw as many as you like, then press **S** to see them as outlines and **C** to keep them. Follow the edge; roughly is fine. Press **DRAW** again to click a polygon point by point instead. |
+| **✖ DELETE objects** | Click on an outline that shouldn't be there (or hover over it and press **D**). |
+| **⌫ CLEAR my drawings** | Removes shapes you drew but haven't kept yet; kept outlines stay. |
 
-To fix a bad outline, **delete it and add it again.**
+To fix a bad outline, **delete it and draw it again.** A new outline never paints over an existing one.
 
-When a square looks right, press **N** (or **TILE DONE**). **Press N on the last square too: N is what saves your work.** Press **B** to go back to the previous square. You can stop at any time; finished squares are kept, and next time you continue where you left off.
+When a square looks right, press **N** (or **TILE DONE**). **Press N on the last square too: N is what saves your work.** On a square with nothing in it, press **N** twice to save it as empty. Press **B** to go back to the previous square. You can stop at any time; finished squares are kept, and next time you continue where you left off.
 
 While you work, you can ask the assistant questions in the chat, such as "is a rough outline good enough?" or "can I skip this square?".
 
-### Step 3: training and checking (the assistant, 10–20 minutes on a GPU)
+### Step 3: training and checking (the assistant, a few minutes on a GPU)
 
 The assistant trains the model on most of your squares and keeps about a quarter aside for testing. It then segments the test squares with both the **original** and the **new** model, and reports both scores. You can keep chatting while it trains.
 
@@ -72,13 +70,9 @@ Everything is saved in the project folder: your squares and corrections, the tra
 
 ## Sorting objects into groups
 
-If your objects are already segmented and you want to sort them into categories (for example live / dead, infected / uninfected), you don't need fine-tuning. Instead:
+If your objects are already segmented and you want to sort them into categories (for example live / dead, infected / uninfected), you don't need fine-tuning. Ask the assistant to measure the objects (size, shape, intensities) and classify them: it uses the measurements, and a few examples you label if needed, to sort every object, and shows you the result to check.
 
-1. A napari window opens on the first image. You mark a few examples of each group.
-2. Click **Train and predict**. A small classifier learns from your examples in seconds.
-3. Press **N** to move through the remaining images, which are sorted automatically. Check them and correct mistakes if needed.
-
-The classifier is saved in the project folder, so it can be reused on new images.
+(The earlier interactive "click examples in napari" classifier was part of micro-sam, which is no longer included.)
 
 ---
 

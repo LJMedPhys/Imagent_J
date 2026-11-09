@@ -10,40 +10,33 @@ import tempfile
 from imagentj import run_control
 
 # ---------------------------------------------------------------------------
-# Conda envs the Python agent may execute in.
+# Python envs the Python agent may execute in (uv venvs under /opt/uv/envs,
+# built by the Dockerfile from docker/requirements/).
 #
 # The main env carries the data-science + measurement stack (pandas, seaborn,
-# scipy, scikit-image, scikit-learn, cp_measure). brainglobe lives in its
-# own env because it drags in napari + PyQt6 + vtk + keras, which collide with the
-# main env's PySide6 GUI and force a pillow downgrade.
+# scipy, scikit-image, scikit-learn, cp_measure, big-fish, plotnine).
 #
-# napari-mcp is the isolated env that hosts the in-container napari viewer AND the
-# micro_sam ("Segment Anything for Microscopy") stack (torch + segment-anything +
-# micro_sam). The analyst runs micro_sam batch/automatic segmentation scripts here
-# with `# imagentj-env: napari-mcp`; the SAME env backs the interactive napari
-# widget the supervisor drives via mcp__napari_mcp__execute_code, so a mask made in
-# a script and a mask made interactively come from an identical model.
+# napari-mcp is the isolated env that hosts the in-container napari viewer the
+# supervisor drives via mcp__napari_mcp__*. It has napari + its Qt stack but no
+# deep-learning packages; a script only needs it to build napari layers headlessly.
 #
 # A script selects its env with a first-line magic comment:
-#     # imagentj-env: brainglobe
+#     # imagentj-env: cellpose
 # Absent the header, the main env is used.
 # ---------------------------------------------------------------------------
+_ENVS_ROOT = "/opt/uv/envs"
 _CONDA_ENVS: dict[str, str] = {
-    "main": "/opt/conda/envs/local_imagent_J/bin/python",
-    "brainglobe": "/opt/conda/envs/brainglobe/bin/python",
-    "napari-mcp": "/opt/conda/envs/napari-mcp/bin/python",
-    # cellpose v3 (3.1.1.2) + torch/cu126. The Python API is the FAST route for
-    # segmenting a folder: the model is loaded once and stays resident, where the
-    # Fiji/BIOP wrapper re-spawns bash+conda+python and reloads the model for every
-    # cp.run(). Even a loop that rebuilds the model per image still beats the best
-    # Fiji variant, which is why folder-scale cellpose is routed here —
-    # see skills/python/cellpose/SKILL.md.
+    "main": f"{_ENVS_ROOT}/main/bin/python",
+    "napari-mcp": f"{_ENVS_ROOT}/napari-mcp/bin/python",
+    # cellpose v3 (3.1.1.2) + torch (CUDA build on the GPU image); model cyto3 is
+    # baked in. The Python API is the FAST route for segmenting a folder: the model
+    # is loaded once and stays resident, where the Fiji/BIOP wrapper re-spawns
+    # python and reloads the model for every cp.run(). Even a loop that rebuilds
+    # the model per image still beats the best Fiji variant, which is why
+    # folder-scale cellpose is routed here — see skills/python/cellpose/SKILL.md.
     # Self-sufficient for a whole pipeline: numpy, tifffile, scikit-image, scipy,
     # pandas, matplotlib, opencv (no seaborn — the non-main preamble doesn't import it).
-    "cellpose": "/opt/conda/envs/cellpose/bin/python",
-    # cellpose 4.1.1 — the cpsam (Cellpose-SAM) model only. Separate env because v4
-    # drops model_type= and changes the eval signature; mixing them breaks both.
-    "cellpose4": "/opt/conda/envs/cellpose4/bin/python",
+    "cellpose": f"{_ENVS_ROOT}/cellpose/bin/python",
 }
 _DEFAULT_ENV = "main"
 
@@ -55,7 +48,7 @@ _ENV_HEADER_RE = re.compile(r"^#\s*imagentj-env:\s*([A-Za-z0-9_.-]+)\s*$")
 # `USE_GPU = False` and, when asked, invented a "torch +cpu" build to justify it.
 # The banner reads package metadata only: calling torch.cuda here would
 # initialise CUDA before the script's own setup and break forked workers.
-_TORCH_USER_RE = re.compile(r"\b(torch|cellpose|micro_sam|torch_em)\b")
+_TORCH_USER_RE = re.compile(r"\b(torch|cellpose)\b")
 _FORCED_CPU_RE = re.compile(r"\b(gpu|use_gpu|USE_GPU)\s*=\s*False\b")
 
 
@@ -93,7 +86,7 @@ def _resolve_interpreter(env: str) -> tuple[str | None, str | None]:
 # own bundled Qt plugin folder, and cv2 is pulled in transitively the moment this module is
 # imported. os.environ mutations propagate to children, so every script the analyst launches
 # inherits main-env cv2's Qt plugins. In the main env that is harmless. In `napari-mcp`
-# (python 3.11 vs the main env's 3.13, a different Qt build) Qt finds those plugins, refuses
+# (PyQt6 vs the main env's PySide6, a different Qt build) Qt finds those plugins, refuses
 # to load them, and aborts before any window appears:
 #     Could not load the Qt platform plugin "xcb" in ".../cv2/qt/plugins" even though it
 #     was found. This application failed to start because no Qt platform plugin could be
@@ -559,8 +552,8 @@ def run_python_code(code: str, output_directory: str, purpose: str = ""):
     Packages pd, np, plt, sns, and stats are PRE-IMPORTED (main env only).
     NEVER execute code that was generated by yourself.
 
-    The script may select a conda env with a first-line magic comment, e.g.
-    `# imagentj-env: brainglobe`. Without it the main env is used, and only the
+    The script may select a Python env with a first-line magic comment, e.g.
+    `# imagentj-env: cellpose`. Without it the main env is used, and only the
     main env gets the pre-imported data-science preamble.
 
     Input:
@@ -576,7 +569,7 @@ def run_python_code(code: str, output_directory: str, purpose: str = ""):
         return env_error
 
     # Only the main env is guaranteed to carry seaborn/pandas/scipy. A side env
-    # (brainglobe) gets a bare preamble so an import it lacks can't crash the run
+    # (cellpose, napari-mcp) gets a bare preamble so an import it lacks can't crash the run
     # before the agent's own code starts.
     is_main = env == _DEFAULT_ENV
 

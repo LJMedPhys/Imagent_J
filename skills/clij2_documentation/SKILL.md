@@ -6,7 +6,7 @@ description: >-
   projections, transforms and image math, all on GPU buffers. Use it when a workflow is
   heavy (3D neighborhood filters, long operation chains, large batches, thousands of labels)
   and a plain ImageJ or MorphoLibJ implementation would be too slow. Not for deep-learning
-  segmentation (cellpose/StarDist use CUDA, a different stack) and not worth it for a single
+  segmentation (cellpose uses CUDA, a different stack) and not worth it for a single
   small 2D filter, where host-device transfers dominate. Read the files listed at the end for
   the verified scripting API, the full operation catalogue, GUI walkthroughs and tested
   workflow scripts.
@@ -26,7 +26,7 @@ Menu root: **Plugins ▸ ImageJ on GPU (CLIJ2)** · Scripting: `net.haesleinhuep
 | | |
 |---|---|
 | **Yes** | 3D filters on stacks · long chains of ops on one image · big batches · per-label statistics on many objects |
-| **No** | one small 2D filter (transfer > saving) · deep learning (that is CUDA: cellpose, StarDist) · anything needing ROIs, overlays or calibrated units |
+| **No** | one small 2D filter (transfer > saving) · deep learning (that is CUDA: cellpose) · anything needing ROIs, overlays or calibrated units |
 
 Measured here, 512×512×64 float32, gaussian σ=4: **CPU 1188 ms → GPU 62 ms end-to-end
 (19x)**, of which only 6 ms is the kernel and 56 ms the transfers. Run
@@ -47,7 +47,7 @@ runs on POCL (CPU) — **slower than plain ImageJ**, because transfers are paid 
 Report that instead of publishing POCL numbers as GPU results.
 
 **A CUDA check does not answer this question.** `check_environment` / `nvidia-smi` /
-`torch.cuda.is_available()` describe the *CUDA* stack used by cellpose and StarDist. CLIJ2
+`torch.cuda.is_available()` describe the *CUDA* stack used by cellpose. CLIJ2
 can run fine on the GPU when they report nothing, and can be stuck on the CPU when they look
 healthy. The line above is the only valid test — never decline a CLIJ2 task on CUDA evidence.
 

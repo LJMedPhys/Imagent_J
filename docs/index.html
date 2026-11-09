@@ -139,11 +139,11 @@
             <span class="chip">3D ImageJ Suite</span><span class="chip">BigStitcher</span><span class="chip">Bio-Formats</span>
             <span class="chip">BioVoxxel Toolbox</span><span class="chip">BoneJ</span><span class="chip">bUnwarpJ</span>
             <span class="chip">Cellpose</span><span class="chip">CLIJ2</span><span class="chip">Coloc 2</span>
-            <span class="chip">CSBDeep</span><span class="chip">DeepImageJ</span><span class="chip">FeatureJ</span>
+            <span class="chip">FeatureJ</span>
             <span class="chip">Labkit</span>
             <span class="chip">MorphoLibJ</span><span class="chip">NeuronJ</span><span class="chip">OrientationJ</span>
             <span class="chip">Sholl Analysis</span><span class="chip">SNT</span><span class="chip">StackReg</span>
-            <span class="chip">StarDist</span><span class="chip">TrackMate</span><span class="chip">TransformJ</span>
+            <span class="chip">TrackMate</span><span class="chip">TransformJ</span>
             <span class="chip">TurboReg</span>
           </div>
         </div>
@@ -155,12 +155,12 @@
           <path d="M22 22l6 6-6 6"/><path d="M30 36h7"/>
         </svg>
         <h3>Python</h3>
-        <span class="kicker">CONDA ENVS · STATS · PUBLICATION PLOTS</span>
-        <p>The Python analyst writes scripts for the scientific Python stack. A one-line header selects which of the container's conda environments the script runs in.</p>
+        <span class="kicker">PYTHON ENVS · STATS · PUBLICATION PLOTS</span>
+        <p>The Python analyst writes scripts for the scientific Python stack. A one-line header selects which of the container's Python environments the script runs in.</p>
         <div class="skills">
           <div class="chips">
-            <span class="chip">Cellpose 3</span><span class="chip">Cellpose-SAM</span><span class="chip">Big-FISH</span>
-            <span class="chip">cp_measure</span><span class="chip">BrainGlobe</span><span class="chip">scikit-image</span>
+            <span class="chip">Cellpose 3</span><span class="chip">Big-FISH</span>
+            <span class="chip">cp_measure</span><span class="chip">scikit-image</span>
             <span class="chip">scikit-learn</span><span class="chip">statistics</span><span class="chip">matplotlib / seaborn</span>
             <span class="chip">plotnine</span>
           </div>
@@ -176,7 +176,7 @@
         <p>A napari viewer is available through the Model Context Protocol. The agent opens layers, adjusts views and hands you tools, and napari opens only when a task needs it.</p>
         <div class="skills">
           <div class="chips">
-            <span class="chip">napari viewer</span><span class="chip">micro-sam</span><span class="chip">object classifier</span>
+            <span class="chip">napari viewer</span><span class="chip">drawing annotator</span>
             <span class="chip">fine-tuning</span>
           </div>
         </div>
@@ -274,7 +274,7 @@
     <div class="section-head reveal">
       <span class="fig-tag">Install</span>
       <h2 class="section-title">Install <span class="outline">in four steps.</span></h2>
-      <p class="section-sub">You'll need Docker, at least 12 GB of RAM, 50 GB of free disk, and an OpenAI <em>or</em> OpenRouter API key.</p>
+      <p class="section-sub">You'll need Docker, at least 12 GB of RAM, 20 GB of free disk, and an OpenAI <em>or</em> OpenRouter API key.</p>
     </div>
 
     <div class="qs-grid">
@@ -327,7 +327,7 @@ docker compose up</pre>
 
     <div class="gpu-note frame reveal">
       <h4>Have an NVIDIA GPU?</h4>
-      <p>The GPU build accelerates Cellpose, StarDist, micro-sam and fine-tuning. It needs driver 560+, nvidia-container-toolkit and CDI enabled in Docker.
+      <p>The GPU build accelerates Cellpose and fine-tuning. It needs driver 560+, nvidia-container-toolkit and CDI enabled in Docker.
         <a href="https://github.com/MMV-Lab/Agentic-J#gpu-support-optional" target="_blank" rel="noopener" style="text-decoration:underline;text-underline-offset:3px">GPU guide →</a></p>
       <pre class="code"><button class="copy" data-copy>copy</button>docker compose -f docker-compose.yml \
   -f docker-compose.gpu.yml up -d</pre>
@@ -421,7 +421,7 @@ docker compose up</pre>
             <span class="soon">Demo video · coming soon</span>
           </div>
         </div>
-        <p class="demo-desc">Describe what you want to measure. The agent picks a suitable plugin, such as TrackMate, StarDist or MorphoLibJ, writes a Groovy script against its real API, runs it in Fiji and fixes it when the ImageJ log shows an error. You keep the script and can re-run it outside the agent.</p>
+        <p class="demo-desc">Describe what you want to measure. The agent picks a suitable plugin, such as TrackMate, Cellpose or MorphoLibJ, writes a Groovy script against its real API, runs it in Fiji and fixes it when the ImageJ log shows an error. You keep the script and can re-run it outside the agent.</p>
       </div>
       <div class="demo-panel" role="tabpanel" id="panel-finetune" aria-labelledby="tab-finetune" hidden>
         <div class="frame window">
@@ -429,7 +429,7 @@ docker compose up</pre>
           <img src="images/05_finetuning_annotation.jpg" width="1800" height="873" loading="lazy"
                alt="napari with the Agentic-J annotation helper: tile 3 of 20 of a micrograph, with objects outlined inside a cell and buttons to add, draw or delete objects and move to the next tile" />
         </div>
-        <p class="demo-desc">Pick a few tiles in napari and correct the current model's mistakes instead of drawing from scratch. The agent fine-tunes <strong>micro-sam</strong> or <strong>Cellpose</strong> on your corrections, scores the new model against the stock one, and only then runs it on the whole dataset.</p>
+        <p class="demo-desc">Pick a few tiles in napari and correct the current model's mistakes instead of drawing from scratch. The agent fine-tunes <strong>Cellpose</strong> on your corrections, scores the new model against the stock one, and only then runs it on the whole dataset.</p>
       </div>
       <div class="demo-panel" role="tabpanel" id="panel-ui" aria-labelledby="tab-ui" hidden>
         <div class="frame window">
@@ -556,7 +556,7 @@ docker compose up</pre>
         <span class="num">05</span><h4>Security &amp; privacy</h4><p>What is sent to the AI provider and what stays on your computer.</p><span class="arrow">Read →</span>
       </a>
       <a class="doc-card" href="https://github.com/MMV-Lab/Agentic-J/blob/main/user_guide/06_napari_and_fine_tuning.md" target="_blank" rel="noopener">
-        <span class="num">06</span><h4>napari &amp; fine-tuning</h4><p>napari in the chat, micro-sam, training a model on your own corrections.</p><span class="arrow">Read →</span>
+        <span class="num">06</span><h4>napari &amp; fine-tuning</h4><p>napari in the chat, training Cellpose on your own corrections.</p><span class="arrow">Read →</span>
       </a>
       <a class="doc-card" href="https://github.com/MMV-Lab/Agentic-J/blob/main/user_guide/07_learning_mode.md" target="_blank" rel="noopener">
         <span class="num">07</span><h4>Learning mode</h4><p>Learning bioimage analysis with the built-in course.</p><span class="arrow">Read →</span>

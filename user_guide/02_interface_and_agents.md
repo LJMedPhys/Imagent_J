@@ -66,7 +66,7 @@ You only talk to one assistant (the *supervisor*). Behind the scenes it hands pa
 | **Plugin finder** | Picks the best Fiji plugin or tool for the task, checks whether it is installed and installs it if needed (asking you first). |
 | **Fiji script writer** | Writes the Fiji scripts (Groovy) that do the image processing. |
 | **Script fixer** | When a script fails, reads the error and repairs the script. |
-| **Data analyst** | Runs Python for measurements, statistics and plots, and also runs napari, micro-sam and Cellpose. |
+| **Data analyst** | Runs Python for measurements, statistics and plots, and also runs Cellpose and the napari windows for fine-tuning. |
 | **Vision Judge** (optional) | Looks at images and results and says whether they look right. See [Security and privacy](05_security.md#the-vision-judge). |
 | **QA checker** (optional) | Reviews the finished project folder against good-practice and publishing standards. |
 
@@ -98,7 +98,9 @@ Agentic-J takes a screenshot of the window, explains each setting and suggests v
 
 Agentic-J comes with detailed instructions for these tools, so it uses them more reliably:
 
-3D ImageJ Suite · BigStitcher · Bio-Formats · BioVoxxel Toolbox · BoneJ · bUnwarpJ · Cellpose · CLIJ2 · Coloc 2 · CSBDeep · DeepImageJ · FeatureJ · Labkit · MorphoLibJ · NeuronJ · OrientationJ · Sholl Analysis · SNT · StackReg · StarDist · TrackMate (including the StarDist and Cellpose detectors) · TransformJ · TurboReg · **napari** and **micro-sam** (see [chapter 06](06_napari_and_fine_tuning.md))
+3D ImageJ Suite · BigStitcher · Bio-Formats · BioVoxxel Toolbox · BoneJ · bUnwarpJ · Cellpose · CLIJ2 · Coloc 2 · FeatureJ · Labkit · MorphoLibJ · NeuronJ · OrientationJ · Sholl Analysis · SNT · StackReg · TrackMate (including the Cellpose detector) · TransformJ · TurboReg · **napari** (see [chapter 06](06_napari_and_fine_tuning.md))
+
+StarDist, CSBDeep, DeepImageJ, micro-sam and Cellpose-SAM are **not** included in this image, to keep it small. For nuclei, use Cellpose.
 
 The Fiji `Plugins` menu may be too long to show everything. To find a plugin, use the Fiji search bar or `Plugins > Utilities > Find Commands...`.
 
@@ -115,13 +117,8 @@ docker compose up
 
 ## Deep-learning tools: tips
 
-### StarDist (nuclei and round cells)
-Use the StarDist plugin (`Plugins > StarDist > StarDist 2D`) rather than running StarDist models through DeepImageJ. StarDist is also available as a detector in TrackMate (`Plugins > Tracking > TrackMate`).
-
-### Cellpose (cells of many shapes)
-In Fiji, use Cellpose through TrackMate (`Plugins > Tracking > TrackMate`, then choose the Cellpose detector) and select `cellpose` as the environment in the drop-down list.
-
-**Cellpose-SAM** (the newer Cellpose 4 model, environment `cellpose4`) is very slow without a graphics card: expect several minutes per image. Use it only when simpler methods are not good enough.
+### Cellpose (cells and nuclei)
+Cellpose 3 is the deep-learning segmentation tool in this image. The general model `cyto3` is included and works for cells and nuclei; other Cellpose models (for example `nuclei`) are downloaded the first time they are used. In Fiji you can use it through TrackMate (`Plugins > Tracking > TrackMate`, then choose the Cellpose detector; leave the environment on `base` or pick `cellpose`). Without a graphics card, expect about a minute or more per image.
 
 ### Your own Cellpose models
 If you have trained a Cellpose model yourself, put the model file in `data/fine-tuned-models/` and tell the assistant its name. Details are in [`data/fine-tuned-models/README.md`](../data/fine-tuned-models/README.md). Models that Agentic-J [fine-tunes for you](06_napari_and_fine_tuning.md) are saved in your project folder and used automatically.

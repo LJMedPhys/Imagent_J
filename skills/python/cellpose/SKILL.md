@@ -2,31 +2,29 @@
 name: cellpose
 description: >-
   Cellpose deep-learning instance segmentation of cells and nuclei via the PYTHON API, in the
-  `cellpose` conda env (v3.1.1.2 + CUDA). THIS IS THE ROUTE FOR A FOLDER OF IMAGES — the model
-  loads ONCE and stays resident, while the Fiji/BIOP wrapper respawns bash+conda+python and
-  reloads it every call. Send batch segmentation to Python and leave only single still images
+  `cellpose` env (Cellpose 3.1.1.2 + torch; CUDA on the GPU image). THIS IS THE ROUTE FOR A FOLDER
+  OF IMAGES — the model loads ONCE and stays resident, while the Fiji/BIOP wrapper respawns python
+  and reloads it every call. Send batch segmentation to Python and leave only single still images
   or in-GUI work to the Fiji cellpose skill. COPY WORKFLOW_BATCH_SEGMENTATION.py and edit its
   CONFIG block — do NOT hand-write your own loop. Scripts MUST start with
   `# imagentj-env: cellpose` or they run in the main env, where cellpose is absent.
   Build models.Cellpose() ONCE outside the loop, and PASS eval() A LIST of images so it
-  batches on the GPU — never call eval() once per image. Models are pre-downloaded (cyto3,
-  nuclei, cyto2, tissuenet_cp3, livecell_cp3, bact_*); cpsam needs the `cellpose4` env. See
+  batches on the GPU — never call eval() once per image. cyto3 is pre-installed; nuclei, cyto2,
+  tissuenet_cp3, livecell_cp3, bact_* download on first use. Cellpose 4 / cpsam is NOT installed.
+  Also home of FINE-TUNING Cellpose on the user's own annotations (FINETUNING.md). See
   SCRIPT_API.md for eval(), channels, thresholds and pitfalls.
 ---
 
 # Cellpose (Python API) — Documentation Index
 
-> **Teaching Cellpose on the user's own annotations → `FINETUNING.md`.** Stages 3 and 4 are the
-> `WORKFLOW_FINETUNE_CP_*.py` scripts here; **stages 1 and 2 — picking tiles and annotating them
-> — are micro_sam's `WORKFLOW_FINETUNE_1_PREPARE.py` and `WORKFLOW_FINETUNE_2_ANNOTATE.py`, run
-> unchanged.** There is no Cellpose annotator and none is to be written: tiles and label masks
-> do not care which model consumes them, and the user gets the same annotation UI either way.
-> Route "train cellpose on my data", "it keeps missing
-> my cells", "the nuclei model finds nothing on my images" there. It works for **any** cellpose
-> model — `cpsam` (v4) and the whole v3 zoo (`nuclei`, `cyto3`, `livecell_cp3`, …); the scripts
-> re-exec into whichever conda env has the model you asked for. The user picks tiles and corrects
-> ~8 small ones in napari, training takes minutes on a GPU, and the result is MEASURED against
-> the stock model on held-out tiles before anything downstream uses it.
+> **Teaching Cellpose on the user's own annotations → `FINETUNING.md`.** All four stages live
+> here: `WORKFLOW_FINETUNE_CP_1_PREPARE.py` (the user picks tiles), `_CP_2_ANNOTATE.py` (the user
+> DRAWS the corrections — the only annotator; none is to be written), `_CP_3_TRAIN.py`,
+> `_CP_4_APPLY.py`. Stages 1-2 run in env `napari-mcp`, 3-4 in `cellpose`. Route "train cellpose
+> on my data", "it keeps missing my cells", "the nuclei model finds nothing on my images" there.
+> It works for any Cellpose 3 model (`cyto3` default, `nuclei`, `livecell_cp3`, …). The user picks
+> and corrects ~8 small tiles in napari, training takes minutes on a GPU, and the result is
+> MEASURED against the stock model on held-out tiles before anything downstream uses it.
 
 Deep-learning instance segmentation for cells and nuclei. This skill is the **Python** route.
 There is also a Fiji/BIOP route (`cellpose_documentation`) — see *Which route* below.
@@ -39,7 +37,7 @@ its own loop took 7× longer than it needed to, at 44% GPU utilisation.
 
 1. **Copy `WORKFLOW_BATCH_SEGMENTATION.py` and edit its CONFIG block.** Do not hand-write a
    batch script. The workflow already has the model construction, batching, ragged-size
-   handling and validation guards right. (cpsam → `WORKFLOW_CPSAM_BATCH_SEGMENTATION.py`.)
+   handling and validation guards right.
 2. **Build the model ONCE, outside the loop.**
 3. **Pass `eval()` a LIST of images — never one image at a time.** `eval()` batches
    internally and accepts a ragged list, so one call handles the whole folder:
@@ -73,26 +71,6 @@ The env is self-sufficient for a whole pipeline — numpy, tifffile, scikit-imag
 matplotlib, opencv are all present. Only **seaborn** is missing; use matplotlib, or hand the
 measurement/plot step to the main env as a separate script.
 
-### cpsam (Cellpose-SAM) — same batching, different env and class
-
-For **cpsam** use `# imagentj-env: cellpose4` (cellpose 4.1.1). `models.Cellpose` does not
-exist there at all, and `model_type=` is accepted but silently ignored:
-
-```python
-# imagentj-env: cellpose4
-from cellpose import models
-model = models.CellposeModel(gpu=True)      # cpsam is the default weight
-masks, flows, styles = model.eval(imgs)     # 3-tuple; imgs may be a LIST, so it still batches
-```
-
-**No diameter and no channels needed** — that is cpsam's main advantage, and it is
-channel-agnostic. It is *not* ignored if you pass one, though: the default behaves like
-`diameter=30` and a different value changes the result, so simply leave it out.
-
-**Don't hand-convert the v3 workflow — copy `WORKFLOW_CPSAM_BATCH_SEGMENTATION.py`**, which
-is the cpsam twin of `WORKFLOW_BATCH_SEGMENTATION.py` (same CONFIG-block structure, same
-guards, already on the v4 API). Details → `SCRIPT_API.md`.
-
 ### Picking the class in this env (v3)
 
 `models.Cellpose` bundles a size model for auto-diameter, but **only `cyto`, `cyto2`, `cyto3`
@@ -111,7 +89,7 @@ raise: cellpose falls back to the default model silently. The workflow script va
 | Linking objects across TIME (tracking) | TrackMate-Cellpose, not this |
 
 The gap versus the Fiji/BIOP route is process overhead, not model speed: that wrapper writes
-every frame to disk, spawns `bash -c "conda activate && python -m cellpose"`, re-imports torch and
+every frame to disk, spawns `bash -c "<env>/bin/python -m cellpose"`, re-imports torch and
 reloads the weights, then reads masks back — on every call. Python does none of that. Even the
 **worst** Python variant (model rebuilt inside the loop) still beats the **best** Fiji variant,
 which is why folder work belongs here even if the script is imperfect.
@@ -180,5 +158,4 @@ model loads and all I/O.
 | File | What it covers |
 |------|---------------|
 | `WORKFLOW_BATCH_SEGMENTATION.py` | **Copy this for a folder, v3 models** (cyto3, nuclei, tissuenet_cp3, …). Model loaded once, `eval(list)`, per-image uint16 masks + summary CSV. Env `cellpose` |
-| `WORKFLOW_CPSAM_BATCH_SEGMENTATION.py` | **Copy this for a folder when the model is cpsam.** Same structure, but `CellposeModel`, no diameter, no channels, 3-tuple. Env `cellpose4` |
 | `SCRIPT_API.md` | `eval()` signature and returns, channel conventions, model list, threshold tuning, env details |

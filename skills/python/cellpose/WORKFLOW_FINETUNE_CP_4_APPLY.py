@@ -1,11 +1,10 @@
-# imagentj-env: cellpose4
+# imagentj-env: cellpose
 """Stage 4 (Cellpose): segment the whole folder with whichever model stage 3 measured as better.
 
-The Cellpose twin of `skills/napari/micro_sam/WORKFLOW_FINETUNE_4_APPLY.py`. It reads
-`evaluation.json` and uses `recommended_checkpoint`:
+It reads the `evaluation.json` stage 3 wrote and uses `recommended_checkpoint`:
 
     a path  -> the fine-tuned model won on the held-out tiles
-    null    -> it did NOT, and the baseline (stock cpsam, or the previous round's model) is used
+    null    -> it did NOT, and the baseline (stock cyto3, or the previous round's model) is used
 
 Do not override that by hand. The whole point of stage 3 is that "we fine-tuned it" is not the
 same claim as "it got better", and this stage is where the distinction becomes a result the
@@ -29,7 +28,7 @@ OUTPUT_DIR = None       # None = <TASK_DIR>/segmentation
 
 USE_MODEL = "auto"      # "auto"      -> whatever stage 3 measured as better (RECOMMENDED)
                         # "finetuned" -> force the fine-tuned checkpoint even if it lost
-                        # "stock"     -> force the stock cpsam
+                        # "stock"     -> force the stock model (e.g. cyto3)
 DIAMETER = None         # v3 ONLY. None = the diameter stage 3 recorded, which is what the model
                         # was trained at. Overriding it is the fastest way to make a good
                         # fine-tuned v3 model look broken. cpsam ignores it entirely.
@@ -49,15 +48,14 @@ os.environ.setdefault("TQDM_DISABLE", "1")
 
 
 # ------------------------------------------------------------------ model <-> env registry
-# cellpose 4.1.1 ships EXACTLY ONE model: `cpsam` (MODEL_NAMES == ['cpsam']). The whole v3 zoo
-# — nuclei, cyto3, cyto2, livecell, tissuenet, the bacteria and yeast models — exists only in
-# the `cellpose` env (3.1.1.2). So "fine-tune nuclei instead" is not a config change, it is a
-# different interpreter, a different network and a different set of hyperparameters. This block
-# is duplicated in all three CP scripts on purpose: `skills/` is a read-only bind mount and the
-# agent copies ONE script into the project, so a shared-module import would break at runtime.
-V4_PYTHON = "/opt/conda/envs/cellpose4/bin/python"
-V3_PYTHON = "/opt/conda/envs/cellpose/bin/python"
-V4_MODELS = ("cpsam",)
+# Only Cellpose 3 (3.1.1.2) is installed in this image, in the `cellpose` env. Cellpose 4 /
+# Cellpose-SAM (`cpsam`) is NOT — it was removed to keep the image small. The v3 zoo (cyto3,
+# nuclei, cyto2, livecell, tissuenet, the bacteria and yeast models) is all trainable here;
+# only cyto3 is pre-downloaded, the rest download on first use. This block is duplicated in all
+# three CP scripts on purpose: `skills/` is a read-only bind mount and the agent copies ONE
+# script into the project, so a shared-module import would break at runtime.
+V3_PYTHON = "/opt/uv/envs/cellpose/bin/python"
+V4_MODELS = ("cpsam",)   # recognised only to refuse them clearly
 V3_MODELS = (
     "cyto3", "nuclei", "cyto2_cp3", "tissuenet_cp3", "livecell_cp3", "yeast_PhC_cp3",
     "yeast_BF_cp3", "bact_phase_cp3", "bact_fluor_cp3", "deepbacs_cp3", "cyto2", "cyto",
@@ -82,26 +80,28 @@ def model_major(model):
 
 
 def ensure_right_env(model, script_name):
-    """Re-exec into the interpreter that HAS this model, or explain why we cannot.
+    """Make sure we run under the `cellpose` env, and refuse Cellpose 4 models up front.
 
-    The `# imagentj-env:` header picks the starting env; this hops if the requested model lives
-    in the other one. Only when run as a script — an imported module must not have its process
-    replaced under the caller.
+    The `# imagentj-env: cellpose` header normally takes care of the interpreter; this re-execs
+    if the script was started elsewhere. Only when run as a script — an imported module must
+    not have its process replaced under the caller.
     """
-    want = V4_PYTHON if model_major(model) == 4 else V3_PYTHON
+    if model_major(model) == 4:
+        raise SystemExit(
+            f"{model!r} is a Cellpose 4 (Cellpose-SAM) model, which is not installed in this "
+            f"image. Fine-tune a Cellpose 3 model instead — \"cyto3\" is built in.")
+    want = V3_PYTHON
     if os.path.realpath(sys.executable) == os.path.realpath(want):
         return
     running_as_script = os.path.basename(sys.argv[0] or "") == script_name
-    where = "cellpose4" if want is V4_PYTHON else "cellpose"
     if not running_as_script:
         raise SystemExit(
-            f"{model!r} needs the `{where}` env, but this module was imported under "
+            f"{model!r} needs the `cellpose` env, but this module was imported under "
             f"{sys.executable}. Run the script directly, or set the `# imagentj-env:` header "
-            f"to `{where}`.")
+            f"to `cellpose`.")
     if not os.path.exists(want):
         raise SystemExit(f"{model!r} needs {want}, which does not exist in this image.")
-    print(f"[cp] {model!r} lives in cellpose v{model_major(model)} -> re-running under {where}",
-          flush=True)
+    print(f"[cp] re-running under the cellpose env ({want})", flush=True)
     os.execv(want, [want] + sys.argv)
 
 
@@ -189,7 +189,7 @@ def main():
     with open(ev_path) as f:
         ev = json.load(f)
 
-    cp_model = ev.get("model", "cpsam")
+    cp_model = ev.get("model", "cyto3")
     major = ev.get("cellpose_major") or model_major(cp_model)
     if USE_MODEL == "auto":
         pretrained = ev.get("recommended_checkpoint")
@@ -281,9 +281,9 @@ def _model_from_evaluation():
     in evaluation.json rather than configured here — stage 4 uses whatever stage 3 trained."""
     try:
         with open(os.path.join(TASK_DIR, "evaluation.json")) as f:
-            return json.load(f).get("model", "cpsam")
+            return json.load(f).get("model", "cyto3")
     except Exception:
-        return "cpsam"
+        return "cyto3"
 
 
 if __name__ == "__main__":

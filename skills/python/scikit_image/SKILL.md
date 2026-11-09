@@ -2,7 +2,7 @@
 name: scikit_image
 description: >-
   scikit-image (skimage) is the general-purpose Python image-processing library in the MAIN env
-  (local_imagent_J) — import as `skimage`, no install needed. Use it for filtering (gaussian,
+  (`/opt/uv/envs/main`) — import as `skimage`, no install needed. Use it for filtering (gaussian,
   median, sobel, frangi), thresholding (threshold_otsu, threshold_local, threshold_multiotsu),
   morphology (closing, opening, remove_small_objects, skeletonize, disk/ball footprints),
   labelling and instance measurement (measure.label, measure.regionprops_table), watershed
@@ -17,7 +17,7 @@ description: >-
 # scikit-image — Documentation Index
 
 `skimage` is the **default** image-processing library for this agent. Installed in the
-main env (`local_imagent_J`) — no env switch, no install. Version **0.26.0**.
+main env (`/opt/uv/envs/main`) — no env switch, no install. Version **0.26.0**.
 
 **When to use this vs. alternatives**
 - **scikit-image (this skill)** — scientific images: float or 16-bit data, 3D/ND

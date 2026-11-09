@@ -7,8 +7,8 @@ without dragging the full ~15 KB file into context.
 Design goals (the tool MUST be bulletproof, since the agent quotes its output
 verbatim and acts on it):
 
-  * Token-based AND matching, not literal substring. "conda env cellpose"
-    must match a row containing "env `cellpose4` (Python 3.11, cellpose 4.1.1)"
+  * Token-based AND matching, not literal substring. "env cellpose"
+    must match a row containing "env `cellpose` (Python 3.13, cellpose 3.1.1.2)"
     even though backticks and word order break a naive substring search.
   * Markdown noise (backticks, asterisks, underscores, slashes, parentheses,
     pipes) is stripped before matching so it never blocks a hit.
@@ -116,14 +116,14 @@ def _apply_gpu_override(sections: Dict[str, List[str]]) -> None:
     flag = os.environ.get("IMAGENTJ_GPU", "").strip().lower()
     if flag in ("1", "true", "yes", "on"):
         new_row = (
-            "| **CUDA** | Available — NVIDIA GPU active. Cellpose "
-            "(env `cellpose`/`cellpose4`) and StarDist (env `stardist`) run on "
-            "the GPU; keep `--use_gpu` in Cellpose calls (the cellpose skill default). |"
+            "| **CUDA** | Available — NVIDIA GPU active. Cellpose (env `cellpose`) "
+            "runs on the GPU; keep `--use_gpu` in Cellpose calls (the cellpose skill "
+            "default). CLIJ2 uses it through OpenCL. |"
         )
     elif flag in ("0", "false", "no", "off"):
         new_row = (
-            "| **CUDA** | None — no GPU visible to this container. Cellpose and "
-            "StarDist run on CPU (`--use_gpu` falls back to CPU automatically). |"
+            "| **CUDA** | None — no GPU visible to this container. Cellpose runs on "
+            "CPU (`--use_gpu` falls back to CPU automatically). |"
         )
     else:
         new_row = (
@@ -181,7 +181,7 @@ def _normalize(text: str) -> str:
     r"""Lowercase, replace markdown / punctuation with spaces, collapse whitespace.
 
     Designed so that:
-      "env `cellpose4`"        ->  "env cellpose4"
+      "env `cellpose`"         ->  "env cellpose"
       "Cellpose-SAM / cpsam"   ->  "cellpose-sam cpsam"
       "**Java**"               ->  "java"
     """
@@ -238,7 +238,7 @@ def check_environment(query: str = "", section: str = "") -> str:
     """
     Look up software installed in the running container.
 
-    Use this to verify whether a Python package, conda env, Fiji plugin,
+    Use this to verify whether a Python package, Python env, Fiji plugin,
     Fiji jar, or system tool is available BEFORE recommending it in a
     pipeline. Cheaper than reading the full snapshot file.
 
@@ -247,23 +247,22 @@ def check_environment(query: str = "", section: str = "") -> str:
         First the tool tries to find rows containing ALL tokens; if none,
         it falls back to ranked partial matches (most-tokens-matched first).
       * Markdown formatting (backticks, asterisks, slashes) is stripped before
-        matching, so "env `cellpose4`" is reachable via "env cellpose4" or
-        "conda cellpose" or "cellpose 4".
+        matching, so "env `cellpose`" is reachable via "env cellpose" or
+        "cellpose env" or "cellpose 3".
       * The tool NEVER claims a package is "not installed" — that's a false
         negative trap. On a true zero-hit it returns difflib suggestions.
 
     Args:
         query: One or more keywords (case-insensitive). Examples:
-            "stardist", "cellpose", "cellpose 4", "conda env cellpose",
+            "cellpose", "cellpose 3", "env cellpose", "napari",
             "scikit-image", "trackmate cellpose", "cuda", "java".
             Multiple words act as an AND filter (then OR fallback).
             Leave empty (with `section=`) to list every entry in one section.
         section: Optional. Limit the search to one section. Pass "list" to
             see all section names. Common sections:
-            "System / runtime", "Main conda env",
-            "conda env `cellpose`", "conda env `cellpose4`",
-            "conda env `stardist`", "Appose / DeepImageJ env",
-            "Fiji plugins", "Key Fiji jars", "Cellpose aliases".
+            "System / runtime", "Main env", "env `cellpose`",
+            "env `napari-mcp`", "Fiji plugins", "Key Fiji jars",
+            "Cellpose aliases", "Not installed".
 
     Returns:
         Matching rows grouped by section. On no-AND-hit, ranked partial

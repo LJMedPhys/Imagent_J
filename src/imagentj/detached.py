@@ -49,9 +49,10 @@ Scope, deliberately narrow
   script is still mutating — and that path cannot be reliably killed either (see
   `_stopped_report`, which warns the script may still be running after an abort).
   Detachability and stoppability turn out to be the same property: owning the process.
-* **Never an interactive script.** `WORKFLOW_FINETUNE_2_ANNOTATE.py` and the tile
-  picker block on `napari.run()` ON PURPOSE — the script's return IS the "the human
-  is finished" signal. Detaching those breaks the fine-tuning flow outright.
+* **Interactive windows detach IMMEDIATELY.** `WORKFLOW_FINETUNE_CP_2_ANNOTATE.py` and
+  the tile picker block on `napari.run()` ON PURPOSE — the script's return IS the "the
+  human is finished" signal, and it still arrives as a turn when the window closes.
+  Detaching only frees the chat while the user works (see `interactive_reason`).
 """
 
 from __future__ import annotations

@@ -762,15 +762,15 @@ _NAPARI_VISION_SYSTEM = """You are a napari expert analysing a screenshot of the
 
 The window has up to four regions: layer controls (top-left, tools for the SELECTED layer),
 layer list (bottom-left, one entry per open layer with an eye icon for visibility), the canvas
-(the image itself), and — if a plugin is running (e.g. the "Segment Anything for Microscopy" /
-micro_sam panel) — a docked widget panel, usually on the right, with its own fields and buttons.
+(the image itself), and — if a plugin is running — a docked widget panel, usually on the
+right, with its own fields and buttons.
 
 Your task: extract every interactive element visible so an AI agent can give the user precise,
 field-by-field guidance on what to click or set next.
 
 Return a JSON object with these fields:
 
-- window_title  : string — best guess at what's open (e.g. "napari — 2 layers, micro_sam panel
+- window_title  : string — best guess at what's open (e.g. "napari — 2 layers, a plugin panel
                   open"); empty string if you cannot tell.
 - layers        : list of objects, one per row in the layer list:
     { "name": string, "type": string — "image"|"labels"|"points"|"shapes"|"unknown",
@@ -792,14 +792,13 @@ with. Do not guess values that are not visible in the screenshot."""
 
 _NAPARI_SKILL_DOC_PATHS = (
     _SKILLS_DIR / "napari" / "napari_general" / "SKILL.md",
-    _SKILLS_DIR / "napari" / "micro_sam" / "UI_GUIDE.md",
 )
 
 
 def _napari_ui_docs() -> str:
-    """Concatenate the napari layer-list/canvas primer and the micro_sam panel's UI guide,
-    so the vision LLM has ground truth for layer names, button labels, and keyboard shortcuts
-    instead of guessing them from pixels alone."""
+    """Concatenate the napari layer-list/canvas primer, so the vision LLM has ground truth
+    for layer names, button labels, and keyboard shortcuts instead of guessing them from
+    pixels alone."""
     parts = []
     for path in _NAPARI_SKILL_DOC_PATHS:
         try:
@@ -887,8 +886,8 @@ def _describe_napari_window() -> dict:
     text_prompt = "Analyze this napari window screenshot."
     if ui_docs:
         text_prompt += (
-            "\n\nThe following documentation describes napari's layers, the micro_sam panel's "
-            "fields, and keyboard shortcuts. Use it to enrich the 'description' field of each "
+            "\n\nThe following documentation describes napari's layers, panels "
+            "and keyboard shortcuts. Use it to enrich the 'description' field of each "
             "dock-widget field with accurate, specific guidance:\n\n" + ui_docs
         )
 
@@ -1263,8 +1262,8 @@ _CELLPOSE_SIZE_MODEL_ALIASES = {
     "cyto": "cyto",
 }
 
-# Verbatim runner executed inside the `cellpose` conda env (python 3.10). It cannot live in
-# the main env: cellpose is not installed there (python 3.13). Emits one JSON line.
+# Verbatim runner executed inside the `cellpose` env (/opt/uv/envs/cellpose). It cannot run
+# in the main env: cellpose is not installed there. Emits one JSON line.
 _CELLPOSE_DIAMETER_RUNNER = r'''
 import sys, json, warnings
 warnings.filterwarnings("ignore")
@@ -1340,8 +1339,9 @@ def estimate_cellpose_diameter_auto(
       Cross-checking one against the other (or against `vlm_judge` on an overlay) is cheap
       insurance before committing to a long batch run.
 
-    Only `cyto3`, `cyto2`, `cyto` and `nucleitorch_0` have a size model. `cpsam` and the
-    specialised `*_cp3` models do not — use the manual tool for those.
+    Only `cyto3`, `cyto2`, `cyto` and `nucleitorch_0` have a size model; the specialised
+    `*_cp3` models do not — use the manual tool for those. Only cyto3 is pre-installed in
+    this image; the others are downloaded by Cellpose on first use (needs network).
 
     Args:
         image_paths: Image(s) to estimate from. ONE representative image is usually enough;
@@ -1386,7 +1386,7 @@ def estimate_cellpose_diameter_auto(
     if missing:
         return json.dumps({"error": "missing_images", "paths": missing})
 
-    python_bin = "/opt/conda/envs/cellpose/bin/python"
+    python_bin = "/opt/uv/envs/cellpose/bin/python"
     if not os.path.exists(python_bin):
         return json.dumps({"error": f"cellpose env python not found at {python_bin}"})
 

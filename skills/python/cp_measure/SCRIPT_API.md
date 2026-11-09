@@ -2,7 +2,7 @@
 
 Every identifier and default below was introspected from the installed build
 (`cp_measure @ git+https://github.com/afermg/cp_measure.git`, main env
-`/opt/conda/envs/local_imagent_J`). Feature counts were produced by running each
+`/opt/uv/envs/main`). Feature counts were produced by running each
 function on a 2-object label image.
 
 > **This is the GitHub API.** The PyPI package `cp-measure` exposes an older

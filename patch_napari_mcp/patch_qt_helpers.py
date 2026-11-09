@@ -4,7 +4,7 @@
 Agent J runs the napari-mcp standalone stdio server as a long-lived,
 agent-driven, in-container viewer. Two upstream behaviours break that model,
 and this patch fixes both (fail-fast if the upstream source drifts, matching
-the philosophy of ``patch_stardist/``):
+the philosophy of the other build-time patches):
 
 1. **Window close kills the server.** Upstream ``_on_destroyed`` (fired when the
    user clicks the window's close button) calls ``state.request_shutdown()``,
@@ -21,7 +21,7 @@ the philosophy of ``patch_stardist/``):
    the pump in ``ensure_viewer`` so any viewer (re)creation is interactive.
 
 Run with the napari-mcp env's python:
-    /opt/conda/envs/napari-mcp/bin/python patch_napari_mcp/patch_qt_helpers.py
+    /opt/uv/envs/napari-mcp/bin/python patch_napari_mcp/patch_qt_helpers.py
 """
 from __future__ import annotations
 

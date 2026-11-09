@@ -1,23 +1,16 @@
-# imagentj-env: cellpose4
+# imagentj-env: cellpose
 # imagentj-detach: training runs 10-20 min on a GPU with no human in the loop
-"""Stage 3 (Cellpose): train cpsam on the user's annotated tiles, then MEASURE whether it helped.
+"""Stage 3 (Cellpose): fine-tune a Cellpose 3 model (default cyto3) on the user's annotated
+tiles, then MEASURE whether it helped.
 
-This is the Cellpose twin of `skills/napari/micro_sam/WORKFLOW_FINETUNE_3_TRAIN.py` and reads
-the SAME `manifest.json`. Stages 1 and 2 are shared: the user picks tiles in the napari picker
-(`SEGMENT_BACKEND="cellpose"` makes it show what Cellpose currently gets wrong) and corrects
-them in the SAM-assisted annotator. SAM is the annotation ASSISTANT there — clicking an object
-and pressing S/C is far faster than painting it — but what gets trained here is Cellpose.
-
-Only stages 3 and 4 are Cellpose-specific, because only they need the `cellpose4` env: it has
-cellpose and torch but NO napari, NO skimage, NO elf and NO imageio. That is also why the mSA
-metric below is implemented here in numpy/scipy instead of imported from elf — the numbers are
-computed to elf's definition so they are directly comparable to a micro_sam run on the same
-tiles.
+Reads the `manifest.json` stage 1 wrote (WORKFLOW_FINETUNE_CP_1_PREPARE.py) and the label tifs
+the user saved in stage 2 (WORKFLOW_FINETUNE_CP_2_ANNOTATE.py). Stages 3 and 4 run in the
+`cellpose` env; the mSA metric below is implemented in numpy/scipy to elf's definition (elf is
+not installed), so the numbers are the standard ones.
 
 WHAT IT DOES
-    1. Validate the annotations (Cellpose's own `min_train_masks=5` is stricter than
-       micro_sam's 2 — a tile with fewer is DROPPED BY CELLPOSE SILENTLY, so it is rejected
-       here with a reason instead).
+    1. Validate the annotations (Cellpose's own `min_train_masks=5` drops a tile with fewer
+       objects SILENTLY, so such a tile is rejected here with a reason instead).
     2. Split by SOURCE IMAGE, never by tile: two tiles from one field share illumination,
        focus and cell population, so a tile-level split scores the model on what it has
        effectively already seen and reports a gain that does not exist.
@@ -45,15 +38,14 @@ TASK_DIR = "/app/data/projects/<project>/cellpose_finetune"
 
 CP_MODEL = "auto"       # WHICH cellpose model to fine-tune. "auto" = the model stage 1 showed
                         # the user (recorded in the manifest as `cp_model`), falling back to
-                        # "cpsam". Leave it on "auto" unless you deliberately want to train a
+                        # "cyto3". Leave it on "auto" unless you deliberately want to train a
                         # DIFFERENT model from the one whose mistakes the user corrected —
                         # that throws away the active-learning property of the whole workflow.
                         # Explicitly, any of:
-                        #   "cpsam"                     -> cellpose 4 (env cellpose4)
-                        #   "nuclei", "cyto3", "cyto2", "livecell_cp3", "tissuenet_cp3",
-                        #   "bact_phase_cp3", "deepbacs_cp3", ...  -> cellpose 3 (env cellpose)
-                        # The script RE-EXECS into the right env by itself — cellpose 4 ships
-                        # ONLY cpsam, and the v3 zoo exists only in the v3 env. Pick the model
+                        #   "cyto3" (built in), "nuclei", "cyto2", "livecell_cp3",
+                        #   "tissuenet_cp3", "bact_phase_cp3", "deepbacs_cp3", ... (Cellpose 3;
+                        #   all but cyto3 download on first use). Cellpose 4 / cpsam is not
+                        #   installed in this image. Pick the model
                         # that is already closest on this data; fine-tuning amplifies a good
                         # starting point, it does not rescue a wrong one.
 PRETRAINED = None       # None = start from CP_MODEL's stock weights, or a PATH to a previously
@@ -101,15 +93,14 @@ os.environ.setdefault("TQDM_DISABLE", "1")
 
 
 # ------------------------------------------------------------------ model <-> env registry
-# cellpose 4.1.1 ships EXACTLY ONE model: `cpsam` (MODEL_NAMES == ['cpsam']). The whole v3 zoo
-# — nuclei, cyto3, cyto2, livecell, tissuenet, the bacteria and yeast models — exists only in
-# the `cellpose` env (3.1.1.2). So "fine-tune nuclei instead" is not a config change, it is a
-# different interpreter, a different network and a different set of hyperparameters. This block
-# is duplicated in all three CP scripts on purpose: `skills/` is a read-only bind mount and the
-# agent copies ONE script into the project, so a shared-module import would break at runtime.
-V4_PYTHON = "/opt/conda/envs/cellpose4/bin/python"
-V3_PYTHON = "/opt/conda/envs/cellpose/bin/python"
-V4_MODELS = ("cpsam",)
+# Only Cellpose 3 (3.1.1.2) is installed in this image, in the `cellpose` env. Cellpose 4 /
+# Cellpose-SAM (`cpsam`) is NOT — it was removed to keep the image small. The v3 zoo (cyto3,
+# nuclei, cyto2, livecell, tissuenet, the bacteria and yeast models) is all trainable here;
+# only cyto3 is pre-downloaded, the rest download on first use. This block is duplicated in all
+# three CP scripts on purpose: `skills/` is a read-only bind mount and the agent copies ONE
+# script into the project, so a shared-module import would break at runtime.
+V3_PYTHON = "/opt/uv/envs/cellpose/bin/python"
+V4_MODELS = ("cpsam",)   # recognised only to refuse them clearly
 V3_MODELS = (
     "cyto3", "nuclei", "cyto2_cp3", "tissuenet_cp3", "livecell_cp3", "yeast_PhC_cp3",
     "yeast_BF_cp3", "bact_phase_cp3", "bact_fluor_cp3", "deepbacs_cp3", "cyto2", "cyto",
@@ -134,26 +125,28 @@ def model_major(model):
 
 
 def ensure_right_env(model, script_name):
-    """Re-exec into the interpreter that HAS this model, or explain why we cannot.
+    """Make sure we run under the `cellpose` env, and refuse Cellpose 4 models up front.
 
-    The `# imagentj-env:` header picks the starting env; this hops if the requested model lives
-    in the other one. Only when run as a script — an imported module must not have its process
-    replaced under the caller.
+    The `# imagentj-env: cellpose` header normally takes care of the interpreter; this re-execs
+    if the script was started elsewhere. Only when run as a script — an imported module must
+    not have its process replaced under the caller.
     """
-    want = V4_PYTHON if model_major(model) == 4 else V3_PYTHON
+    if model_major(model) == 4:
+        raise SystemExit(
+            f"{model!r} is a Cellpose 4 (Cellpose-SAM) model, which is not installed in this "
+            f"image. Fine-tune a Cellpose 3 model instead — \"cyto3\" is built in.")
+    want = V3_PYTHON
     if os.path.realpath(sys.executable) == os.path.realpath(want):
         return
     running_as_script = os.path.basename(sys.argv[0] or "") == script_name
-    where = "cellpose4" if want is V4_PYTHON else "cellpose"
     if not running_as_script:
         raise SystemExit(
-            f"{model!r} needs the `{where}` env, but this module was imported under "
+            f"{model!r} needs the `cellpose` env, but this module was imported under "
             f"{sys.executable}. Run the script directly, or set the `# imagentj-env:` header "
-            f"to `{where}`.")
+            f"to `cellpose`.")
     if not os.path.exists(want):
         raise SystemExit(f"{model!r} needs {want}, which does not exist in this image.")
-    print(f"[cp] {model!r} lives in cellpose v{model_major(model)} -> re-running under {where}",
-          flush=True)
+    print(f"[cp] re-running under the cellpose env ({want})", flush=True)
     os.execv(want, [want] + sys.argv)
 
 
@@ -161,7 +154,7 @@ MSA_THRESHOLDS = tuple(round(0.5 + 0.05 * i, 2) for i in range(10))   # 0.50 .. 
 
 
 def ensure_model_cache(fallback_dir):
-    """Guarantee a writable cellpose model cache, the way stage 3 does for micro_sam.
+    """Guarantee a writable cellpose model cache.
 
     `~/.cellpose` is inside a NAMED VOLUME. On a deployment whose volume predates the image's
     model bake, that directory survives as an empty ROOT-OWNED folder while this process runs
@@ -236,7 +229,7 @@ def iou_matrix(true, pred):
 def mean_segmentation_accuracy(pred, true):
     """elf's mSA: mean over IoU thresholds 0.50..0.95 of TP / (TP + FP + FN).
 
-    Implemented here because `elf` is not in the cellpose4 env. Matching is optimal
+    Implemented here because `elf` is not in the cellpose env. Matching is optimal
     (linear_sum_assignment), the same as elf — greedy matching inflates the score.
     """
     import numpy as np
@@ -316,9 +309,9 @@ def resolve_cp_model(task_dir=None):
         return CP_MODEL
     try:
         with open(os.path.join(task_dir or TASK_DIR, "manifest.json")) as f:
-            return json.load(f).get("cp_model") or "cpsam"
+            return json.load(f).get("cp_model") or "cyto3"
     except Exception:
-        return "cpsam"
+        return "cyto3"
 
 
 def load_manifest():
@@ -347,8 +340,8 @@ def validate(manifest):
             continue
         n = int(len(np.unique(lab)) - (1 if 0 in lab else 0))
         # An EMPTY annotation is not a missing one. The file exists, so the user opened this
-        # tile and pressed N on it — micro_sam even makes them confirm "Nothing is segmented
-        # yet". On a field of pure debris that is the correct answer and a deliberate NEGATIVE
+        # tile and pressed N on it — twice, the annotator makes them confirm an empty tile.
+        # On a field of pure debris that is the correct answer and a deliberate NEGATIVE
         # example. Calling it "not annotated" and dropping it silently discards exactly the
         # signal that teaches the model debris is not a cell.
         if n == 0:
@@ -435,14 +428,13 @@ def main():
     bs = BATCH_SIZE if BATCH_SIZE is not None else D["batch_size"]
     bsize = BSIZE if BSIZE is not None else D["bsize"]
 
-    backend = manifest.get("segment_backend", "micro_sam")
+    backend = manifest.get("segment_backend", "cellpose")
     if backend != "cellpose":
         print(f"[cp-train] NOTE: this task folder was prepared for the '{backend}' backend, so "
               f"the\n           pre-segmentations the user corrected came from that model, not "
               f"from Cellpose.\n           The ANNOTATIONS are model-agnostic, so training on "
-              f"them is valid — but the\n           user was shown a different model's mistakes. "
-              f"Prefer SEGMENT_BACKEND='cellpose'\n           in stage 1 when the goal is a "
-              f"Cellpose model.")
+              f"them is valid — but the\n           user was shown a different model's "
+              f"mistakes.")
 
     # Round 2+: continue from, and MEASURE AGAINST, the model the user actually corrected.
     base = PRETRAINED or manifest.get("base_checkpoint")

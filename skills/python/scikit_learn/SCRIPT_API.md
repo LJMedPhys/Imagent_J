@@ -1,6 +1,6 @@
 # scikit-learn — Python Script API
 
-Verified against **scikit-learn 1.9.0**, main env `/opt/conda/envs/local_imagent_J`.
+Verified against **scikit-learn 1.9.0**, main env `/opt/uv/envs/main`.
 Every number quoted below was measured by running the code, not taken from a tutorial.
 
 ## Version notes (1.9)

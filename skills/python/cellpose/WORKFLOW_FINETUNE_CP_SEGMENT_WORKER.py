@@ -1,30 +1,30 @@
-# imagentj-env: cellpose4
+# imagentj-env: cellpose
 """Segment a batch of images with Cellpose and write label TIFFs. Called as a SUBPROCESS.
 
 WHY THIS EXISTS
 ---------------
-cellpose and napari cannot share an interpreter in this container: `napari-mcp` has napari,
-micro_sam and skimage but NO cellpose; `cellpose4` has cellpose and torch but NO napari, NO
-skimage and NO imageio. The fine-tuning tile picker must run where napari is, and it wants to
+cellpose and napari do not share an interpreter in this container: `napari-mcp` has napari
+but NO cellpose; `cellpose` has cellpose and torch but NO napari. The fine-tuning tile picker
+must run where napari is, and it wants to
 show the user what CELLPOSE currently gets wrong — so the segmentation crosses the env boundary
 as a subprocess over TIFF files on disk.
 
-Batch, never per image: loading cpsam costs ~10 s, so a per-image process makes the picker
+Batch, never per image: loading a model costs seconds, so a per-image process makes the picker
 unusable. One call segments a whole list.
 
     # batch: segment a list, then exit
-    /opt/conda/envs/cellpose4/bin/python WORKFLOW_FINETUNE_CP_SEGMENT_WORKER.py job.json
+    /opt/uv/envs/cellpose/bin/python WORKFLOW_FINETUNE_CP_SEGMENT_WORKER.py job.json
 
     # serve: load the model ONCE, then take one job per stdin line
-    /opt/conda/envs/cellpose4/bin/python WORKFLOW_FINETUNE_CP_SEGMENT_WORKER.py --serve setup.json
+    /opt/uv/envs/cellpose/bin/python WORKFLOW_FINETUNE_CP_SEGMENT_WORKER.py --serve setup.json
 
 job.json:
-    {"pretrained_model": "cpsam" | "/path/to/finetuned.pt",
-     "diameter": null | float,          # null = cpsam's own scale (v4 does not rescale)
+    {"pretrained_model": "cyto3" | "<zoo name>" | "/path/to/finetuned_model",
+     "diameter": null | float,          # null = the model's default diameter
      "flow_threshold": 0.4, "cellprob_threshold": 0.0, "min_size": 15,
      "pairs": [["/in/a.tif", "/out/a.tif"], ...]}
 
-Serve mode exists for the interactive tile picker. Loading cpsam costs ~10 s; the picker
+Serve mode exists for the interactive tile picker. Loading a model costs seconds; the picker
 segments a new field every time the user asks for one, so a fresh process per field would make
 it unusable. `--serve` takes the same JSON minus `pairs`, then reads one {"pairs": [...]} per
 line from stdin and answers with one summary line per job.
@@ -46,15 +46,14 @@ os.environ.setdefault("TQDM_DISABLE", "1")
 
 
 # ------------------------------------------------------------------ model <-> env registry
-# cellpose 4.1.1 ships EXACTLY ONE model: `cpsam` (MODEL_NAMES == ['cpsam']). The whole v3 zoo
-# — nuclei, cyto3, cyto2, livecell, tissuenet, the bacteria and yeast models — exists only in
-# the `cellpose` env (3.1.1.2). So "fine-tune nuclei instead" is not a config change, it is a
-# different interpreter, a different network and a different set of hyperparameters. This block
-# is duplicated in all three CP scripts on purpose: `skills/` is a read-only bind mount and the
-# agent copies ONE script into the project, so a shared-module import would break at runtime.
-V4_PYTHON = "/opt/conda/envs/cellpose4/bin/python"
-V3_PYTHON = "/opt/conda/envs/cellpose/bin/python"
-V4_MODELS = ("cpsam",)
+# Only Cellpose 3 (3.1.1.2) is installed in this image, in the `cellpose` env. Cellpose 4 /
+# Cellpose-SAM (`cpsam`) is NOT — it was removed to keep the image small. The v3 zoo (cyto3,
+# nuclei, cyto2, livecell, tissuenet, the bacteria and yeast models) is all trainable here;
+# only cyto3 is pre-downloaded, the rest download on first use. This block is duplicated in all
+# three CP scripts on purpose: `skills/` is a read-only bind mount and the agent copies ONE
+# script into the project, so a shared-module import would break at runtime.
+V3_PYTHON = "/opt/uv/envs/cellpose/bin/python"
+V4_MODELS = ("cpsam",)   # recognised only to refuse them clearly
 V3_MODELS = (
     "cyto3", "nuclei", "cyto2_cp3", "tissuenet_cp3", "livecell_cp3", "yeast_PhC_cp3",
     "yeast_BF_cp3", "bact_phase_cp3", "bact_fluor_cp3", "deepbacs_cp3", "cyto2", "cyto",
@@ -79,26 +78,28 @@ def model_major(model):
 
 
 def ensure_right_env(model, script_name):
-    """Re-exec into the interpreter that HAS this model, or explain why we cannot.
+    """Make sure we run under the `cellpose` env, and refuse Cellpose 4 models up front.
 
-    The `# imagentj-env:` header picks the starting env; this hops if the requested model lives
-    in the other one. Only when run as a script — an imported module must not have its process
-    replaced under the caller.
+    The `# imagentj-env: cellpose` header normally takes care of the interpreter; this re-execs
+    if the script was started elsewhere. Only when run as a script — an imported module must
+    not have its process replaced under the caller.
     """
-    want = V4_PYTHON if model_major(model) == 4 else V3_PYTHON
+    if model_major(model) == 4:
+        raise SystemExit(
+            f"{model!r} is a Cellpose 4 (Cellpose-SAM) model, which is not installed in this "
+            f"image. Fine-tune a Cellpose 3 model instead — \"cyto3\" is built in.")
+    want = V3_PYTHON
     if os.path.realpath(sys.executable) == os.path.realpath(want):
         return
     running_as_script = os.path.basename(sys.argv[0] or "") == script_name
-    where = "cellpose4" if want is V4_PYTHON else "cellpose"
     if not running_as_script:
         raise SystemExit(
-            f"{model!r} needs the `{where}` env, but this module was imported under "
+            f"{model!r} needs the `cellpose` env, but this module was imported under "
             f"{sys.executable}. Run the script directly, or set the `# imagentj-env:` header "
-            f"to `{where}`.")
+            f"to `cellpose`.")
     if not os.path.exists(want):
         raise SystemExit(f"{model!r} needs {want}, which does not exist in this image.")
-    print(f"[cp] {model!r} lives in cellpose v{model_major(model)} -> re-running under {where}",
-          flush=True)
+    print(f"[cp] re-running under the cellpose env ({want})", flush=True)
     os.execv(want, [want] + sys.argv)
 
 
@@ -148,7 +149,7 @@ def main() -> int:
     with open(sys.argv[2 if serve else 1]) as f:
         job = json.load(f)
 
-    pretrained = job.get("pretrained_model") or "cpsam"
+    pretrained = job.get("pretrained_model") or "cyto3"
     ensure_right_env(pretrained, "WORKFLOW_FINETUNE_CP_SEGMENT_WORKER.py")
 
     import torch

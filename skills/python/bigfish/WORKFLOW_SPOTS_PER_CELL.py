@@ -3,7 +3,7 @@ WORKFLOW: spot channel + cell/nucleus LABEL image -> spots-per-cell CSV.
 
 The standard smFISH readout: how many transcripts does each cell contain. Detection
 needs no parameter tuning (automatic threshold); the labels come from an upstream
-segmentation step (cellpose / stardist / labkit), NOT from this script.
+segmentation step (cellpose / labkit / classical), NOT from this script.
 
 Runs in the MAIN env. Copy this file, edit the CONFIG block, delete the synthetic
 fallback, and hand SpotsPerCell.csv to the statistics stage.

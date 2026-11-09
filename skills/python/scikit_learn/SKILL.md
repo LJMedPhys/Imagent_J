@@ -1,7 +1,7 @@
 ---
 name: scikit_learn
 description: >-
-  scikit-learn (`import sklearn`) is available in the MAIN env (local_imagent_J). Use it to turn
+  scikit-learn (`import sklearn`) is available in the MAIN env (`/opt/uv/envs/main`). Use it to turn
   a per-object measurement table (from regionprops_table or cp_measure) into biology —
   unsupervised phenotyping (StandardScaler + PCA + KMeans, silhouette to choose k), supervised
   classification of cell types with cross-validation, permutation feature importance, and outlier
@@ -17,7 +17,7 @@ description: >-
 
 # scikit-learn — Documentation Index
 
-Main env (`local_imagent_J`). Version **1.9.0**. Import as `sklearn`.
+Main env (`/opt/uv/envs/main`). Version **1.9.0**. Import as `sklearn`.
 
 **Use it for**: phenotyping (clustering), cell-type classification, dimensionality
 reduction, feature importance, outlier detection.

@@ -1,0 +1,24 @@
+# cellpose env (Python 3.12 — cellpose 3 caps numpy<2.1, which has no 3.13 wheels)
+# — Cellpose 3 only. Used by the BIOP Fiji wrapper
+# (env_path /opt/uv/envs/cellpose), TrackMate-Cellpose (through the conda shim)
+# and python_data_analyst (`# imagentj-env: cellpose`).
+#
+# Not compiled into a lock: torch is installed FIRST by the Dockerfile from the
+# PyTorch index (CPU or CUDA wheel, chosen by USE_GPU/CUDA_TAG), and the pins
+# below then resolve around it.
+#
+# Plain `cellpose`, not `cellpose[gui]`: the [gui] extra only adds PyQt for
+# Cellpose's own annotation window, which this container never opens.
+cellpose==3.1.1.2
+# cellpose 3 pinned an old tifffile that calls ndarray.newbyteorder() (removed in
+# NumPy 2) on the big-endian TIFFs ImageJ writes; the BIOP wrapper feeds it those.
+tifffile>=2025.5.10
+# The env must carry a whole segment-and-measure script on its own (the analyst
+# routes folder-scale Cellpose here): measurements, tables and QC plots.
+scikit-image
+pandas
+matplotlib
+# imported by the python_data_analyst harness preamble that wraps every script
+langchain-core
+langgraph-checkpoint-sqlite
+pydantic

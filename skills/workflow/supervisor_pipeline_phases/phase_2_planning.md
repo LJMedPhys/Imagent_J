@@ -41,7 +41,7 @@ call `recall_concepts` alongside it.
    PLUGIN RECOMMENDATION DISCIPLINE: If plugin_manager returned a recommendation in Phase 1,
    AT LEAST ONE of the three proposed pipelines MUST use that plugin as the core step
    (e.g., if TurboReg was recommended, one pipeline uses TurboReg for registration; if
-   StarDist was recommended, one pipeline uses StarDist for segmentation). Do not
+   Cellpose was recommended, one pipeline uses Cellpose for segmentation). Do not
    silently replace it with a generic alternative. The other pipelines may explore
    different approaches, but each pipeline description must name the plugin(s) it uses
    so the user is choosing knowingly.
@@ -51,10 +51,11 @@ call `recall_concepts` alongside it.
    each step names both its TOOL and its BACKEND, and Step 3 below delegates accordingly:
      • backend "imagej_coder"        → imagej_coder writes/executes the Groovy for that step.
      • backend "python_data_analyst" → python_data_analyst writes the Python; pass the step's
-       `env` so its script carries `# imagentj-env: <env>` ("napari-mcp" for micro_sam batch).
-     • backend "napari"              → YOU drive micro_sam in the live viewer via the
-       mcp__napari_mcp__* tools (execute_code / add_layer / screenshot); save the label mask
-       to a file so the next step can read it.
+       `env` so its script carries `# imagentj-env: <env>` ("cellpose" for Cellpose batch,
+       "napari-mcp" for a napari window the user works in).
+     • backend "napari"              → DISPLAY only: YOU open finished layers in the live viewer
+       via the mcp__napari_mcp__* tools (add_layer / screenshot). Anything that computes goes
+       to python_data_analyst instead.
      • backend "core"                → imagej_coder writes plain IJ.run().
    A single pipeline may legitimately span all of these. Name the backend for every step in
    each proposed pipeline so the user (and later phases) know who runs what.

@@ -8,7 +8,7 @@ Prerequisites:
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or Docker Engine + Compose on Linux)
 - [Git](https://git-scm.com/downloads) **and** [Git LFS](https://git-lfs.com/) — the RAG vector database (`qdrant_data/**/storage.sqlite`) is stored via Git LFS, so a plain clone without LFS will give you stub files that won't work.
-- ~12 GB RAM and ~30 GB free disk
+- ~12 GB RAM and ~20 GB free disk
 - An OpenAI **or** OpenRouter API key
 
 > The optional VLM Judge uses `google/gemini-3.5-flash` when
@@ -46,7 +46,7 @@ Place images you want to analyse in [`./data/`](data/) — the agent sees them a
 
 ## GPU support (optional)
 
-By default the container runs on **CPU** (`docker compose up`). On an NVIDIA GPU host you can run the GPU build, which accelerates the deep-learning segmentation steps — **Cellpose** (v3 + Cellpose-SAM, PyTorch) and **StarDist** (TensorFlow).
+By default the container runs on **CPU** (`docker compose up`). On an NVIDIA GPU host you can run the GPU build, which accelerates the deep-learning steps — **Cellpose** 3 segmentation and fine-tuning (PyTorch).
 
 Requirements:
 
@@ -96,7 +96,7 @@ docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml exec imagentj \
-  /opt/conda/envs/cellpose/bin/python -c "import torch; print(torch.cuda.is_available())"   # -> True
+  /opt/uv/envs/cellpose/bin/python -c "import torch; print(torch.cuda.is_available())"   # -> True
 ```
 
 ## Documentation
@@ -110,20 +110,21 @@ The full user guide lives in [`user_guide/`](user_guide/):
 | [03 Writing good requests](user_guide/03_prompting.md) | What to tell the assistant, examples, tips |
 | [04 Your files, chats and reports](user_guide/04_data_history_and_reports.md) | Where results are saved, chat history, cost and issue reports |
 | [05 Security and privacy](user_guide/05_security.md) | What is sent to the AI provider, the Vision Judge, network access |
-| [06 napari, segmentation and fine-tuning](user_guide/06_napari_and_fine_tuning.md) | napari, micro-sam, fine-tuning on your corrections, sorting objects |
+| [06 napari, segmentation and fine-tuning](user_guide/06_napari_and_fine_tuning.md) | napari, fine-tuning Cellpose on your corrections, sorting objects |
 | [07 Learning mode](user_guide/07_learning_mode.md) | Learning bioimage analysis with the built-in course |
 
 ## Project layout
 
 - [`src/imagentj/`](src/imagentj/) — main Python package (agents, tools, RAG)
 - [`skills/`](skills/) — per-plugin documentation packs the agent retrieves at runtime
-- [`bundled_jars/`](bundled_jars/), [`bundled_cache/`](bundled_cache/) — JARs and a pre-warmed jgo/Maven cache used to build the image offline
+- [`bundled_jars/`](bundled_jars/), [`bundled_cache/`](bundled_cache/) — the BIOP Cellpose wrapper JAR and a pre-warmed jgo/Maven cache used to build the image
+- [`docker/requirements/`](docker/requirements/) — the Python environments (uv lock files) baked into the image
 - [`data/`](data/) — image data and per-run outputs (mounted into the container)
-- [`models/`](models/) — Cellpose models (bind-mounted at runtime)
+- `data/fine-tuned-models/` — your own Cellpose models (see the README there)
 
 ## Development (without Docker)
 
-Running on the host is supported but not the recommended path. See [environment.yml](environment.yml) for the conda environment, set `FIJI_PATH` to your local Fiji install, and run `python gui_runner.py` (GUI) or `python run.py` (CLI).
+Running on the host is supported but not the recommended path. Create the main environment with uv (`uv venv -p 3.13 && uv pip sync docker/requirements/main.txt`), set `FIJI_PATH` to your local Fiji install (and `JAVA_HOME` to a Java 21 JDK, e.g. the one inside Fiji), and run `python gui_runner.py` (GUI) or `python run.py` (CLI).
 
 ## Reporting issues
 

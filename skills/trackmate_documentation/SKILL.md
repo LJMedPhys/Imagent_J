@@ -4,7 +4,7 @@ description: >-
   TrackMate is the Fiji/ImageJ plugin for single-particle TRACKING (SPT) — LINKING objects
   across TIME into trajectories in 2D/3D timelapses (LAP, Kalman, nearest-neighbour trackers),
   with per-frame detection supplied by a built-in detector (LoG, DoG, Threshold, LabelImage)
-  or a deep-learning detector (Cellpose, StarDist). Use this skill ONLY when the data has a
+  or a deep-learning detector (Cellpose). Use this skill ONLY when the data has a
   time dimension and the goal is trajectories, motility/displacement, track features, or
   lineage — scripting tracking workflows in Groovy, the tracking GUI, wiring a detector into
   a timelapse, and exporting tracks to CSV or XML. This is not a segmentation skill; if the
@@ -14,7 +14,7 @@ description: >-
 
 # TrackMate — Documentation Index
 
-TrackMate is bundled with Fiji (core detectors and trackers). Cellpose and StarDist integration require additional update sites. All scripting uses the TrackMate Java API directly — not `IJ.run()`.
+TrackMate is bundled with Fiji (core detectors and trackers). The TrackMate-Cellpose, TrackMate-MorphoLibJ and TrackMate-Ilastik update sites are installed; TrackMate-StarDist is NOT (StarDist was removed from this image). All scripting uses the TrackMate Java API directly — not `IJ.run()`.
 
 > **Tracking only — read first.** TrackMate links objects across **time**. No time dimension, no TrackMate: segment a still image with a dedicated segmentation plugin or package and pick whichever one fits the data.
 

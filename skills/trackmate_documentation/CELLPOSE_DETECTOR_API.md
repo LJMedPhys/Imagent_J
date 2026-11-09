@@ -8,17 +8,21 @@ See `skills/_tests/test_trackmate_cellpose_introspect.groovy`.
 Reference URLs (may be out-of-date for the version installed here):
 - https://imagej.net/plugins/trackmate/detectors/trackmate-cellpose
 - https://imagej.net/plugins/trackmate/detectors/trackmate-cellpose-advanced
-- https://imagej.net/plugins/trackmate/detectors/trackmate-cellpose-sam
 - https://github.com/trackmate-sc/TrackMate-Cellpose
 
-> Requires the **TrackMate-Cellpose** Fiji update site and the `cellpose` conda
-> environment at `/opt/conda/envs/cellpose` (baked into the image via Dockerfile).
+> Requires the **TrackMate-Cellpose** Fiji update site and the `cellpose` env at
+> `/opt/uv/envs/cellpose` (Cellpose 3.1.1.2, a uv venv baked into the image).
 >
-> The image installs a **micromamba shim** at
-> `/usr/local/opt/micromamba/bin/micromamba` that intercepts the calls
-> TrackMate-Cellpose makes (`micromamba run -n base ...`) and routes them to the
-> correct conda env. See `micromamba_shim.sh`. You normally do **not** need to
-> override `CONDA_ENV` from its default value of `base`.
+> The image has no conda. It installs a **conda/micromamba shim** at
+> `/usr/local/opt/micromamba/bin/micromamba` (and `/opt/micromamba/bin/micromamba`,
+> `/opt/uv/bin/conda`) that answers the calls TrackMate-Cellpose makes
+> (`micromamba run -n base ...`) by running the command inside the cellpose env.
+> See `micromamba_shim.sh`. You normally do **not** need to override `CONDA_ENV`
+> from its default value of `base`.
+>
+> **Only the plain Cellpose detectors work.** The jar also shows a Cellpose-SAM
+> detector (and an Omnipose one); their backends (Cellpose 4 / Omnipose) are NOT
+> installed, and the shim refuses them with a clear error.
 
 ---
 
@@ -42,10 +46,6 @@ import fiji.plugin.trackmate.cellpose.CellposeDetectorFactory
 // Cellpose advanced (adds flow/probability threshold controls)
 // NOTE: class is AdvancedCellposeDetectorFactory (NOT CellposeAdvancedDetectorFactory).
 import fiji.plugin.trackmate.cellpose.advanced.AdvancedCellposeDetectorFactory
-
-// Cellpose-SAM (cpsam model — Cellpose 4.x)
-// NOTE: lives in the `.sam` sub-package, NOT directly under `.cellpose`.
-import fiji.plugin.trackmate.cellpose.sam.CellposeSAMDetectorFactory
 ```
 
 ---
@@ -152,7 +152,7 @@ first use to `/home/imagentj/.cellpose/models/` (persisted via the `cellpose_mod
 
 To pre-download a model without running a full segmentation:
 ```bash
-docker exec -it <container> /opt/conda/envs/cellpose/bin/python -c \
+docker exec -it <container> /opt/uv/envs/cellpose/bin/python -c \
   "from cellpose import models; models.Cellpose(model_type='nuclei')"
 ```
 
@@ -242,43 +242,6 @@ settings.detectorSettings = [
 
 ---
 
-## CellposeSAMDetectorFactory — Settings Keys
-
-Uses the `cpsam` model from Cellpose 4.x. The micromamba shim routes
-`CONDA_ENV='base'` to the `cellpose4` env (which contains the cpsam model)
-when `CELLPOSE_MODEL = 'cpsam'`. Lives in
-`fiji.plugin.trackmate.cellpose.sam.CellposeSAMDetectorFactory`.
-
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `CONDA_ENV` | String | `base` | Conda env (routed by the shim). |
-| `CELLPOSE_MODEL` | String | `cpsam` | Model name. |
-| `CELLPOSE_MODEL_FILEPATH` | String | `""` | Custom model path; `""` for the pretrained `cpsam`. |
-| `PRETRAINED_OR_CUSTOM` | String | `CELLPOSE_MODEL` | `"CELLPOSE_MODEL"` or `"CUSTOM_MODEL"`. |
-| `TARGET_CHANNEL` | **String** | `"0"` | 0-based channel index, as String. |
-| `USE_GPU` | boolean | `true` | Enable GPU. Probe the `cellpose4` environment before enabling it; do not reuse a Cellpose 3 probe result. |
-| `SIMPLIFY_CONTOURS` | boolean | `true` | Smooth outlines. |
-
-(There is no `OPTIONAL_CHANNEL_2` or `CELL_DIAMETER` for SAM — cpsam does not
-need a diameter prior.)
-
-```groovy
-import fiji.plugin.trackmate.cellpose.sam.CellposeSAMDetectorFactory
-
-settings.detectorFactory = new CellposeSAMDetectorFactory()
-settings.detectorSettings = [
-    'CONDA_ENV'                : 'base',
-    'CELLPOSE_MODEL'           : 'cpsam',
-    'CELLPOSE_MODEL_FILEPATH'  : '',
-    'PRETRAINED_OR_CUSTOM'     : 'CELLPOSE_MODEL',
-    'TARGET_CHANNEL'           : '0',
-    'USE_GPU'                  : useGpu,         // result of a bounded CUDA preflight in cellpose4
-    'SIMPLIFY_CONTOURS'        : true,
-]
-```
-
----
-
 ## Cellpose-Specific Pitfalls
 
 ### Pitfall C0 — Legacy model name `cyto` is rejected
@@ -296,7 +259,7 @@ the **Available Models** table above are accepted by `CELLPOSE_MODEL`. Custom
 weights still work via `PRETRAINED_OR_CUSTOM = 'CUSTOM_MODEL'` +
 `CELLPOSE_MODEL_FILEPATH`.
 
-### Pitfall C1 — How conda actually gets called: the micromamba shim
+### Pitfall C1 — How "conda" actually gets called: the micromamba shim
 
 TrackMate-Cellpose v8+ does not invoke a Python interpreter directly. It builds a
 command of the form
@@ -306,9 +269,11 @@ command of the form
 This image satisfies that command with a **shell shim** at
 `/usr/local/opt/micromamba/bin/micromamba` (see `micromamba_shim.sh` in the repo
 root) that:
-- Translates `-n base` → the real cellpose env
-- Translates `-n omnipose` → the cellpose env (omnipose ships in the same env)
-- Detects `--pretrained_model cpsam` and routes to the `cellpose4` env
+- Translates `-n base` (and `-n cellpose`) → `/opt/uv/envs/cellpose`, then runs the
+  command with that env's `bin/` first on `PATH`
+- Answers `env list` with the uv envs (micromamba's table format)
+- Refuses `-n cellpose4`, `-n omnipose` and a `cpsam` model with an explicit
+  "not installed in this image" error
 
 For Groovy callers this means:
 

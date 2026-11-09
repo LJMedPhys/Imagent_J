@@ -13,7 +13,7 @@ FIJI_HOME=/opt/Fiji.app
 # NOTE: The marker file is intentionally NOT used to skip the copy. The Python
 # copy is idempotent (skips files that already exist in the destination), so it
 # is safe to run on every container start. This is critical: without this, new
-# plugin JARs added to the image (e.g. StarDist, CSBDeep) are never propagated
+# plugin JARs added to the image are never propagated
 # to the named volumes when those volumes were created by an older image build.
 _seed_volume() {
     local label="$1" src="$2" dst="$3" marker="$4"
@@ -114,33 +114,6 @@ print(f'[entrypoint] fine-tuned Cellpose models: {linked} linked, {pruned} stale
       f'symlinks pruned, {len(current_names)} custom names registered', flush=True)
 PYEOF
 
-# ── Guarantee a writable micro_sam model cache ───────────────────────────────
-# MICROSAM_CACHEDIR is baked into the image and the checkpoints are pre-fetched there,
-# but /home/imagentj is a NAMED VOLUME. On any deployment whose volume predates that
-# bake, the volume shadows the image layer: ~/.cache/micro_sam survives as an empty,
-# ROOT-OWNED directory, and this entrypoint runs as imagentj, so it cannot be chowned
-# or written into. Every micro_sam model load then dies with
-#   PermissionError: [Errno 13] '/home/imagentj/.cache/micro_sam/models'
-# — the annotator, automatic segmentation, and the whole fine-tuning workflow alike,
-# with a traceback that points at pooch and gives no hint that a stale volume is the
-# cause. Probe it for real (mkdir + write, not a permission bit) and fall back to the
-# data bind mount, which is writable by construction.
-_MS_CACHE="${MICROSAM_CACHEDIR:-$HOME/.cache/micro_sam}"
-if ! ( mkdir -p "$_MS_CACHE/models" && touch "$_MS_CACHE/models/.writable" ) 2>/dev/null; then
-    export MICROSAM_CACHEDIR=/app/data/.micro_sam_cache
-    mkdir -p "$MICROSAM_CACHEDIR/models"
-    echo "[entrypoint] WARNING: $_MS_CACHE is not writable (stale named volume?) —"
-    echo "[entrypoint]          micro_sam model cache redirected to $MICROSAM_CACHEDIR"
-    # Backfill whatever the image baked, so the redirect costs no re-download.
-    for _seed in "$_MS_CACHE/models" /home/imagentj.seed/.cache/micro_sam/models \
-                 /opt/imagentj-seed/.cache/micro_sam/models; do
-        [ -d "$_seed" ] && cp -n "$_seed"/* "$MICROSAM_CACHEDIR/models/" 2>/dev/null || true
-    done
-    echo "[entrypoint]          cache now holds: $(ls "$MICROSAM_CACHEDIR/models" 2>/dev/null | tr '\n' ' ')"
-else
-    rm -f "$_MS_CACHE/models/.writable"
-fi
-
 # ── Lock environment snapshot read-only ──────────────────────────────────────
 # The agent reads this file via check_environment() to know what's installed.
 # It must never be edited at runtime — frozen artifact of the image build.
@@ -152,40 +125,6 @@ if [ -f "$_ENV_SNAPSHOT" ]; then
 else
     echo "[entrypoint] WARNING: $_ENV_SNAPSHOT not found — check_environment will be unavailable"
 fi
-
-# ── Enforce TrackMate-StarDist ClassCastException patch ───────────────────────
-# _seed_volume skips files that already exist, so a stale unpatched JAR in the
-# fiji_jars volume survives image rebuilds. Compare checksums and overwrite if needed.
-_STARDIST_JAR="$FIJI_HOME/jars/TrackMate-StarDist-2.0.0.jar"
-_PATCHED_JAR="/opt/fiji-patches/TrackMate-StarDist-2.0.0.jar.patched"
-if [ -f "$_PATCHED_JAR" ] && [ -f "$_STARDIST_JAR" ]; then
-    if ! cmp -s "$_PATCHED_JAR" "$_STARDIST_JAR"; then
-        echo "[entrypoint] Applying TrackMate-StarDist ClassCastException patch to volume JAR..."
-        cp "$_PATCHED_JAR" "$_STARDIST_JAR"
-        echo "[entrypoint] TrackMate-StarDist patch applied."
-    fi
-fi
-
-# ── Enforce CSBDeep linux/arm64 TensorFlow Java patch ───────────────────────
-# Existing fiji_jars volumes can keep the old upstream JAR, whose TensorFlow
-# Java 1.x JNI dependency has no linux/aarch64 native library. Keep the patched
-# single-JAR TensorFlow Java backend in the volume even after rebuilds.
-case "$(uname -m)" in
-    aarch64|arm64)
-        _CSBDEEP_JAR="$FIJI_HOME/jars/csbdeep-0.6.0.jar"
-        _CSBDEEP_PATCHED_JAR="/opt/fiji-patches/csbdeep-0.6.0-tfjava-linux-arm64.jar"
-        if [ -f "$_CSBDEEP_PATCHED_JAR" ] && [ -f "$_CSBDEEP_JAR" ]; then
-            if ! cmp -s "$_CSBDEEP_PATCHED_JAR" "$_CSBDEEP_JAR"; then
-                echo "[entrypoint] Applying CSBDeep linux/arm64 TensorFlow Java patch to volume JAR..."
-                cp "$_CSBDEEP_PATCHED_JAR" "$_CSBDEEP_JAR"
-                echo "[entrypoint] CSBDeep TensorFlow Java arm64 patch applied."
-            fi
-        fi
-        ;;
-    *)
-        echo "[entrypoint] Skipping CSBDeep linux/arm64 TensorFlow Java patch on $(uname -m)."
-        ;;
-esac
 
 # ── Clean up stale X11 lock files from previous runs ─────────────────────────
 # This prevents "Server is already active for display 1" errors on restart
@@ -213,26 +152,6 @@ if [ ! -f "$NASHORN_JAR" ]; then
     && echo "[entrypoint] nashorn-core-15.4.jar installed" \
     || { echo "[entrypoint] WARNING: failed to download nashorn-core JAR — .js macros may not work"; rm -f "$NASHORN_JAR"; }
 fi
-
-# ── Fix CSBDeep/StarDist protobuf JAR conflict ───────────────────────────────
-# CSBDeep's TensorFlow 1.x bindings require protobuf-java-3.6.x.
-# The makeExtensionsImmutable() NoSuchMethodError is caused by a newer protobuf
-# JAR shadowing the version TF was compiled against. Replace it at startup since
-# fiji_jars is a named volume that survives image rebuilds.
-FIJI_JARS=/opt/Fiji.app/jars
-REQUIRED_PROTOBUF="protobuf-java-3.6.1.jar"
-if [ ! -f "$FIJI_JARS/$REQUIRED_PROTOBUF" ]; then
-    echo "[entrypoint] Fixing protobuf JAR for CSBDeep/StarDist compatibility..."
-    # Remove any protobuf JAR that would conflict (including the util sibling,
-    # which targets 4.x and would cause Updater "locally modified" warnings)
-    rm -f "$FIJI_JARS"/protobuf-java-*.jar
-    rm -f "$FIJI_JARS"/protobuf-java-util-*.jar
-    wget -q "https://repo1.maven.org/maven2/com/google/protobuf/protobuf-java/3.6.1/protobuf-java-3.6.1.jar" \
-         -O "$FIJI_JARS/$REQUIRED_PROTOBUF" \
-    && echo "[entrypoint] protobuf-java-3.6.1.jar installed" \
-    || echo "[entrypoint] WARNING: failed to download protobuf JAR — StarDist may not work"
-fi
-
 
 # ── JAR deduplication helper (called before and after applying updates) ───────
 # Removes older versions of any JAR when multiple versions of the same lib exist.
@@ -304,10 +223,6 @@ find "$FIJI_HOME/update" -type f -name "*.jar" | while read -r f; do
             echo "[entrypoint] Skipping $base (pyimagej 1.7.0 compatibility)"
             rm "$f"
             ;;
-        TrackMate-StarDist-[01].*)
-            echo "[entrypoint] Skipping $base (pre-2.0 — incompatible API for TrackMate 8.x)"
-            rm "$f"
-            ;;
     esac
 done
 
@@ -320,7 +235,7 @@ find "$FIJI_HOME/jars" -name 'logback-classic-1.2*.jar' -delete 2>/dev/null && t
 # ── Ensure slf4j-nop-2.0.16 is in the fiji_jars volume ──────────────────────
 # The fiji_jars named volume shadows /opt/Fiji.app/jars, so JARs added to the
 # image's jars/ directory don't reach the volume via normal seeding. Copy from
-# /opt/fiji-patches/ (not volume-mounted) the same way StarDist/CSBDeep patches do.
+# /opt/fiji-patches/ (not volume-mounted).
 _SLF4J_NOP="$FIJI_HOME/jars/slf4j-nop-2.0.16.jar"
 _SLF4J_NOP_SRC="/opt/fiji-patches/slf4j-nop-2.0.16.jar"
 if [ ! -f "$_SLF4J_NOP" ] && [ -f "$_SLF4J_NOP_SRC" ]; then
@@ -328,11 +243,6 @@ if [ ! -f "$_SLF4J_NOP" ] && [ -f "$_SLF4J_NOP_SRC" ]; then
     cp "$_SLF4J_NOP_SRC" "$_SLF4J_NOP"
     echo "[entrypoint] slf4j-nop-2.0.16.jar installed"
 fi
-
-# ── Remove stale TrackMate-StarDist 1.2.0 from named volume ──────────────────
-# 1.2.0 has AbstractMethodError with TrackMate 8.x (missing 4-arg getDetector).
-# The image now ships patched 2.0.0; remove any 1.x lingering in the volume.
-find "$FIJI_HOME/jars" -name 'TrackMate-StarDist-1*.jar' -delete 2>/dev/null && true
 
 # ── Apply pending Fiji updates ───────────────────────────────────────────────
 # Fiji stages updates in /opt/Fiji.app/update/ - move them to their destinations
@@ -355,7 +265,7 @@ if [ -d "$FIJI_HOME/update" ] && [ "$(ls -A $FIJI_HOME/update 2>/dev/null)" ]; t
     if [ -d "$FIJI_HOME/update/scripts" ]; then
         cp -rv "$FIJI_HOME/update/scripts/"* "$FIJI_HOME/scripts/" 2>/dev/null || true
     fi
-    # Copy native libraries (e.g. TensorFlow .so files for CSBDeep/StarDist)
+    # Copy native libraries
     if [ -d "$FIJI_HOME/update/lib" ]; then
         cp -rv "$FIJI_HOME/update/lib/"* "$FIJI_HOME/lib/" 2>/dev/null || true
     fi
@@ -488,12 +398,9 @@ else
     echo "[entrypoint] noVNC is listening on http://localhost:${NOVNC_PORT}"
 fi
 
-# ── Ensure langgraph-checkpoint-sqlite is installed (needed for chat persistence) ──
-python3 -c "import langgraph.checkpoint.sqlite" 2>/dev/null || {
-    echo "[entrypoint] Installing langgraph-checkpoint-sqlite..."
-    pip install langgraph-checkpoint-sqlite -q
-    echo "[entrypoint] langgraph-checkpoint-sqlite installed"
-}
+# ── Sanity: chat persistence needs langgraph-checkpoint-sqlite (in the main env lock) ──
+python3 -c "import langgraph.checkpoint.sqlite" 2>/dev/null \
+    || echo "[entrypoint] WARNING: langgraph-checkpoint-sqlite missing from the main env — chat history will not persist"
 
 # ── Seed jgo/Maven caches from pre-warmed image data ─────────────────────────
 # /opt/imagentj-seed is populated during the Docker build. The imagentj_home
@@ -536,7 +443,7 @@ fi
 # ── GPU availability check ───────────────────────────────────────────────────
 # Log the device (informational), then do the AUTHORITATIVE check: can the
 # cellpose env's PyTorch actually use CUDA? That is the true signal for whether
-# Cellpose/StarDist will run on the GPU — a device can be visible without a
+# Cellpose will run on the GPU — a device can be visible without a
 # CUDA-enabled torch build, and the container may be started without a GPU at
 # all. Export IMAGENTJ_GPU so the running agent reflects the real state:
 # environment_tools.check_environment overlays it onto the snapshot's CUDA row,
@@ -548,7 +455,7 @@ if command -v nvidia-smi &>/dev/null; then
 else
     echo "[entrypoint] No NVIDIA GPU device visible."
 fi
-if /opt/conda/envs/cellpose/bin/python -c "import torch; assert torch.cuda.is_available(); x=torch.zeros(1, device='cuda'); torch.cuda.synchronize()" 2>/dev/null; then
+if /opt/uv/envs/cellpose/bin/python -c "import torch; assert torch.cuda.is_available(); x=torch.zeros(1, device='cuda'); torch.cuda.synchronize()" 2>/dev/null; then
     export IMAGENTJ_GPU=true
     echo "[entrypoint] GPU acceleration ACTIVE — cellpose PyTorch completed a CUDA tensor probe (IMAGENTJ_GPU=true)"
 else
@@ -557,6 +464,6 @@ else
 fi
 
 # ── Launch the application ───────────────────────────────────────────────────
-# PATH is already set in Dockerfile to include the conda env; no need to activate
+# PATH already puts the main uv env (/opt/uv/envs/main/bin) first; no activation needed
 echo "[entrypoint] Launching: $@"
 exec "$@"

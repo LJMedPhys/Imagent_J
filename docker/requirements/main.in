@@ -1,0 +1,87 @@
+# Main app env (Python 3.13) — the agent, the GUI, pyimagej, and the default
+# python_data_analyst env (`# imagentj-env: main`). Top-level deps only;
+# compile.sh pins the full tree into main.txt, which the Dockerfile installs.
+
+# ── ImageJ / Java bridge (pinned: pyimagej 1.7.0 is what the protected Fiji jars
+#    and the seeded jgo cache in bundled_cache/ were validated against) ───────
+pyimagej==1.7.0
+jpype1==1.6.0
+scyjava==1.12.1
+imglyb==2.1.0
+jgo==1.0.6
+
+# ── GUI (only QtCore/QtGui/QtWidgets are used → Essentials, not full PySide6) ─
+PySide6-Essentials
+
+# ── Agent stack ─────────────────────────────────────────────────────────────
+langchain
+langchain-core
+langchain-openai
+langchain-qdrant
+langchain-text-splitters
+langgraph
+langgraph-checkpoint
+langgraph-checkpoint-sqlite
+langgraph-prebuilt
+langsmith
+deepagents
+openai
+tiktoken
+qdrant-client
+# FastEmbedSparse (BM25 sparse vectors) for hybrid RAG retrieval in rag/RAG.py
+fastembed
+fastmcp>=2.10.3,<3
+mcp
+ddgs
+httpx
+requests
+pydantic
+pyyaml
+psutil
+filelock
+typing-extensions
+
+# ── Document reading (read_file on PDFs). docling is deliberately NOT here: it
+#    pulls torch+transformers (~4.7 GB) and is only needed for offline RAG
+#    ingestion — see the module docstring of src/imagentj/rag/loaders.py.
+pymupdf
+pymupdf4llm
+
+# ── Image I/O and metadata ──────────────────────────────────────────────────
+tifffile
+imagecodecs
+pydicom
+readlif
+pillow
+imageio
+# bioio: scientific image reading used by the bioimage course (chapters 1.5/1.6)
+bioio
+bioio-ome-tiff
+bioio-tifffile
+
+# ── Scientific stack for python_data_analyst scripts ────────────────────────
+numpy
+pandas
+scipy
+scikit-image
+scikit-learn
+matplotlib
+seaborn
+# plotnine skill; statsmodels backs geom_smooth(method="lm"/"lowess"),
+# scikit-misc backs method="loess"
+plotnine
+statsmodels
+scikit-misc
+xarray
+# headless: the GUI is PySide6; opencv-python's bundled Qt plugins would clash
+opencv-python-headless
+# Big-FISH: smFISH / puncta spot detection (skills/python/bigfish)
+big-fish
+# CellProfiler measurement engine. MUST come from GitHub — the PyPI cp-measure
+# exposes the older featurize() API (skills/python/cp_measure).
+cp_measure @ git+https://github.com/afermg/cp_measure.git
+
+# ── Container infrastructure ────────────────────────────────────────────────
+# noVNC's websocket proxy. From PyPI instead of Debian's `websockify` package,
+# which would drag in a second (system) Python + numpy just for this.
+websockify

@@ -138,9 +138,8 @@ SEGMENTATION_RETRY_LIMIT = int(os.environ.get("IMAGENTJ_SEGMENTATION_RETRIES", "
 # The segmenters and targets this system actually routes to. Deliberately NOT every
 # tool with a docs folder: ilastik and labkit have skills but no live route, so
 # counting them could only ever produce a false trigger.
-_SEG_WORDS = ("segment", "threshold", "mask", "cellpose", "stardist", "micro_sam",
-              "microsam", "watershed", "nuclei", "nucleus", "cells", "detect",
-              "outline", "label")
+_SEG_WORDS = ("segment", "threshold", "mask", "cellpose", "watershed", "nuclei",
+              "nucleus", "cells", "detect", "outline", "label")
 
 # Phrases taken from the logged prompts of real dissatisfied sessions rather than
 # invented. Kept literal for that reason — a cleverer generalisation ("no", "not")
@@ -249,11 +248,11 @@ def finetune_directive(path: Optional[str] = None) -> str:
         "  → STOP TUNING PARAMETERS AND SWITCH TO FINE-TUNING. Three settings have failed;",
         "    that is evidence about the MODEL, not the settings, and a fourth is a worse use",
         "    of the user's patience than teaching the model what they mean.",
-        "    Read skills/napari/micro_sam/FINETUNING.md and run its 'is fine-tuning even",
-        "    needed?' gate FIRST — no GPU, too few images, or data the stock model already",
-        "    covers all rule it out in seconds, and then you say so and keep tuning.",
-        "    If the gate passes, tell the user the cost (~20 min of their time annotating",
-        "    ~8 small tiles) and start at stage 1, which opens the tile picker and puts the",
+        "    Read skills/python/cellpose/FINETUNING.md and run its 'is fine-tuning even",
+        "    needed?' gate FIRST — wrong diameter/channels, too few images, or a stock model",
+        "    that is already right all rule it out quickly, and then you say so and keep tuning.",
+        "    If the gate passes, tell the user the cost (~20 min of their time drawing outlines",
+        "    on ~8 small tiles) and start at stage 1, which opens the tile picker and puts the",
         "    decision in front of them anyway.",
         "    This clears as soon as the user says a result is right.",
     ])

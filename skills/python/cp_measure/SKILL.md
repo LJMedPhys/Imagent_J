@@ -20,7 +20,7 @@ You hand it a label image and an intensity image; it hands back a dict of
 `{feature_name: np.ndarray}` with one value per object. No pipeline file, no
 CellProfiler install, no second JVM.
 
-Installed in the main env (`local_imagent_J`) — no env switch needed.
+Installed in the main env (`/opt/uv/envs/main`) — no env switch needed.
 
 **When to use this vs. alternatives**
 - **cp_measure (this skill)** — you want the deep feature battery: Haralick texture,

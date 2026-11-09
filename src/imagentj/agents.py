@@ -55,7 +55,6 @@ from .tools import (
     get_script_info, load_script, get_script_history,
     setup_analysis_workspace, save_markdown,
     VisionOptionMiddleware,
-    NapariComputeGuardMiddleware,
     NarrationReminderMiddleware, PhaseGuardMiddleware, ToolOutputLimitMiddleware,
     RealPathFileSearchMiddleware,
     EmptyResponseRetryMiddleware,
@@ -197,13 +196,13 @@ class PipelineStepRecommendation(BaseModel):
     """One step of a multi-step pipeline, each routed to the best software backend.
 
     A pipeline can mix backends freely: e.g. register with a Fiji plugin (imagej_coder),
-    segment with micro_sam in napari (napari) or as a batch script (python_data_analyst),
-    then measure with scikit-image/cp_measure (python_data_analyst).
+    segment with Cellpose as a batch script (python_data_analyst), inspect the result in
+    napari (napari), then measure with scikit-image/cp_measure (python_data_analyst).
     """
     step_name: str                                  # e.g. "registration", "segmentation", "measurement"
-    recommended_tool: Optional[str] = None          # concrete plugin/package/model, e.g. "TurboReg", "StarDist", "micro_sam (vit_b_lm)", "scikit-image"
+    recommended_tool: Optional[str] = None          # concrete plugin/package/model, e.g. "TurboReg", "Cellpose (BIOP) cyto3", "MorphoLibJ", "scikit-image"
     backend: str = "imagej_coder"                   # executor: "imagej_coder" | "python_data_analyst" | "napari" | "core"
-    env: Optional[str] = None                       # for python_data_analyst steps: the `# imagentj-env` value ("main", "napari-mcp", "brainglobe")
+    env: Optional[str] = None                       # for python_data_analyst steps: the `# imagentj-env` value ("main", "cellpose", "napari-mcp")
     skill_folder: Optional[str] = None              # skill docs the executor should read (relative to /app/skills/)
     reasoning: str = ""                             # why this tool/backend for this step
 
@@ -586,9 +585,8 @@ _analyst_agent = create_agent(
         ToolOutputLimitMiddleware(),
         SkillsMiddleware(
             backend=_python_skills_backend,
-            # /app/skills/napari/ is included so the analyst can read the micro_sam skill and
-            # run its automatic-segmentation script (with `# imagentj-env: napari-mcp`). The
-            # napari_general skill also lives there but is routing guidance, not a Python API.
+            # /app/skills/napari/ is included so the analyst can read the napari_general
+            # skill (routing guidance + how to prepare layers for the viewer).
             sources=["/app/skills/python/", "/app/skills/napari/"],
         ),
         ContextEditingMiddleware(
@@ -675,7 +673,7 @@ _plugin_agent = create_agent(
             # best backend — a Fiji plugin, a Python package, or a napari plugin:
             #   /app/skills/         → Fiji/ImageJ plugin skills (*_documentation)  → imagej_coder
             #   /app/skills/python/  → Python library skills (scikit-image, cp_measure, …) → python_data_analyst
-            #   /app/skills/napari/  → napari plugin skills (micro_sam, napari_general) → napari / python_data_analyst
+            #   /app/skills/napari/  → napari skills (napari_general) → napari / python_data_analyst
             # SkillsMiddleware scans one level deep (<source>/<skill>/SKILL.md), so these
             # three sources stay cleanly separated and none shadows another.
             sources=["/app/skills/", "/app/skills/python/", "/app/skills/napari/"],
@@ -1074,7 +1072,7 @@ def python_data_analyst(task: str, input_path: str, output_dir: str, project_roo
     Call ONCE PER STAGE, never combined:
       Stage 0 (measurement): task describes segmentation / feature extraction from an image
                              or label mask (scikit-image, cp_measure, scikit-learn,
-                             brainglobe). Outputs a per-object CSV.
+                             Cellpose). Outputs a per-object CSV.
       Stage 1 (statistics):  task describes hypothesis testing. Returns stats_csv_path.
       Stage 2 (plotting):    task describes plot types. Call only after Stage 1 CSV exists.
 
@@ -1595,10 +1593,6 @@ def init_agent():
         ),
         NarrationReminderMiddleware(),
         PhaseGuardMiddleware(),
-        # Blocks heavy micro_sam compute from reaching napari's execute_code, which
-        # runs on the Qt thread under a 90 s cap — the combination that freezes the
-        # viewer AND times out. Redirects the model to the supervised analyst path.
-        NapariComputeGuardMiddleware(),
         # Innermost user middleware: per-chat final say on Vision prompt + tool exposure.
         # Rebase note (2026-08-03): main's VisionOptionMiddleware and the educator
         # branch's ModeMiddleware both claimed the "innermost, final say on the

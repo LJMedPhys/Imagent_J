@@ -46,8 +46,9 @@ from langchain_core.tools import tool
 # worse than the miss, because it strands a run that would otherwise have worked.
 _PLUGIN_IMAGE_RULES: tuple[dict, ...] = (
     {
-        # StarDist ships two Versatile models with disjoint training domains
-        # (skills/stardist_documentation/OVERVIEW.md): "Versatile (fluorescent
+        # StarDist is not installed in this image, but it stays in the plugin registry and
+        # can be installed at runtime, so its rules stay. It ships two Versatile models with
+        # disjoint training domains (plugin registry / imagej.net/plugins/stardist): "Versatile (fluorescent
         # nuclei)" on DSB-2018 fluorescence, "Versatile (H&E nuclei)" on
         # MoNuSeg/TCGA H&E. Running the fluorescence model on RGB brightfield is
         # the exact failure mode behind the 0.11 score.
@@ -107,8 +108,7 @@ _MODALITY_TOOL_PRIORITY: tuple[dict, ...] = (
         "dims": ("2d",),
         "target": ("nuclei",),
         "order": (
-            'StarDist "Versatile (H&E nuclei)" — trained on raw RGB H&E, no colour deconvolution',
-            "Cellpose (BIOP) cyto3 on the haematoxylin channel",
+            "Cellpose (BIOP) cyto3 on the haematoxylin channel (colour-deconvolve first)",
             "classical: colour-deconvolve -> Auto Threshold -> Distance Transform Watershed",
         ),
     },
@@ -119,9 +119,9 @@ _MODALITY_TOOL_PRIORITY: tuple[dict, ...] = (
         "dims": ("2d",),
         "target": ("nuclei",),
         "order": (
-            "Cellpose (BIOP) nucleitorch_0",
-            'StarDist "Versatile (fluorescent nuclei)" — the trained generalist for 2D nuclei',
-            "classical: Auto Threshold -> Distance Transform Watershed (only if both fail)",
+            "Cellpose (BIOP) nucleitorch_0 — the nuclei specialist (downloaded on first use; "
+            "needs network) — else cyto3, which is pre-installed and also segments nuclei",
+            "classical: Auto Threshold -> Distance Transform Watershed (only if Cellpose fails)",
         ),
     },
     {
@@ -131,21 +131,21 @@ _MODALITY_TOOL_PRIORITY: tuple[dict, ...] = (
         "dims": ("2d",),
         "target": ("cytoplasm", "whole cell", "cell body", "cell outline", "membrane"),
         "order": (
-            "Cellpose (BIOP) cyto3 — cytoplasm/whole-cell is its trained domain, not StarDist's",
-            "micro_sam (vit_b_lm; vit_t_lm on CPU)",
+            "Cellpose (BIOP) cyto3 — cytoplasm/whole-cell is its trained domain",
             "classical: seeded/Marker-controlled Watershed from a nuclear marker",
         ),
     },
     {
-        # 3D is a different toolset entirely: the Fiji StarDist plugin cannot do it,
-        # and Cellpose's Fiji wrapper is 2D/per-plane. micro_sam has a real 3D path.
+        # 3D is a different toolset entirely: Cellpose's Fiji wrapper is 2D/per-plane, but
+        # its Python API has a real 3D path (do_3D=True, env `cellpose`).
         "modality": ("fluorescence", "fluorescent", "confocal", "light-sheet",
                      "lightsheet", "spinning", "airyscan"),
         "not_modality": (),
         "dims": ("3d",),
         "target": ("nuclei", "cytoplasm", "whole cell", "cell body", "membrane"),
         "order": (
-            "micro_sam 3D (annotator_3d / automatic_instance_segmentation, ndim=3)",
+            "Cellpose 3D via the Python API (skills/python/cellpose, do_3D=True + anisotropy, "
+            "env cellpose)",
             "per-plane 2D segmentation + label stitching across z",
             "classical: 3D Auto Threshold -> 3D Watershed (MorphoLibJ)",
         ),
@@ -192,10 +192,10 @@ def _derive_dimensionality(metadata: dict) -> str:
 
     The split is broken toward 3d deliberately. The two signals disagree in real
     ledgers ("XYCZ" recorded next to n_z_slices=1, or "XY" next to n_z_slices=12),
-    and the two errors are not symmetric: calling a volume 2d puts the Fiji StarDist
-    plugin — which the registry says outright cannot do volumes — at the top of the
-    list, which is failure mode 1 in the comment above _MODALITY_TOOL_PRIORITY.
-    Calling a plane 3d only costs a detour to micro_sam, which handles 2d fine.
+    and the two errors are not symmetric: calling a volume 2d puts a 2D-only Fiji tool
+    (the per-plane BIOP Cellpose wrapper) at the top of the list, which is failure
+    mode 1 in the comment above _MODALITY_TOOL_PRIORITY.
+    Calling a plane 3d only costs a detour to Cellpose's 3D path, which handles 2d fine.
     """
     if not isinstance(metadata, dict):
         return ""
@@ -803,7 +803,7 @@ def set_ledger_metadata(
                          Example: "/app/skills/morpholibj/"
         recommended_plugin: Name of the plugin recommended by plugin_manager.
                          The coder MUST prefer this plugin over alternatives.
-                         Example: "TurboReg", "StarDist", "TrackMate"
+                         Example: "TurboReg", "Cellpose", "TrackMate"
         rag_reference:   Compact summary of a RAG retrieval. Store the query (for re-retrieval)
                          and a one-line finding (for quick reference). One reference per call.
                          Example: {"query": "otsu thresholding fiji", "step": "thresholding",

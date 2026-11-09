@@ -1,20 +1,17 @@
 # imagentj-env: napari-mcp
 """
-micro_sam fine-tuning — STAGE 1 of 4: build the annotation task.
+Cellpose fine-tuning — STAGE 1 of 4: build the annotation task.
 
 Turns a folder of images into a small set of SMALL SQUARE TILES that a human can annotate
-completely in a few minutes each, and pre-segments every tile with the stock model so the
-human CORRECTS a first guess instead of drawing from scratch.
+completely in a few minutes each, and pre-segments every tile with the stock Cellpose model so
+the human CORRECTS a first guess instead of drawing from scratch.
 
-WHY TILES: micro_sam can only train its automatic-instance-segmentation (AIS) decoder on
-DENSELY annotated data — every object inside the annotated field must be labelled, because
-anything left unlabelled is taught to the decoder as background. Annotating every cell in a
-full field is hours of work. Annotating every cell inside a 512x512 tile is 1-3 minutes, and
-a tile IS dense. So the user never annotates all cells in an image; they annotate all cells
-in a few small squares. That is the whole trick, and it is what makes this workflow tractable.
-(micro_sam's own docs: "It's okay to use sparse segmentations ... for just finetuning Segment
-Anything WITHOUT the additional decoder" — sparse costs you AIS, i.e. hands-off batch
-segmentation. Tiles keep AIS.)
+WHY TILES: Cellpose trains on DENSELY annotated crops — every object inside an annotated field
+must be labelled, because anything left unlabelled is taught to the network as background.
+Annotating every cell in a full field is hours of work. Annotating every cell inside a 512x512
+tile is a few minutes, and a tile IS dense. So the user never annotates all cells in an image;
+they annotate all cells in a few small squares. That is the whole trick, and it is what makes
+this workflow tractable.
 
 WHO PICKS THE TILES: the human, by clicking (PICK_MODE = "interactive", the default). A napari
 window walks through one sample field per group — per well, per condition, per plate, whatever
@@ -33,9 +30,11 @@ Outputs (all under TASK_DIR):
     manifest.json                   everything stages 2/3/4 need. Do not hand-edit.
     ANNOTATION_INSTRUCTIONS.md      the human-facing instructions, with real numbers in them
 
-Next: WORKFLOW_FINETUNE_2_ANNOTATE.py
+Next: WORKFLOW_FINETUNE_CP_2_ANNOTATE.py
 
-Run in the `napari-mcp` env (the `# imagentj-env` header selects it). Edit CONFIG, execute.
+Run in the `napari-mcp` env (the `# imagentj-env` header selects it) — the picker needs napari.
+Cellpose itself runs in the `cellpose` env, reached through a resident worker subprocess
+(WORKFLOW_FINETUNE_CP_SEGMENT_WORKER.py). Edit CONFIG, execute.
 """
 import os
 import re
@@ -51,7 +50,7 @@ from skimage.segmentation import find_boundaries
 
 # ---- CONFIG -----------------------------------------------------------------
 INPUT_DIR = "/app/data/projects/demo/raw_images"
-TASK_DIR = "/app/data/projects/demo/microsam_finetune"
+TASK_DIR = "/app/data/projects/demo/cellpose_finetune"
 
 PICK_MODE = "interactive"   # "interactive" = the USER clicks the tiles (default, and what
                             #   makes this reliable). "auto" = content heuristic, no window;
@@ -79,32 +78,19 @@ SHOW_PRESEG = "auto"   # show the stock model's CURRENT segmentation on each fie
 AUTO_ADVANCE = True    # move to the next group by itself once this group's quota is picked, so
                        # covering ten wells is ten clicks. The picker has a button to turn this
                        # off mid-session when you want several tiles from one field.
-MODEL_TYPE = None      # None = auto (vit_b_lm on GPU, vit_t_lm on CPU). This is BOTH the
-                       # pre-segmentation model AND the fine-tuning starting point — stage 3
-                       # reads it from the manifest, so set it once, here.
-SEGMENT_BACKEND = "micro_sam"   # WHICH MODEL the user is shown and will end up training.
-                       # "micro_sam" -> stages 3/4 are skills/napari/micro_sam/WORKFLOW_FINETUNE_3,4
-                       # "cellpose"  -> stages 3/4 are skills/cellpose_documentation/
-                       #                WORKFLOW_FINETUNE_CP_3,4 (cpsam). Stages 1 and 2 are
-                       # SHARED either way: the picker and the SAM-assisted annotator do not care
-                       # what gets trained, and SAM-assisted clicking is the fastest way to
-                       # produce masks whichever model consumes them. Set this to match the model
-                       # you intend to fine-tune, so the user corrects THAT model's mistakes.
-CP_MODEL = "cpsam"     # SEGMENT_BACKEND="cellpose" only: WHICH cellpose model the picker
-                       # segments with — and therefore which model's mistakes the user
-                       # corrects. It is recorded in the manifest and stage 3 fine-tunes from
-                       # the SAME model by default, so the two cannot drift apart. "cpsam"
-                       # (cellpose 4) or any v3 zoo name ("nuclei", "cyto3", ...); the worker
-                       # re-execs into whichever env has it. Match it to the model you intend
-                       # to fine-tune: showing the user cpsam's errors and then training
-                       # `nuclei` throws away the whole point of letting them pick.
+CP_MODEL = "cyto3"     # WHICH Cellpose model the picker segments with — and therefore which
+                       # model's mistakes the user corrects. It is recorded in the manifest and
+                       # stage 3 fine-tunes from the SAME model by default, so the two cannot
+                       # drift apart. "cyto3" is the one model baked into this image; other
+                       # Cellpose 3 zoo models ("nuclei", "livecell_cp3", ...) are downloaded
+                       # on first use and need network access.
 BASE_CHECKPOINT = "auto"   # ROUND 2 AND LATER. "auto" = if this data has already been fine-tuned
                        # once, start from THAT model instead of the stock one: the picker then
                        # shows what the CURRENT model gets wrong, so the user spends their tiles
                        # on the remaining errors instead of re-fixing what is already learned.
                        # Stage 3 continues training from it and measures against it, so "did it
                        # improve?" means "better than last round", not "better than stock".
-                       # None = always start from stock. A path = use that .pt.
+                       # None = always start from stock. A path = use that Cellpose model file.
 CHANNEL = None         # 2D grayscale / RGB input: leave None.
                        # 3D input (C,Y,X) or (Z,Y,X): REQUIRED — an int index, or "max" for a
                        # maximum projection. The script refuses to guess; training on the
@@ -123,47 +109,6 @@ ADVANCE_DELAY_MS = 500   # interactive mode: how long the square you just placed
 os.environ.setdefault("TQDM_MININTERVAL", "30")   # keep progress bars out of the transcript
 
 TILE_STEM = "tile_{:05d}"
-
-
-def ensure_model_cache(fallback_dir):
-    """Point MICROSAM_CACHEDIR somewhere writable, and say so.
-
-    micro_sam downloads its checkpoints with pooch into MICROSAM_CACHEDIR (default
-    ~/.cache/micro_sam). In a container whose home is a named volume older than the image,
-    that path can survive as a root-owned directory this process cannot write, and every
-    model load then dies with `PermissionError: .../micro_sam/models` — a traceback that
-    points at pooch and never mentions the volume. Probe it for real (mkdir + write, not a
-    permission bit), fall back into the task folder, and carry over any weights already
-    downloaded so the fallback costs no extra download."""
-    import shutil
-
-    current = os.environ.get("MICROSAM_CACHEDIR") or os.path.join(
-        os.path.expanduser("~"), ".cache", "micro_sam")
-    models = os.path.join(current, "models")
-    try:
-        os.makedirs(models, exist_ok=True)
-        probe = os.path.join(models, ".writable")
-        with open(probe, "w"):
-            pass
-        os.remove(probe)
-        return current
-    except OSError as exc:
-        why = exc.strerror or str(exc)      # bind it: `exc` itself is gone after the block
-
-    os.makedirs(os.path.join(fallback_dir, "models"), exist_ok=True)
-    os.environ["MICROSAM_CACHEDIR"] = fallback_dir
-    os.environ.setdefault("XDG_CACHE_HOME", os.path.dirname(fallback_dir))
-    print(f"[prepare] model cache {current} is not writable ({why}) -> using {fallback_dir}")
-    if os.path.isdir(models):
-        for f in os.listdir(models):                       # reuse anything already downloaded
-            src, dst = os.path.join(models, f), os.path.join(fallback_dir, "models", f)
-            if os.path.isfile(src) and not os.path.exists(dst):
-                try:
-                    shutil.copy(src, dst)
-                    print(f"[prepare]   carried over cached weight {f}")
-                except OSError:
-                    pass
-    return fallback_dir
 
 
 def list_images(input_dir, exts=None, recursive=False):
@@ -209,8 +154,8 @@ def group_images(paths, input_dir, regex=None):
 
 
 def to_uint8(arr):
-    """8-bit, [0,255]. micro_sam's loader check REJECTS anything outside that range, and the
-    human must see exactly what the model trains on — so the conversion happens once, here."""
+    """8-bit, [0,255]. The human must see exactly what the model trains on — so the
+    conversion happens once, here."""
     arr = np.asarray(arr)
     if arr.dtype == np.uint8:
         return arr
@@ -319,9 +264,9 @@ def measure_tile_size(probe_segs, min_dim, target=None, floor=256, ceil=1024):
 
     `probe_segs` is [(label image, its area in px)] from the stock model on one field per
     group. A tile should hold about `target` objects: at density d objects per px^2 that is
-    a side of sqrt(target / d). Clamped to [floor, ceil] — below the floor a tile is too
-    small to give SAM context, above 1024 it is being downscaled anyway, since SAM resizes
-    whatever it is handed to 1024 — and to the smallest image, then rounded to a multiple of 64.
+    a side of sqrt(target / d). Clamped to [floor, ceil] — below the floor a tile holds too
+    little context, above the ceiling it is more than one person annotates in a few minutes —
+    and to the smallest image, then rounded to a multiple of 64.
 
     Returns (tile, why) so the choice can be printed and put in the manifest.
     """
@@ -340,8 +285,7 @@ def measure_tile_size(probe_segs, min_dim, target=None, floor=256, ceil=1024):
            f"{1 / density / 1000:.0f}k px; {target} of them need ~{ideal:.0f} px, "
            f"using {t} px (~{per_tile:.0f} objects per tile)")
     if per_tile < 0.5 * target:
-        # The objects are too sparse to reach the target within a tile SAM can still see
-        # properly (it resizes everything to 1024, so a bigger tile only shrinks them).
+        # The objects are too sparse to reach the target within a tile of reasonable size.
         # More tiles is the answer, not a bigger one — say so rather than quietly under-deliver.
         why += (f". These objects are sparse: even at the {ceil} px ceiling a tile holds only "
                 f"~{per_tile:.0f}. Raise N_TILES to about "
@@ -350,45 +294,25 @@ def measure_tile_size(probe_segs, min_dim, target=None, floor=256, ceil=1024):
     return t, why
 
 
-class MicroSamBackend:
-    """Stock micro_sam AIS. `segment(img, tile)` is the whole interface the picker needs."""
-
-    label = "micro_sam"
-
-    def __init__(self, model_type, checkpoint, device, is_tiled):
-        from micro_sam.automatic_segmentation import get_predictor_and_segmenter
-        self.predictor, self.segmenter = get_predictor_and_segmenter(
-            model_type=model_type, checkpoint=checkpoint, device=device,
-            segmentation_mode="ais", is_tiled=is_tiled,
-        )
-
-    def segment(self, img, tile_shape=None):
-        return segment_field(self.predictor, self.segmenter, img, tile_shape)
-
-    def close(self):
-        pass
-
-
 class CellposeBackend:
-    """Cellpose reached across the conda-env boundary by a resident subprocess.
+    """Cellpose reached across the env boundary by a resident subprocess.
 
-    cellpose and napari cannot share an interpreter here — `napari-mcp` has napari and
-    micro_sam but no cellpose, and `cellpose4` has cellpose but no napari, no skimage and no
-    imageio. The picker must run where napari is, so segmentation crosses as a subprocess over
-    TIFFs. The worker is kept ALIVE in `--serve` mode: cpsam takes ~10 s to load and the picker
-    segments a new field every time the user asks for one, so a process per field would make it
-    unusable.
+    cellpose and napari do not share an interpreter here — `napari-mcp` has napari but no
+    cellpose, and `cellpose` has cellpose but no napari. The picker must run where napari is,
+    so segmentation crosses as a subprocess over TIFFs. The worker is kept ALIVE in `--serve`
+    mode: loading the model costs seconds and the picker segments a new field every time the
+    user asks for one, so a process per field would make it unusable.
 
-    Note what this backend does NOT do: tiling. cpsam has no fixed input resolution to fight, so
-    a field is segmented whole and `tile_shape` is accepted and ignored.
+    Note what this backend does NOT do: tiling. A field is segmented whole and `tile_shape` is
+    accepted and ignored.
     """
 
     label = "cellpose"
     WORKER = ("/app/skills/python/cellpose/"
               "WORKFLOW_FINETUNE_CP_SEGMENT_WORKER.py")
-    PYTHON = "/opt/conda/envs/cellpose4/bin/python"
+    PYTHON = "/opt/uv/envs/cellpose/bin/python"
 
-    def __init__(self, checkpoint, work_dir, diameter=None, cp_model="cpsam"):
+    def __init__(self, checkpoint, work_dir, diameter=None, cp_model="cyto3"):
         import subprocess
         import tempfile
 
@@ -413,8 +337,8 @@ class CellposeBackend:
         while True:
             line = self.proc.stdout.readline()
             if not line:
-                raise SystemExit("The cellpose worker died before it was ready. Check that the "
-                                 "cellpose4 env exists and that a GPU/CPU torch is importable.")
+                raise SystemExit("The cellpose worker died before it was ready. Check that "
+                                 "/opt/uv/envs/cellpose exists and that its torch imports.")
             try:
                 msg = json.loads(line)
             except ValueError:
@@ -446,15 +370,11 @@ class CellposeBackend:
             self.proc.kill()
 
 
-def build_backend(name, model_type, checkpoint, device, is_tiled, work_dir, cp_model="cpsam"):
-    if name == "cellpose":
-        return CellposeBackend(checkpoint, work_dir, cp_model=cp_model)
-    if name == "micro_sam":
-        return MicroSamBackend(model_type, checkpoint, device, is_tiled)
-    raise SystemExit(f'SEGMENT_BACKEND must be "micro_sam" or "cellpose", got {name!r}')
+def build_backend(checkpoint, work_dir, cp_model="cyto3"):
+    return CellposeBackend(checkpoint, work_dir, cp_model=cp_model)
 
 
-def find_base_checkpoint(task_dir, model_type, setting="auto"):
+def find_base_checkpoint(task_dir, model, setting="auto"):
     """The fine-tuned model to build on, or None to start from stock.
 
     Iterating matters more than any single round: round 1 teaches the obvious cases, and the
@@ -474,19 +394,17 @@ def find_base_checkpoint(task_dir, model_type, setting="auto"):
         return setting
 
     cands = []
-    here = sorted(glob.glob(os.path.join(task_dir, "model", f"*_{model_type}.pt")))
-    cands += [(os.path.getmtime(p), p, task_dir) for p in here]
     parent = os.path.dirname(os.path.abspath(task_dir))
-    for ev in glob.glob(os.path.join(parent, "*", "evaluation.json")):
-        if os.path.dirname(os.path.abspath(ev)) == os.path.abspath(task_dir):
-            continue
+    for ev in glob.glob(os.path.join(task_dir, "evaluation.json")) + \
+            glob.glob(os.path.join(parent, "*", "evaluation.json")):
         try:
             with open(ev) as f:
                 data = json.load(f)
         except Exception:
             continue
+        # stage 3 writes `recommended_checkpoint` = the fine-tuned file when it won, else null
         ckpt = data.get("recommended_checkpoint")
-        if ckpt and os.path.exists(ckpt) and data.get("model_type") == model_type:
+        if ckpt and os.path.exists(ckpt) and data.get("model") == model:
             cands.append((os.path.getmtime(ckpt), ckpt, os.path.dirname(ev)))
     if not cands:
         return None
@@ -495,31 +413,6 @@ def find_base_checkpoint(task_dir, model_type, setting="auto"):
           f"          {best}\n"
           f"          The picker will show what THAT model gets wrong, not the stock model.")
     return best
-
-
-def segment_field(predictor, segmenter, img, tile_shape=None):
-    """Stock segmentation of a whole field, tiled at `tile_shape` when the field is bigger.
-
-    Same tiling rule as stage 4: SAM resizes whatever it is given to 1024 px, so a field fed
-    whole shows its objects at a different size than a tile does, and the outlines the user is
-    judging would not be the ones the model produces on the tiles.
-
-    `tile_shape=None` means NEVER tile — that is the per-tile pre-segmentation, where the crop
-    is already at the scale the model will be trained and applied at and tiling it again would
-    only add seams.
-    """
-    from micro_sam.automatic_segmentation import automatic_instance_segmentation
-    kw = {}
-    if tile_shape is not None:
-        # No second size test here. The segmenter object was built tiled-or-not from this
-        # same flag, and micro_sam accepts tiled embeddings ONLY in the Tiled* class and
-        # untiled ones only in the plain class — so a per-image test that disagreed with
-        # the caller broke both ways ('batch_size'/'Group'.ndim one way, .attrs the other).
-        # A tile_shape larger than the image is harmless: micro_sam clips it to one tile.
-        kw = dict(tile_shape=(tile_shape, tile_shape), halo=(max(tile_shape // 8, 32),) * 2)
-    return np.asarray(automatic_instance_segmentation(
-        predictor=predictor, segmenter=segmenter, input_path=img, ndim=2,
-        verbose=False, **kw)).astype(np.uint32)
 
 
 def overlay_png(img, labels, path):
@@ -981,14 +874,10 @@ def pick_tiles_auto(groups, tile, n_tiles, shapes_out):
 
 
 def main():
-    import torch          # local: keeps this module importable (and its helpers
-                          # unit-testable) without the GPU stack loaded
-
     dirs = {k: os.path.join(TASK_DIR, k)
-            for k in ("tiles", "presegmentation", "annotations", "previews", "embeddings")}
+            for k in ("tiles", "presegmentation", "annotations", "previews")}
     for d in dirs.values():
         os.makedirs(d, exist_ok=True)
-    ensure_model_cache(os.path.join(TASK_DIR, ".micro_sam_cache"))
 
     # --- 1. find the images and split them into groups --------------------------------
     recursive = RECURSIVE
@@ -1006,10 +895,11 @@ def main():
     groups = group_images(paths, INPUT_DIR, GROUP_REGEX)
     n_tiles = N_TILES or max(6, len(groups))
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model_type = MODEL_TYPE or ("vit_b_lm" if device == "cuda" else "vit_t_lm")
-    base_ckpt = find_base_checkpoint(TASK_DIR, model_type, BASE_CHECKPOINT)
-    print(f"[prepare] {len(paths)} image(s) in {len(groups)} group(s); {model_type} on {device}"
+    # No torch in this (napari) env: the container's GPU probe says whether the cellpose
+    # worker will run on CUDA (the entrypoint exports IMAGENTJ_GPU).
+    device = "cuda" if os.environ.get("IMAGENTJ_GPU", "").lower() == "true" else "cpu"
+    base_ckpt = find_base_checkpoint(TASK_DIR, CP_MODEL, BASE_CHECKPOINT)
+    print(f"[prepare] {len(paths)} image(s) in {len(groups)} group(s); Cellpose {CP_MODEL} on {device}"
           + ("  [continuing from a fine-tuned checkpoint]" if base_ckpt else ""))
 
     # --- 2. probe the data, then settle on a tile size ---------------------------------
@@ -1034,25 +924,10 @@ def main():
     if TILE_SIZE is None or show_preseg:
         # The model is needed for the probe segmentation, and the probe answers two questions
         # at once: how big a tile should be, and what the picker shows the user.
-        print(f"[prepare] building "
-              f"{SEGMENT_BACKEND + ' (' + CP_MODEL + ')' if SEGMENT_BACKEND == 'cellpose' else SEGMENT_BACKEND}"
+        print(f"[prepare] starting Cellpose ({CP_MODEL})"
               f"{' + fine-tuned weights' if base_ckpt else ''} on {device} ...")
-        # is_tiled MUST agree with segment_field()'s own tiling test (`max(h, w) >
-        # tile_shape`) — micro_sam only accepts tiled embeddings in the Tiled* segmenter
-        # class, and get_predictor_and_segmenter picks the class from this flag alone.
-        # Deciding it on the MIN dimension while segment_field decides on the MAX one made
-        # the two disagree for any image with min(dim) <= 512 < max(dim) (e.g. 507x676),
-        # and micro_sam reports that mismatch as `initialize() got an unexpected keyword
-        # argument 'batch_size'`, or — once that is worked around — as `'Group' object has
-        # no attribute 'ndim'`. Neither message names tiling, so derive both from one value.
-        probe_tile = int(min(512, min_dim))
-        tiled = max(max(s) for s in shapes.values()) > probe_tile
-        probe_arg = probe_tile if tiled else None   # the ONLY tiling switch, used everywhere
-        backend = build_backend(
-            SEGMENT_BACKEND, model_type, base_ckpt, device,
-            is_tiled=tiled, work_dir=TASK_DIR,
-            cp_model=CP_MODEL,
-        )
+        probe_arg = None                     # Cellpose segments a whole field at once
+        backend = build_backend(base_ckpt, TASK_DIR, cp_model=CP_MODEL)
         print(f"[prepare] segmenting one field per group to measure the data "
               f"({len(probes)} field(s)) ...")
         probe_segs, preseg_cache = [], {}
@@ -1114,7 +989,7 @@ def main():
     # the annotator shows the series in ONE napari image layer: the moment a (512,512,3) tile
     # follows a (512,512) one, napari reads the colour axis as a 512-slice stack and renders a
     # one-pixel-wide sliver — a black canvas with the masks floating on it, and no error. It
-    # also gives torch_em two different input shapes to train on. If anything is colour,
+    # also gives training two different input shapes. If anything is colour,
     # everything becomes colour (never the reverse: dropping the channels can drop the stain).
     tile_mode = "rgb" if any(im.ndim == 3 for im in images.values()) else "gray"
     if tile_mode == "rgb" and any(im.ndim == 2 for im in images.values()):
@@ -1122,8 +997,8 @@ def main():
 
     # One SCALE for the whole task. A fixed tile size cut from images of different sizes samples
     # different magnifications: a 512 px tile of a 512 px field and a 512 px tile of a 2048 px
-    # field show the same object 4x apart, and SAM resizes both to 1024 regardless. The stock
-    # generalist copes; a model fine-tuned on the mixture does not. Measured: 8 tiles from
+    # field show the same object 4x apart. The stock generalist copes; a model fine-tuned on
+    # the mixture does not. Measured: 8 tiles from
     # 512/1024/2048 px sources made the model WORSE even with perfect labels (0.556 -> 0.515),
     # while the same tiles restricted to one source size behaved normally.
     src_dims = {p: max(shapes[p]) for p in used}
@@ -1152,13 +1027,9 @@ def main():
     # --- 4. pre-segment each tile with the stock model ----------------------------------
     print(f"[prepare] pre-segmenting {len(selected)} tile(s) with "
           f"{'the ROUND-1 fine-tuned ' if base_ckpt else ''}"
-          f"{SEGMENT_BACKEND} on {device} ...")
-    # A FRESH, UNTILED backend: these are single tiles, already at the scale the model will be
-    # trained and applied at, so tiling them again would only add seams.
-    if backend is not None:
-        backend.close()
-    backend = build_backend(SEGMENT_BACKEND, model_type, base_ckpt, device,
-                            is_tiled=False, work_dir=TASK_DIR, cp_model=CP_MODEL)
+          f"Cellpose {CP_MODEL} on {device} ...")
+    if backend is None:                      # the picker ran without the model
+        backend = build_backend(base_ckpt, TASK_DIR, cp_model=CP_MODEL)
 
     entries = []
     for i, c in enumerate(selected):
@@ -1215,29 +1086,25 @@ def main():
               f"model is a poor fit, which is exactly the case fine-tuning fixes. Go ahead, but "
               f"expect the human to ADD most objects rather than correct them.")
 
-    # Are the source images bigger than the tile? SAM resizes whatever it is given to 1024 px,
-    # so a model trained on TILE-sized crops has learned objects at the apparent size they have
-    # AFTER that resize. Feeding it a 4x larger image at inference shrinks every object 4x and
-    # the fine-tuning gain evaporates. Stages 3/4 therefore run TILED inference at exactly this
-    # tile size whenever the target images are larger — this flag is how they know.
+    # Are the source images bigger than the tile? Recorded for the record (Cellpose rescales by
+    # object DIAMETER, which stage 3 measures from the annotations, not by image size).
     max_dim = max(max(s) for s in shapes.values())
     tiled_inference = bool(max_dim > tile)
     if tiled_inference:
-        print(f"[prepare] source images up to {max_dim} px > tile {tile} px -> stages 3/4 will run "
-              f"TILED inference at {tile} px so train and inference see objects at the same scale.")
+        print(f"[prepare] source images up to {max_dim} px > tile {tile} px.")
 
     manifest = {
         "version": 2,
         "created": datetime.datetime.now().isoformat(timespec="seconds"),
         "input_dir": INPUT_DIR, "task_dir": TASK_DIR, "dirs": dirs,
-        "model_type": model_type, "device_used": device,
+        "model_type": CP_MODEL, "device_used": device,
         # WHICH model the user was shown and corrected. Stage 3 reads it and says so if it is
         # asked to train a different one — annotations are portable, but "the user fixed THIS
         # model's mistakes" is the claim that makes an active-learning round worth doing.
-        "segment_backend": SEGMENT_BACKEND,
+        "segment_backend": "cellpose",
         # Which cellpose model the user was actually shown. Stage 3 reads this as its default
         # CP_MODEL so "corrected model" and "fine-tuned model" are the same one by construction.
-        "cp_model": CP_MODEL if SEGMENT_BACKEND == "cellpose" else None,
+        "cp_model": CP_MODEL,
         # None on round 1. On later rounds this is the model the user was shown and corrected,
         # and stage 3 both continues from it and measures against it.
         "base_checkpoint": base_ckpt,
@@ -1266,7 +1133,7 @@ def main():
     print(f"[prepare] tiles         : {len(entries)}  ({tile}x{tile} px)")
     print(f"[prepare] first guess   : {total} objects total, ~{total / max(len(entries), 1):.0f} per tile")
     print(f"[prepare] est. human time: {2 * len(entries)}-{4 * len(entries)} min")
-    print("[prepare] NEXT -> WORKFLOW_FINETUNE_2_ANNOTATE.py with TASK_DIR = " + TASK_DIR)
+    print("[prepare] NEXT -> WORKFLOW_FINETUNE_CP_2_ANNOTATE.py with TASK_DIR = " + TASK_DIR)
 
 
 def build_instructions(m):
@@ -1295,59 +1162,34 @@ objects, it covers half of one, or it is on something that is not an object at a
 
 ## The window
 
-A napari window opens with two layers listed on the left:
+A napari window opens with these layers listed on the left:
 
 | layer | what it is |
 |---|---|
 | `image` | the tile |
 | `committed_objects` | the computer's guess — one colour per object. **This is your answer sheet.** |
+| `current_object` | outlines you have drawn but not kept yet |
+| `drawings` | the yellow shapes you trace |
 
 The **ImagentJ — Annotation Helper** panel on the right has everything you need: a tile
-counter and four buttons. Use the buttons — they put napari into the right mode for you,
+counter and a few buttons. Use the buttons — they put napari into the right mode for you,
 which is the one thing that is easy to get wrong.
 
-## Three things to do
+## Two things to do
 
-### ➕ ADD a missing object
-1. Click **➕ ADD objects** in the helper panel (it turns green).
-2. Left-click once **in the middle** of the object.
-3. Press **S** → the outline appears (in `current_object`).
-   - grabbed the neighbour too, or too much background? Press **T**, click on the part it
-     should *not* include, press **S** again, then press **T** to go back.
-   - still wrong? **Delete that one outline** (DELETE objects mode, or the **D** key with
-     the mouse over it) and add it again. Do NOT reach for Shift+C / *Clear Annotations* —
-     see the note under the key table.
-4. Press **C** → the object turns into a new colour and joins `committed_objects`. Done.
+### ✏ DRAW a missing object
+1. Click **✏ DRAW objects** in the helper panel (it turns purple).
+2. **Press, drag round the object, release.** What you trace is exactly the outline that gets
+   saved, so follow the edge — roughly is fine. Draw as many objects as you like.
+   - prefer clicking? Press **✏ DRAW objects** again: now **click round the object** and
+     **double-click** to close the shape. Press it once more to go back to dragging.
+3. Press **S** → your shapes turn into outlines (in `current_object`).
+4. Press **C** → they turn into new colours and join `committed_objects`. Done.
+   (C on its own also works — it does the S step for you.)
 
-> **Pressed C and nothing happened?** The thing you clicked is already outlined. The tool
-> refuses to draw on top of an existing object — delete that outline first, then add it again.
-
-### ✏ DRAW round objects
-Use this when **ADD will not cooperate** — an outline the computer gets wrong however you
-click it, or an object it keeps missing. Telling it *where* the object is often works where
-telling it *what to click* does not.
-
-1. Click **✏ DRAW round objects** in the helper panel (it turns purple).
-2. **Click round the object**, then **double-click** to close the shape. Draw as many as you
-   like before going on.
-   - loose is fine. The computer uses the **box around** your shape, so tracing carefully
-     buys nothing — aim, don't trace.
-3. Press **S** → each shape is outlined.
-4. Press **C** to keep them.
-
-Same **S** and **C** as ADD — the only difference is what you gave the computer to work from.
-You can mix the two: a shape round the object and a click inside it are both prompts.
-
-> **Points not sticking as you click?** Press **✏ DRAW round objects** again. It switches to
-> drag-a-rectangle, which always works and gives exactly the same result.
-
-> If a neighbour creeps into the shape, press **ADD**, then **T** (the next click now means
-> *exclude*), and click the neighbour. Then **S** again.
-
-### ⌫ CLEAR my clicks & boxes
-Removes the green/red dots and the shapes you drew. **Your outlines are not touched** — use
-DELETE for those. Worth pressing whenever the picture gets cluttered: a leftover click from
-an earlier object quietly joins the next **S**.
+> **Drew over an existing outline?** A new outline never paints over an object that is already
+> there — it only fills the background around it. To redraw a bad outline, **DELETE it first**,
+> then draw it again.
 
 ### ✖ DELETE a wrong object
 1. Click **✖ DELETE objects** in the helper panel (it turns red).
@@ -1356,44 +1198,42 @@ an earlier object quietly joins the next **S**.
 (Or just hover the mouse over it and press **D**.)
 
 Delete anything that is not a real object (debris, dirt, a shadow), and anything the computer
-got badly wrong. **To fix a bad outline, delete it and add it again** — that is faster and
+got badly wrong. **To fix a bad outline, delete it and draw it again** — that is faster and
 safer than trying to repair it:
 
 | problem | fix |
 |---|---|
-| object missing | ADD it |
+| object missing | DRAW it |
 | debris / background outlined | DELETE it |
-| one outline covers two objects | DELETE it, then ADD each object separately |
-| one object split into two outlines | DELETE both, then ADD it with one click |
-| outline is badly off | DELETE it, then ADD it again |
-| ADD keeps getting the same object wrong | DELETE it, then **DRAW** round it |
-| objects packed tightly together | DELETE the clump, then **DRAW** round each one and exclude with **T** |
+| one outline covers two objects | DELETE it, then DRAW each object separately |
+| one object split into two outlines | DELETE both, then DRAW it once |
+| outline is badly off | DELETE it, then DRAW it again |
 
-> **Tight clumps are the hard case.** One click inside a clump gives you the whole clump, and
-> once that is committed every further click inside it is ignored — clicking more will not
-> help. DELETE the clump first, then box one object at a time, adding an *exclude* click
-> (**T**) on the neighbour that keeps coming along. If a clump is so dense that you cannot
-> tell where one object ends and the next begins, leave it out and say so to whoever asked:
-> a guess there is worse for training than nothing, because the computer learns the guess.
+> **Tight clumps are the hard case.** Draw one object at a time, following the boundary between
+> neighbours as best you can. If a clump is so dense that you cannot tell where one object ends
+> and the next begins, leave it out and say so to whoever asked: a guess there is worse for
+> training than nothing, because the computer learns the guess.
+
+### ⌫ CLEAR my drawings
+Removes the yellow shapes you traced but have not kept yet. **Your kept outlines are not
+touched** — use DELETE for those.
 
 ## Finishing a tile
 
 Click **✓ TILE DONE → NEXT TILE** (or press **N**).
 
 > ⚠ **Press N on every tile, including the LAST one.** N is what saves your work. Closing the
-> window without pressing N loses that tile. After the last one, napari asks
-> "Do you wish to close napari?" — click **Yes**.
+> window without pressing N loses that tile.
 
-If a square genuinely has nothing in it, N asks *"Nothing is segmented yet. Do you wish to
-continue to the next image?"* — click **OK**. That is the tool checking you did not forget the
-tile, not an error.
+If a square genuinely has nothing in it, the first **N** says so — press **N** again to save it
+as empty. That is the tool checking you did not forget the tile, not an error.
 
 ## Going back
 
 Pressed N too early, or spotted a mistake on the tile before? Click **◀ BACK to previous tile**
 (or press **B**). It reopens the previous square with your corrections on it, exactly as you
 left them — it is not a fresh start. The square you are leaving is saved first, so you never
-lose work by going back. Press **N** when you are done there and it jumps straight back to the
+lose work by going back. Press **N** when you are done there and it jumps straight to the
 first square you have not finished yet.
 
 Everything is saved tile by tile, so you can stop any time and pick up where you left off:
@@ -1403,21 +1243,16 @@ already-finished tiles are skipped when the annotator is restarted.
 
 | key | action |
 |---|---|
-| **S** | segment from your click |
-| **T** | switch the click between *include* (positive) and *exclude* (negative) |
-| **C** | commit the object you just made |
+| **S** | turn your drawn shapes into outlines |
+| **C** | keep them (adds them to your answer sheet) |
+| **D** | delete the object under the mouse pointer |
 | **B** | go back to the previous tile |
 | **N** | save this tile and go to the next one |
-| **D** | delete the object under the mouse pointer |
 | scroll / drag | zoom / pan |
 
-> **Got an outline you don't want?** Delete it (**D**, or DELETE objects mode) and make it
-> again. There is no undo here — deleting and redoing is the one move that works in every
+> **Got an outline you don't want?** Delete it (**D**, or DELETE objects mode) and draw it
+> again. There is no undo here — deleting and redrawing is the one move that works in every
 > state, so it is the only one the panel offers.
-
-> **Do not use Shift+C / *Clear Annotations*.** It is listed in micro_sam's own menus, but in
-> this version it can fail instead of clearing. To start an object over, delete that one
-> outline (**D**, or DELETE objects mode) and add it again — that works in every state.
 """
 
 

@@ -14,7 +14,7 @@
  *
  * BRIGHT-FIELD: cellpose expects objects BRIGHTER than the background. If your background is
  * bright (dark cells), invert first: IJ.run(imp, "Invert", "") -- or add "--invert" to flags
- * (v3 only; it is a silent no-op on cpsam).
+ * (Cellpose 3).
  *
  * Outputs:
  *   <outputDir>/cellpose_labels.tif   16-bit instance label image (0 = bg, 1..N = objects)
@@ -23,7 +23,7 @@
  * Requires (already configured in this image):
  *   - BIOP wrapper jar on the classpath (bundled in /opt/Fiji.app/jars)
  *   - cellpose conda env at envPath with a working tifffile (>=2025)
- *   - BASH_ENV=/opt/conda/etc/profile.d/conda.sh so 'conda activate' works
+ *   - nothing else: the wrapper runs <envPath>/bin/python directly (no conda activate)
  *     (set in src/imagentj/imagej_context.py; export it yourself if running Fiji standalone)
  */
 
@@ -36,7 +36,7 @@ import ij.process.ImageConverter
 // ── CONFIG (edit these) ──────────────────────────────────────────────────────
 def imagePath = "/app/data/.../input.tif"          // "" to use the currently active image
 def outputDir = "/app/data/.../cellpose_out"
-def envPath   = "/opt/conda/envs/cellpose"          // cellpose v3.1.1.2 (use cellpose4 + CellposeSAM for cpsam)
+def envPath   = "/opt/uv/envs/cellpose"             // cellpose v3.1.1.2 (uv env; env_type stays "conda")
 def model     = "cyto3"                             // or "nucleitorch_0", "cyto2", "tissuenet_cp3", ... (see SCRIPT_API.md)
 float diameter = 30f                                // expected object diameter in px; 0f = auto (cyto* only)
 int   ch1     = 0                                   // channel to segment (0 = grayscale)

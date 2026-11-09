@@ -46,7 +46,7 @@ fails, and it fails **silently**: measured on real data, a `spot_radius` 12× to
 small still returned a plausible-looking spot list while the detections no longer
 corresponded to the objects.
 
-Installed in the main env (`local_imagent_J`) — no env switch needed, scripts do
+Installed in the main env (`/opt/uv/envs/main`) — no env switch needed, scripts do
 **not** need an `# imagentj-env:` header.
 
 ## When to use this vs. alternatives
@@ -87,7 +87,7 @@ a 2D image.
 |------|---------------|
 | `SCRIPT_API.md` | Full reference: `detect_spots`, `get_elbow_values`, `decompose_dense`, `detect_clusters`, background removal, batch/shared-threshold mode, 2D vs 3D, coordinate conventions, and how the automatic threshold works |
 | `WORKFLOW_SPOT_DETECTION.py` | Ready-to-run: image (or folder) → spot coordinates CSV + per-image counts + elbow QC plot; edit the CONFIG block |
-| `WORKFLOW_SPOTS_PER_CELL.py` | Ready-to-run: spots + a cell/nucleus LABEL image (from cellpose/stardist) → spots-per-cell CSV, the standard smFISH readout |
+| `WORKFLOW_SPOTS_PER_CELL.py` | Ready-to-run: spots + a cell/nucleus LABEL image (from cellpose or a classical segmentation) → spots-per-cell CSV, the standard smFISH readout |
 | `WORKFLOW_SPOT_SEGMENTATION.py` | Ready-to-run: image → per-object **segmentation mask** + area/mean/integrated-density CSV + contour QC. Reads calibration from the file, measures the object radius, splits touching objects. Use this whenever you need object EXTENT, not just position |
 
 Each workflow falls back to synthetic data when its configured input is missing, so

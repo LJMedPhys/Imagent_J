@@ -108,7 +108,7 @@ To get started, please share:
 - Targets: what objects/features to detect; which channel(s) matter.
 - Preprocessing: background/flat-field correction, denoising needs?
 - Outputs: tables/measurements, labeled masks/overlays, ROIs, saved images.
-- Constraints: plugins available (e.g., Fiji with Bio-Formats, MorpholibJ, TrackMate, StarDist), OS, any runtime limits.
+- Constraints: plugins available (e.g., Fiji with Bio-Formats, MorpholibJ, TrackMate, Cellpose), OS, any runtime limits.
 
 If you’re unsure, tell me the biological question and show one representative image—I’ll propose a clear plan and a script you can run.
 
