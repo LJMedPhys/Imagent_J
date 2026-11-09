@@ -341,7 +341,10 @@ RUN mkdir -p /home/imagentj/.imagej /home/imagentj/.cache \
 WORKDIR /app
 COPY --from=appsrc --chown=imagentj:imagentj /app /app
 # The qdrant_data dir must exist and be writable (bind-mounted in compose).
-RUN mkdir -p /app/qdrant_data && chown imagentj:imagentj /app/qdrant_data
+# /app itself was created root-owned by WORKDIR (COPY --chown only covers its
+# contents); the entrypoint runs as imagentj and creates /app/data, which a
+# plain `docker run` without the compose bind mounts would otherwise fail on.
+RUN mkdir -p /app/qdrant_data && chown imagentj:imagentj /app /app/qdrant_data
 
 COPY --chmod=755 docker-entrypoint.sh /docker-entrypoint.sh
 
