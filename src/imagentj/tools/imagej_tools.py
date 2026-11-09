@@ -640,10 +640,14 @@ def _describe_screenshot(b64: str, system_prompt: str, text_prompt: str) -> dict
                  "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "high"}},
             ]),
         ])
-        raw = _message_text(response.content).strip()
-        if raw.startswith("```"):
-            raw = re.sub(r"^```(?:json)?\n?", "", raw).rstrip("` \n")
-        parsed = json.loads(raw)
+        raw = _message_text(response.content)
+        # Decode only the FIRST JSON value: models regularly append prose or a
+        # second object after it (seen live as json.loads' "Extra data: line 95
+        # column 1"), which made the whole dialog description fail.
+        start = raw.find("{")
+        if start < 0:
+            raise ValueError(f"no JSON object in reply: {raw[:200]!r}")
+        parsed, _ = json.JSONDecoder().raw_decode(raw, start)
     except Exception as e:
         return {"error": f"Vision analysis failed: {e}"}
     # Callers index into the result, so never hand back a bare list/str even
@@ -666,6 +670,7 @@ def _grab_fiji_dialogs() -> list[tuple[str, str]]:
     Window = jimport('java.awt.Window')
     Robot  = jimport('java.awt.Robot')
     Rectangle = jimport('java.awt.Rectangle')
+    ImageWindow = jimport('ij.gui.ImageWindow')
 
     try:
         robot = Robot()
@@ -678,6 +683,11 @@ def _grab_fiji_dialogs() -> list[tuple[str, str]]:
     for win in Window.getWindows():
         try:
             if not win.isVisible():
+                continue
+            # Image windows are never plugin dialogs. The title heuristic below
+            # only catches them by file extension, so an image titled e.g. "01"
+            # was screenshotted and sent to the vision model as a "dialog".
+            if isinstance(win, ImageWindow):
                 continue
             # getTitle() exists on Frame and Dialog but not all Window subtypes
             title = ""

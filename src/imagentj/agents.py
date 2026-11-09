@@ -57,6 +57,8 @@ from .tools import (
     VisionOptionMiddleware,
     NapariComputeGuardMiddleware,
     NarrationReminderMiddleware, PhaseGuardMiddleware, ToolOutputLimitMiddleware,
+    RealPathFileSearchMiddleware,
+    EmptyResponseRetryMiddleware,
     BioRefusalRetryMiddleware, InterjectMiddleware,
     update_state_ledger, read_state_ledger, set_ledger_metadata, get_ledger_context,
     check_environment,
@@ -506,7 +508,7 @@ def _make_coder_agent(model, name, system_prompt):
         middleware=[
             ToolOutputLimitMiddleware(),
             agent_watchdog.middleware(),
-            FilesystemFileSearchMiddleware(
+            RealPathFileSearchMiddleware(
                 # Scoped to /app/skills/ — the workflow templates / SKILL.md the coder
                 # copies from. Do NOT widen to /app/: /app/data is ~66 GB of images and
                 # a broad glob/grep that descends into it stalls for minutes (looks like
@@ -526,6 +528,7 @@ def _make_coder_agent(model, name, system_prompt):
                     ),
                 ],
             ),
+            EmptyResponseRetryMiddleware(),
             # Innermost — see BioRefusalRetryMiddleware. Must stay last.
             BioRefusalRetryMiddleware(),
         ],
@@ -745,6 +748,33 @@ _vlm_agent = (
 _RECURSION_LIMIT = int(os.environ.get("AGENT_RECURSION_LIMIT", "45"))
 
 
+def _is_unedited_template(script_path: str, skills_root: str = "/app/skills") -> bool:
+    """True when `script_path` is still a byte-identical copy of a skill template.
+
+    copy_file seeds a script from a template and the agent then edits it. Killed in
+    between, the copy is "a script created this run" — and was salvaged as
+    success=True, so the supervisor would have run the stock template (it opens a
+    sample image from the internet) against the user's data (seen 2026-11-04).
+    """
+    try:
+        size = os.path.getsize(script_path)
+        with open(script_path, "rb") as f:
+            data = f.read()
+        for root, _dirs, files in os.walk(skills_root):
+            for fn in files:
+                if not fn.lower().endswith((".py", ".groovy")):
+                    continue
+                cand = os.path.join(root, fn)
+                try:
+                    if os.path.getsize(cand) == size and open(cand, "rb").read() == data:
+                        return True
+                except OSError:
+                    continue
+    except OSError:
+        pass
+    return False
+
+
 def _salvage_or_fail_script(script_path, kind):
     """Build a graceful ScriptHandoff for a subagent that hit the recursion cap.
 
@@ -754,6 +784,8 @@ def _salvage_or_fail_script(script_path, kind):
     was saved, fail cleanly with a retry hint and NO internal 'recursion' wording.
     """
     has_script = bool(script_path) and os.path.isfile(script_path) and os.path.getsize(script_path) > 0
+    if has_script and _is_unedited_template(script_path):
+        has_script = False
     if has_script:
         return ScriptHandoff(
             script_path=script_path,
@@ -1078,7 +1110,8 @@ def python_data_analyst(task: str, input_path: str, output_dir: str, project_roo
 
     def _on_cap():
         path = _newest_script_since(output_dir, pre_scripts)
-        has = bool(path) and os.path.isfile(path) and os.path.getsize(path) > 0
+        has = (bool(path) and os.path.isfile(path) and os.path.getsize(path) > 0
+               and not _is_unedited_template(path))
         if has:
             return AnalystHandoff(
                 script_path=path,
@@ -1553,8 +1586,11 @@ def init_agent():
                 ),
             ],
         ),
-        FilesystemFileSearchMiddleware(
+        RealPathFileSearchMiddleware(
             root_path="/app/data/",
+            # The prompts address user images as /data/<file>; in the standard
+            # deployment that is the same mount as /app/data.
+            aliases=("/data",),
             use_ripgrep=True,
         ),
         NarrationReminderMiddleware(),
@@ -1582,6 +1618,7 @@ def init_agent():
             enabled_prompt=vision_prompt,
             disabled_prompt=no_vision_prompt,
         ),
+        EmptyResponseRetryMiddleware(),
         # Last line before a provider biological-risk refusal unwinds the whole
         # supervisor loop. create_deep_agent inserts user middleware after its
         # own Skills/Filesystem/SubAgent stack, so this sees their injected

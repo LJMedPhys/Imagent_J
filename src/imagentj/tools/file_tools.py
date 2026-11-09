@@ -350,13 +350,54 @@ def mkdir_copy(action: str, target_path: str, source_path: Optional[str] = None)
 
 
 @tool("setup_analysis_workspace")
-def setup_analysis_workspace(project_name: str) -> str:
+def setup_analysis_workspace(project_name: str, resume_existing: bool = False) -> str:
     """
     Creates a standardized folder tree to manage a new analysis project.
     Initializes directory architecture and logs environment metadata (Fiji & Python versions).
+
+    If a project with this name already exists (it has a state ledger from an earlier
+    session), a NEW folder with a numbered suffix is created instead, so an old ledger's
+    decisions, scripts and outputs are never mistaken for this session's. Pass
+    resume_existing=True ONLY when the user explicitly asked to continue that project.
+    The returned text names the folder actually used — use that as project_root.
     """
     # 1. Define the base path
     root = Path(f"/app/data/projects/{project_name}")
+    # Same name as an earlier session's project → that folder's ledger (user choices,
+    # validated parameters) would be read back as if decided in this session.
+    # Observed 2026-11-04: a fresh chat inherited "User chose Pipeline A" and skipped
+    # asking. Default to a fresh folder; reuse only on an explicit resume.
+    reused_note = ""
+    try:
+        from ..interject import active_thread
+        thread = active_thread()
+    except Exception:
+        thread = ""
+    owner_file = root / "logs" / ".owner_thread"
+    owner = owner_file.read_text().strip() if owner_file.exists() else ""
+    # The workflow calls this again later in the same chat (Phase 3), and a chat may
+    # resume after a restart: the project's own chat always gets its folder back.
+    # No bound chat (headless callers) keeps the old reuse behaviour.
+    same_chat = not thread or owner == thread
+    if (root / "state_ledger.json").exists() and not same_chat:
+        if resume_existing:
+            reused_note = ("NOTE: RESUMING an existing project — its state ledger and earlier "
+                           "outputs are kept. Call read_state_ledger before continuing.\n")
+        else:
+            n = 2
+            while True:
+                cand = root.parent / f"{project_name}_{n}"
+                cand_owner = cand / "logs" / ".owner_thread"
+                if not (cand / "state_ledger.json").exists() or (
+                        cand_owner.exists() and cand_owner.read_text().strip() == thread):
+                    break                       # free, or this chat's own earlier copy
+                n += 1
+            requested, project_name = project_name, f"{project_name}_{n}"
+            root = cand
+            owner_file = root / "logs" / ".owner_thread"
+            reused_note = (f"NOTE: '{requested}' belongs to an earlier session, so this chat's "
+                           f"project is '{project_name}' — the old ledger and its decisions are NOT "
+                           "part of this session. Use the location below as project_root.\n")
     
     # 2. Define the subdirectories
     subdirs = [
@@ -374,6 +415,12 @@ def setup_analysis_workspace(project_name: str) -> str:
     for subdir in subdirs:
         (root / subdir).mkdir(parents=True, exist_ok=True)
     
+    if thread and not owner_file.exists():
+        try:
+            owner_file.write_text(thread)
+        except OSError:
+            pass
+
     # 4. Gather Metadata
     py_version = sys.version.split()[0]
     os_info = platform.platform()
@@ -414,7 +461,7 @@ def setup_analysis_workspace(project_name: str) -> str:
             f.write(f"{pkg}: {ver}\n")
 
     # 6. Return the tree structure
-    tree_output = f"""
+    tree_output = reused_note + f"""
 Successfully created project structure for: {project_name}
 Location: {root}
 Metadata logged to: {metadata_path}

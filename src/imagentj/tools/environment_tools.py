@@ -109,8 +109,9 @@ def _apply_gpu_override(sections: Dict[str, List[str]]) -> None:
     PyTorch can actually use CUDA and exports `IMAGENTJ_GPU=true|false`; that
     var is inherited by this process. We rewrite the `**CUDA**` row accordingly
     so `check_environment` reports the ACTUAL runtime state instead of the
-    baked-in "CPU-only" default. Unset var (e.g. host dev mode) → leave the
-    static value untouched.
+    baked-in "CPU-only" default. Unset var (e.g. host dev mode, `docker exec`)
+    → "unknown", never the baked-in "CPU-only", which is false on a GPU image.
+    Every row names the GPU so a check_environment("gpu") query finds it.
     """
     flag = os.environ.get("IMAGENTJ_GPU", "").strip().lower()
     if flag in ("1", "true", "yes", "on"):
@@ -125,7 +126,10 @@ def _apply_gpu_override(sections: Dict[str, List[str]]) -> None:
             "StarDist run on CPU (`--use_gpu` falls back to CPU automatically). |"
         )
     else:
-        return
+        new_row = (
+            "| **CUDA** | Unknown — GPU status was not probed for this process. "
+            "Check with `torch.cuda.is_available()` in the script; never hard-code CPU. |"
+        )
     for rows in sections.values():
         for i, row in enumerate(rows):
             if "**CUDA**" in row:

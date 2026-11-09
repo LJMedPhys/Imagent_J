@@ -12,6 +12,28 @@ from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 _ARRAY_STORE_SUFFIXES = (".zarr", ".n5")
 
 
+# The app keeps its own state next to the user's data (/data is the same mount as
+# /app/data in the standard deployment). Listed alphabetically, these come before
+# the user's folders and used up the whole entry budget — a tree of /data showed
+# 259 chat folders and never reached tasks/ (seen 2026-11-04). Hidden only at the
+# data root, so a user folder that happens to share a name elsewhere still shows.
+_APP_DATA_ROOTS = ("/app/data", "/data")
+_APP_INTERNAL = {
+    "chats", "learned", "environment", "knowledge_database", "_recordings",
+    "agentic-j_debug.log", "api_keys.env", "usage_stats.json",
+}
+
+
+def _is_app_data_root(dir_path: str) -> bool:
+    for root in _APP_DATA_ROOTS:
+        try:
+            if os.path.samefile(dir_path, root):
+                return True
+        except OSError:
+            pass
+    return False
+
+
 def _is_array_store(dir_path: str) -> bool:
     """Return whether a directory is a chunked array store.
 
@@ -69,7 +91,12 @@ def walk(
 
     directories = []
     files = []
+    at_data_root = _is_app_data_root(dir_path)
+    hidden = 0
     for entry in entries:
+        if entry.startswith(".") or (at_data_root and entry in _APP_INTERNAL):
+            hidden += 1
+            continue
         full_path = os.path.join(dir_path, entry)
         if os.path.isdir(full_path):
             directories.append(entry)
@@ -120,6 +147,9 @@ def walk(
     omitted_files = len(files) - emitted_files
     if omitted_files > 0:
         node["omitted_files"] = omitted_files
+
+    if hidden:
+        node["hidden_entries_omitted"] = hidden
 
     if _budget["remaining"] <= 0 and (omitted_dirs > 0 or omitted_files > 0):
         node["entry_budget_exhausted"] = True
