@@ -22,7 +22,8 @@
 # variant is the same stage built with USE_GPU=true (docker-compose.gpu.yml).
 # =============================================================================
 
-ARG DEBIAN_RELEASE=bookworm
+# The pinned Qt wheels for Linux ARM64 require glibc 2.39 or newer.
+ARG DEBIAN_RELEASE=trixie
 ARG UV_VERSION=0.11
 
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
@@ -190,14 +191,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
          qdrant_client, fastembed, pymupdf4llm, skimage, sklearn, plotnine, bigfish, \
          cp_measure, websockify; print('[OK] main env')"
 
-# Cellpose 3 env. torch comes first from the PyTorch index (CPU or CUDA; arm64
-# uses PyPI's CPU aarch64 wheel), then cellpose resolves around it. No
-# torchvision: cellpose 3 does not use it.
+# Install torch from the PyTorch index before Cellpose. ARM64 uses the CPU
+# index. Cellpose 3 does not use torchvision.
 RUN --mount=type=cache,target=/root/.cache/uv set -e; \
     uv venv --python 3.12 /opt/uv/envs/cellpose; \
-    if [ "$TARGETARCH" = "arm64" ]; then \
-        uv pip install --python /opt/uv/envs/cellpose/bin/python "torch==${TORCH_VERSION}"; \
-    elif [ "$USE_GPU" = "true" ]; then \
+    if [ "$USE_GPU" = "true" ] && [ "$TARGETARCH" != "arm64" ]; then \
         uv pip install --python /opt/uv/envs/cellpose/bin/python "torch==${TORCH_VERSION}" \
             --index-url "https://download.pytorch.org/whl/${CUDA_TAG}"; \
     else \
@@ -212,6 +210,9 @@ RUN --mount=type=cache,target=/root/.cache/uv set -e; \
     if [ "$USE_GPU" = "true" ] && [ "$TARGETARCH" != "arm64" ]; then \
         /opt/uv/envs/cellpose/bin/python -c \
             "import torch; assert torch.version.cuda, 'expected a CUDA torch build in the GPU image'"; \
+    else \
+        /opt/uv/envs/cellpose/bin/python -c \
+            "import torch; assert torch.version.cuda is None, 'expected a CPU torch build'"; \
     fi
 
 # Cellpose model weights: cyto3 (+ its size model) only, so a pulled image
