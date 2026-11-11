@@ -52,7 +52,9 @@ local_llm:
 # reasoning_effort. Per-role values take precedence over the blanket
 # IMAGENTJ_REASONING_EFFORT environment override.
 reasoning_effort:
-  supervisor: max
+  # high, not max (2026-11-09): max made Kimi K3 supervisor turns 2-4x slower
+  # (trivial prompt 93 s vs 4 s, same answer) with no quality gain in the 11-04 test.
+  supervisor: high
   # high, not max: worker also backs python_data_analyst, and max made Kimi K3
   # spend minutes (44k output tokens on one turn) thinking before each script.
   worker:     high
