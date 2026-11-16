@@ -2,6 +2,30 @@
 
 An AI-powered agent for microscopy image analysis. Agentic-J runs ImageJ inside a container together with an LLM-driven chat panel that can plan analyses, write and execute Groovy macros, install plugins, and report results.
 
+## Install on an Apple Silicon Mac with Docker Desktop
+
+Watch the [macOS installation walkthrough](https://youtu.be/Mu01GtcNffs).
+
+1. Install and open Docker Desktop for Apple Silicon. [Docker Desktop for Mac](https://docs.docker.com/desktop/setup/install/mac-install/)
+2. In Docker Desktop, search for `mmvlab/agentic_j`, select the `slim-cpu-arm64` tag, and click **Pull**. [Docker Hub image tags](https://hub.docker.com/r/mmvlab/agentic_j/tags)
+3. Create a writable folder on your Mac for your images and results. In Docker Desktop, go to **Images**, find `mmvlab/agentic_j:slim-cpu-arm64`, and choose **Run → Optional settings**. [Docker Desktop Images guide](https://docs.docker.com/desktop/use-desktop/images/)
+   - Under **Ports**, enter `6080` as the host port for container port `6080`.
+   - Under **Volumes**, enter the full path to your Mac folder as the **Host path** and `/app/data` as the **Container path**. The published image needs this mount to create its working folders at startup.
+4. Click **Run**. Open <http://localhost:6080/vnc.html>, click **Connect**, and follow the setup wizard to enter your OpenAI or OpenRouter API key. Put images in the folder you mounted in step 3.
+
+### Use the bundled knowledge base
+
+Docker Compose mounts the project's data folder and Qdrant knowledge base. With Git and Git LFS installed, run these commands in Terminal to start from the same published image.
+
+```bash
+git lfs install
+git clone --branch build/slim_docker https://github.com/LJMedPhys/Imagent_J.git
+cd Imagent_J
+IMAGENTJ_IMAGE=mmvlab/agentic_j:slim-cpu-arm64 docker compose up -d --no-build --pull missing
+```
+
+Open <http://localhost:6080/vnc.html> and put your images in [`./data/`](data/).
+
 ## Quick start (Docker)
 
 Prerequisites:
