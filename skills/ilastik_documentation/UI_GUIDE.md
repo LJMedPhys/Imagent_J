@@ -5,6 +5,10 @@ This guide covers the documented ilastik plugin commands under
 
 ## Installation
 
+Agentic-J ships ilastik4ij 2.1.0 (update site `ilastik`) and the ilastik 1.4.2 application at
+`/opt/ilastik`; the executable path below is preset to `/opt/ilastik/run_ilastik.sh` at container
+start. On another Fiji:
+
 - Open `Help > Update...`.
 - Click `Manage update sites`.
 - Enable the `ilastik` update site.
@@ -25,7 +29,7 @@ This guide covers the documented ilastik plugin commands under
 ## Configure ilastik
 
 Use `Plugins > ilastik > Configure ilastik executable location` before running
-any prediction wrapper.
+any prediction wrapper (in Agentic-J it is preset — only check it).
 
 Documented fields:
 

@@ -6,7 +6,7 @@ image.
 
 ## Before You Start
 
-- Enable the `ilastik` update site in Fiji and restart.
+- Agentic-J: ilastik4ij 2.1.0 and ilastik 1.4.2 are preinstalled and the executable is preset (`/opt/ilastik/run_ilastik.sh`). Elsewhere: enable the `ilastik` update site in Fiji and restart.
 - Have a trained Multicut `.ilp` project ready.
 - Close that `.ilp` project in ilastik before Fiji runs it.
 - Open the raw image in Fiji.
@@ -16,7 +16,7 @@ image.
 ## Step 1 — Configure the ilastik Executable
 
 1. Open `Plugins > ilastik > Configure ilastik executable location`.
-2. Set the path to the ilastik executable.
+2. Set the path to the ilastik executable (Agentic-J: `/opt/ilastik/run_ilastik.sh`, preset).
 3. Set the thread limit and RAM limit if needed.
 4. Save the configuration.
 

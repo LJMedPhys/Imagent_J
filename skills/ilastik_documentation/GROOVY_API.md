@@ -57,7 +57,10 @@ try {
     // run ilastik command here
 }
 finally {
-    options.executableFile = previousExecutableFile
+    // keep the working executable if none / a missing one was configured before
+    if (previousExecutableFile != null && previousExecutableFile.exists()) {
+        options.executableFile = previousExecutableFile
+    }
     options.numThreads = previousNumThreads
     options.maxRamMb = previousMaxRamMb
     options.save()
@@ -353,10 +356,38 @@ These are standard Fiji / SCIFIO calls. They are not ilastik-specific.
 | Convert `ImgPlus` to `Dataset` for saving | `datasetService.create(predictions)` |
 | Read the dataset table output | `listModule.getOutput("datasets")` |
 
+## Outputs (verified 2026-11-16, ilastik4ij 2.1.0 + ilastik 1.4.2)
+
+| Command / type | `predictions` content |
+|---|---|
+| Pixel Classification `Probabilities` | float, one channel per label class, 0–1; ImgPlus axes `[X, Y, Channel, Z, Time]` (singletons kept) |
+| Pixel Classification `Segmentation` | class index 1..N (no 0 background), float |
+| Autocontext `Probabilities` | float, one channel per class (final stage) |
+| Object Classification `Object Predictions` | 0 = background, 1..N = predicted class per object |
+| Multicut | uint32 instance labels |
+| Tracking | uint32 lineage IDs per object and frame |
+
+Saving with `datasetIOService.save(datasetService.create(predictions), path)` writes a TIFF.
+
+## Script parameters persist
+
+SciJava remembers `#@` parameter values between runs (Java prefs under
+`~/.java/.userPrefs/org/ilastik/ilastik4ij/...` and per script). A run with missing parameters can
+silently reuse a previous run's file paths — always pass every parameter explicitly.
+
+## Limits of the wrapper commands
+
+- `ObjectClassificationCommand` passes the second image as `--prediction_maps` or
+  `--segmentation_image` only; projects of type "Object Classification [Inputs: Raw Data, Label
+  Image]" (ilastik ≥ 1.4.2) need the headless CLI with `--label_image` (`HEADLESS_CLI.md`).
+- Only the command's own export choices are available (e.g. no "Uncertainty", no feature table);
+  use `GROOVY_WORKFLOW_HEADLESS_BATCH.groovy` for those.
+- No training: projects are trained in the ilastik GUI (`GUI_TRAINING.md`).
+
 ## What This Guide Does Not Claim
 
-- No claim that this repo ships an ilastik executable or a sample `.ilp`
-  project file.
+- No claim that this repo ships a sample `.ilp` project file (the ilastik application itself is
+  installed in the image at `/opt/ilastik`).
 - No claim that all supported command choices are validated in every workflow
   combination. Use the committed defaults when you need the exact validated
   path.

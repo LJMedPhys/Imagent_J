@@ -128,11 +128,11 @@ class AgentAborted(RuntimeError):
 SEGMENTATION_RETRY_LIMIT = int(os.environ.get("IMAGENTJ_SEGMENTATION_RETRIES", "3"))
 
 # The segmenters and targets this system actually routes to. Deliberately NOT every
-# tool with a docs folder: ilastik and labkit have skills but no live route, so
-# counting them could only ever produce a false trigger.
+# tool with a docs folder: labkit has a skill but no live route, so counting it could
+# only ever produce a false trigger. ilastik is installed (app + ilastik4ij) and routed.
 _SEG_WORDS = ("segment", "threshold", "mask", "cellpose", "stardist", "micro_sam",
               "microsam", "watershed", "nuclei", "nucleus", "cells", "detect",
-              "outline", "label")
+              "outline", "label", "ilastik", "pixel classif")
 
 # Phrases taken from the logged prompts of real dissatisfied sessions rather than
 # invented. Kept literal for that reason — a cleverer generalisation ("no", "not")

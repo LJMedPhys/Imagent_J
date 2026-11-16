@@ -111,7 +111,11 @@ try {
     IJ.log("Saved prediction: " + outputFile.absolutePath)
 }
 finally {
-    options.executableFile = previousExecutableFile
+    // Restore the previous settings, but keep the working executable when none (or a
+    // missing file) was configured, so Plugins > ilastik and TrackMate-Ilastik keep working.
+    if (previousExecutableFile != null && previousExecutableFile.exists()) {
+        options.executableFile = previousExecutableFile
+    }
     options.numThreads = previousNumThreads
     options.maxRamMb = previousMaxRamMb
     options.save()

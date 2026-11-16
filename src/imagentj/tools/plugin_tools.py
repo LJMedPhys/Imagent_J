@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -11,6 +12,14 @@ from config.imagej_config import FIJI_JAVA_HOME
 __all__ = ['search_fiji_plugins', 'install_fiji_plugin', 'check_plugin_installed']
 
 PLUGIN_REGISTRY_PATH = Path(__file__).resolve().parent.parent / "rag" / "plugin_registry.json"
+
+# Fiji plugins that only drive a separate application. Name matching alone is wrong for them:
+# "ilastik" also matches TrackMate-Ilastik-*.jar, and the jar is useless without the program.
+_EXTERNAL_APP_PLUGINS = {
+    "ilastik": {"jar_prefix": "ilastik4ij", "env": "ILASTIK_EXECUTABLE",
+                "default": "/opt/ilastik/run_ilastik.sh",
+                "skill": "/app/skills/ilastik_documentation/SKILL.md"},
+}
 
 
 def _load_plugin_registry():
@@ -204,6 +213,23 @@ def check_plugin_installed(plugin_name: str) -> dict:
     """
     fiji_path = Path(FIJI_JAVA_HOME)
     search_dirs = [fiji_path / "plugins", fiji_path / "jars"]
+
+    app = _EXTERNAL_APP_PLUGINS.get(plugin_name.strip().lower())
+    if app:
+        jars = [str(j) for d in search_dirs if d.exists() for j in d.glob(f"**/{app['jar_prefix']}*.jar")]
+        exe = os.environ.get(app["env"]) or app["default"]
+        exe_ok = os.path.isfile(exe) and os.access(exe, os.X_OK)
+        installed = bool(jars) and exe_ok
+        return {
+            "installed": installed,
+            "plugin_name": plugin_name,
+            "found_files": jars,
+            "executable": exe if exe_ok else None,
+            "message": (f"'{plugin_name}' is installed: Fiji plugin {', '.join(jars)} and application {exe}. "
+                        f"Read {app['skill']}." if installed else
+                        f"'{plugin_name}' is NOT fully installed: Fiji plugin {'found' if jars else 'missing'}, "
+                        f"application {exe if exe_ok else 'missing'} (${app['env']})."),
+        }
 
     # Normalize search term (full concatenated form)
     search_term = plugin_name.lower().replace(" ", "").replace("-", "").replace("_", "")

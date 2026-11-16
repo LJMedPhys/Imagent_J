@@ -214,6 +214,47 @@ if [ ! -f "$NASHORN_JAR" ]; then
     || { echo "[entrypoint] WARNING: failed to download nashorn-core JAR — .js macros may not work"; rm -f "$NASHORN_JAR"; }
 fi
 
+# ── Ensure the ilastik4ij plugin is present ──────────────────────────────────
+# fiji_plugins is a named volume: one created by an image without the ilastik
+# update site never receives ilastik4ij, and TrackMate-Ilastik (already in jars/)
+# then fails with NoClassDefFoundError. Backfill the copy baked into the image.
+if ! ls "$FIJI_HOME"/plugins/ilastik4ij-*.jar >/dev/null 2>&1 \
+   && ls /opt/fiji-extras/ilastik4ij-*.jar >/dev/null 2>&1; then
+    cp /opt/fiji-extras/ilastik4ij-*.jar "$FIJI_HOME/plugins/" \
+    && echo "[entrypoint] ilastik4ij installed into the fiji_plugins volume" \
+    || echo "[entrypoint] WARNING: could not copy ilastik4ij into fiji_plugins"
+fi
+
+# ── Point ilastik4ij / TrackMate-Ilastik at the bundled ilastik ───────────────
+# Both read the executable from the IlastikOptions Java preference, which is empty
+# until someone opens Plugins > ilastik > Configure... — TrackMate-Ilastik then dies
+# with an NPE on opts.executableFile. Preset it, but never overwrite a user's value.
+if [ -x "${ILASTIK_EXECUTABLE:-}" ]; then
+    python3 - "$ILASTIK_EXECUTABLE" <<'PYEOF' || echo "[entrypoint] WARNING: could not preset the ilastik executable"
+import os, sys
+import xml.etree.ElementTree as ET
+exe = sys.argv[1]
+p = os.path.expanduser("~/.java/.userPrefs/org/ilastik/ilastik4ij/ui/IlastikOptions/prefs.xml")
+entries = {}
+if os.path.exists(p):
+    entries = {e.get("key"): e.get("value") for e in ET.parse(p).getroot().iter("entry")}
+cur = entries.get("executableFile") or ""
+if cur and os.path.exists(cur):
+    sys.exit(0)
+entries["executableFile"] = exe
+entries.setdefault("numThreads", "-1")
+entries.setdefault("maxRamMb", "4096")
+os.makedirs(os.path.dirname(p), exist_ok=True)
+with open(p, "w", encoding="utf-8") as f:
+    f.write('<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n'
+            '<!DOCTYPE map SYSTEM "http://java.sun.com/dtd/preferences.dtd">\n<map MAP_XML_VERSION="1.0">\n')
+    for k, v in sorted(entries.items()):
+        f.write('  <entry key="%s" value="%s"/>\n' % (k, (v or "").replace("&", "&amp;").replace('"', "&quot;")))
+    f.write("</map>\n")
+print("[entrypoint] ilastik executable preset for ilastik4ij: " + exe, flush=True)
+PYEOF
+fi
+
 # ── Fix CSBDeep/StarDist protobuf JAR conflict ───────────────────────────────
 # CSBDeep's TensorFlow 1.x bindings require protobuf-java-3.6.x.
 # The makeExtensionsImmutable() NoSuchMethodError is caused by a newer protobuf

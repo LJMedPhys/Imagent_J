@@ -97,6 +97,8 @@ RUN printf '%s\n' \
     'Neuroanatomy https://sites.imagej.net/Neuroanatomy/' \
     'TrackMate-StarDist https://sites.imagej.net/TrackMate-StarDist/' \
     'TrackMate-MorphoLibJ https://sites.imagej.net/TrackMate-MorphoLibJ/' \
+    # ilastik4ij (Plugins > ilastik) — TrackMate-Ilastik calls its classes, so it must come first.
+    'ilastik https://sites.imagej.net/Ilastik/' \
     'TrackMate-Ilastik https://sites.imagej.net/TrackMate-Ilastik/' \
     'TrackMate-Cellpose https://sites.imagej.net/TrackMate-Cellpose/' \
     'ImageScience https://sites.imagej.net/ImageScience/' \
@@ -126,6 +128,12 @@ RUN cp -a /opt/Fiji.app/update/plugins/. /opt/Fiji.app/plugins/ 2>/dev/null || t
     && cp -a /opt/Fiji.app/update/scripts/. /opt/Fiji.app/scripts/ 2>/dev/null || true \
     && cp -a /opt/Fiji.app/update/lib/.     /opt/Fiji.app/lib/     2>/dev/null || true \
     && rm -rf /opt/Fiji.app/update/*
+
+# Keep a copy of ilastik4ij outside the fiji_plugins volume: an existing volume shadows the
+# image's plugins/ dir, so docker-entrypoint.sh backfills the jar from here when it is missing.
+RUN mkdir -p /opt/fiji-extras \
+    && cp /opt/Fiji.app/plugins/ilastik4ij-*.jar /opt/fiji-extras/ \
+    && ls /opt/fiji-extras
 
 # ── Patch TrackMate-StarDist 2.0.0 ClassCastException ────────────────────────
 # 2.0.0 has the correct TrackMate 8.x API (4-arg getDetector) but no
@@ -572,6 +580,28 @@ RUN echo "[micro_sam] Pre-fetching SAM checkpoints into $MICROSAM_CACHEDIR ..." 
     && echo "[micro_sam] Baked in: $(ls $MICROSAM_CACHEDIR/models | tr '\n' ' ')" \
     && du -sh $MICROSAM_CACHEDIR \
     && chown -R imagentj:imagentj /home/imagentj/.cache
+
+# ── ilastik (standalone application driven by the ilastik4ij Fiji plugin) ─────
+# ilastik4ij only writes HDF5 and calls `run_ilastik.sh --headless`; the application
+# itself must be installed. CPU build (~0.7 GB download, ~2.6 GB unpacked). The
+# separate "-gpu" build (~4.9 GB) is only needed for Neural Network Classification.
+# ilastik publishes Linux builds for x86_64 only, so arm64 images skip this step.
+ARG ILASTIK_VERSION=1.4.2
+ARG ILASTIK_SHA256=164facabba4b1103a98d806c156f70937136bee0363aeeae84df6dade1e6763f
+RUN set -e; \
+    arch="${TARGETARCH:-$(uname -m)}"; \
+    case "$arch" in \
+        amd64|x86_64) \
+            wget -q -O /tmp/ilastik.tar.bz2 "https://files.ilastik.org/ilastik-${ILASTIK_VERSION}-Linux.tar.bz2"; \
+            echo "${ILASTIK_SHA256}  /tmp/ilastik.tar.bz2" | sha256sum -c -; \
+            mkdir -p /opt/ilastik; \
+            tar -xjf /tmp/ilastik.tar.bz2 -C /opt/ilastik --strip-components=1; \
+            rm -f /tmp/ilastik.tar.bz2; \
+            /opt/ilastik/run_ilastik.sh --version; \
+            ;; \
+        *) echo "[ilastik] no Linux $arch build published — skipped"; ;; \
+    esac
+ENV ILASTIK_EXECUTABLE=/opt/ilastik/run_ilastik.sh
 
 # ── Seed Fiji jars/plugins for named-volume persistence ──────────────────────
 # fiji_jars/fiji_plugins are named volumes mounted at /opt/Fiji.app/{jars,plugins}.

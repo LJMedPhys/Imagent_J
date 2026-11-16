@@ -4,6 +4,33 @@
 between Fiji and ilastik through temporary HDF5 files, and it can also expose
 the HDF5 transfer steps directly as menu commands.
 
+## Installed in Agentic-J
+
+| Component | Version | Where |
+|---|---|---|
+| ilastik application (CPU build) | 1.4.2 (2026-05-28) | `/opt/ilastik`, `$ILASTIK_EXECUTABLE=/opt/ilastik/run_ilastik.sh` |
+| ilastik4ij Fiji plugin | 2.1.0 (2026-02-10), update site `ilastik` | `plugins/ilastik4ij-2.1.0.jar` |
+| TrackMate-Ilastik | 2.0.0 | `jars/TrackMate-Ilastik-2.0.0.jar` |
+
+The ilastik4ij executable preference is preset by the container entrypoint (never overwrites a
+user-set path). A plugin regression check (class linkage of all 4 000+ plugin classes plus
+Bio-Formats, MorphoLibJ, TrackMate, StarDist/TensorFlow, CLIJ2, 3D ImageJ Suite, Labkit, n5-hdf5
+smoke tests) gave identical results with and without ilastik (2026-11-16).
+
+## Verified matrix (2026-11-16)
+
+| Workflow | Fiji wrapper (ilastik4ij) | Headless CLI | Test project |
+|---|---|---|---|
+| Pixel Classification | ✅ Probabilities + Segmentation | ✅ (identical result) | `pixel_class_2d_cells_apoptotic.ilp` (ilastik4ij tests) |
+| Autocontext | ✅ | ✅ `Probabilities Stage 2` | `Autocontext2d3c.ilp` (ilastik tests) |
+| Object Classification, prediction map input | ✅ | – | `obj_class_2d_cells_apoptotic.ilp` |
+| Object Classification, label image input | ❌ not supported by the wrapper | ✅ `--label_image` | `ObjectClassification2d3c_wLabels.ilp` |
+| Multicut | ✅ | – | `Boundary-basedSegmentationwMulticut3d1c.ilp` |
+| Tracking (with learning, prediction maps) | ✅ | – | `TrackingwLearning5t2d_wPred.ilp` |
+| HDF5 export / import / list | ✅ | – | – |
+| TrackMate ilastik detector | ✅ (projects saved by ilastik ≥ 1.3.3) | – | `pixel_class_2d_cells_apoptotic.ilp` |
+| ilastik GUI on the desktop (training) | ✅ new + existing projects | – | – |
+
 ## Core Capabilities
 
 - HDF5 export from Fiji to ilastik-compatible `.h5`
@@ -44,6 +71,11 @@ The committed Groovy workflows in this skill cover:
   reusing those bundles.
 
 ## File Map
+
+- `SKILL.md`: route table and verified pitfalls (read first)
+- `GUI_TRAINING.md` + `GROOVY_LAUNCH_ILASTIK_GUI.groovy`: open ilastik for the user to train
+- `HEADLESS_CLI.md` + `GROOVY_WORKFLOW_HEADLESS_BATCH.groovy`: batch-apply a project to a folder
+- `TRACKMATE_ILASTIK.md`: TrackMate ilastik detector
 
 - `GROOVY_API.md`: command classes, parameters, and helper calls
 - `GROOVY_WORKFLOW_EXPORT_HDF5.groovy`: TIFF to HDF5 export

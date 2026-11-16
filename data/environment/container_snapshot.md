@@ -1,4 +1,4 @@
-# Container Snapshot — 2026-04-30
+# Container Snapshot — 2026-04-30 (ilastik rows added 2026-11-16)
 
 ## Cellpose aliases
 
@@ -37,6 +37,16 @@ substring search finds them.
 | **Mesa / OpenGL** | 25.0.7 |
 | **wget** | 1.25.0 |
 | **curl** | 8.14.1 |
+
+## Standalone applications
+
+ilastik is its own application with a bundled Python — it is NOT a conda env and not importable
+from the agent's Python envs. Drive it from Fiji (ilastik4ij, `Plugins > ilastik`), from its
+headless command line, or open its GUI on the desktop for training. See the `ilastik_documentation` skill.
+
+| Application | Version / location | Notes |
+|-------------|--------------------|-------|
+| ilastik / ilastik app / ilastik 1.4.2 / run_ilastik.sh / ilastik pixel classification / ilastik object classification / ilastik autocontext / ilastik multicut / ilastik tracking | 1.4.2 (CPU build) at `/opt/ilastik`; executable `$ILASTIK_EXECUTABLE` = `/opt/ilastik/run_ilastik.sh` | READ skill `ilastik_documentation` (SKILL.md) before scripting. Training only in the ilastik GUI (`GROOVY_LAUNCH_ILASTIK_GUI.groovy`). Folder of images: `GROOVY_WORKFLOW_HEADLESS_BATCH.groovy`; one image: `GROOVY_WORKFLOW_PIXEL_CLASSIFICATION.groovy`. Headless gotcha: pass `--input_axes` (`yx` for a 2-D grey TIFF) — projects trained on Fiji HDF5 store 5-D tzyxc. Segmentation output = class index 1..N. Classifying existing instance labels (Cellpose/StarDist): project type "Object Classification [Inputs: Raw Data, Label Image]" needs `--label_image` (NOT `--segmentation_image`; a wrong role fails with "trailing file paths"); with a multichannel raw image write the labels to HDF5 as (y,x,1) and pass `--input_axes=yxc` — see HEADLESS_CLI.md. ilastik4ij 2.1.0 in Fiji; GPU build (Neural Network Classification) not installed. |
 
 ## Python environments
 
@@ -614,6 +624,7 @@ env can do; it exists for the atlas tooling only.
 | FlowJ_ | 2.0.1 |
 | Graph_Cut | 1.0.2 |
 | HDF5_Vibez | 1.1.1 |
+| ilastik4ij (Plugins > ilastik; update site `ilastik`) | 2.1.0 |
 | IO_ | 4.3.0 |
 | LSM_Reader | 4.1.2 |
 | LocalThickness_ | 5.0.0 |
@@ -631,7 +642,7 @@ env can do; it exists for the atlas tooling only.
 | ToAST_ | 25.0.2 |
 | TrackMate | 8.1.6 |
 | TrackMate-Cellpose | 1.0.1 |
-| TrackMate-Ilastik | 2.0.0 |
+| TrackMate-Ilastik | 2.0.0 (detector; needs ilastik4ij + ilastik app, both installed) |
 | TrackMate-MorphoLibJ | 2.0.0 |
 | TrackMate-StarDist | 2.0.0 |
 | Trainable_Segmentation (Weka) | 4.0.0 |

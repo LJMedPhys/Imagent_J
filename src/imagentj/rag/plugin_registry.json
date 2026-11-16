@@ -1531,7 +1531,7 @@
     "update_site_url": "https://sites.imagej.net/Ilastik/",
     "requires_restart": true,
     "documentation_url": "https://imagej.net/plugins/ilastik",
-    "description": "Machine learning-based image segmentation, classification, and analysis. Provides interactive pixel classification, object classification, counting, and tracking through a user-friendly graphical interface backed by random forest and other ML models.",
+    "description": "Machine learning-based image segmentation, classification, and analysis (ilastik 1.4.2 application at /opt/ilastik + ilastik4ij 2.1.0 Fiji plugin, both preinstalled in Agentic-J). The user trains a random-forest classifier with a few brush strokes in the ilastik GUI (opened on the desktop by the agent); the agent then applies the saved .ilp headlessly to one image (Plugins > ilastik) or a whole folder (ilastik headless batch). Workflows: pixel classification, autocontext, object classification (incl. classifying existing Cellpose/StarDist label images), multicut, tracking; skill: ilastik_documentation.",
     "category": "segmentation",
     "tags": [
       "machine-learning",
@@ -1543,8 +1543,8 @@
     ],
     "input_data": "2D or 3D grayscale or multi-channel fluorescence images where a few manual annotations (painting) can teach the classifier",
     "output_data": "Probability maps, segmentation label images, object counts, classification results, exported HDF5 datasets",
-    "use_when": "You want interactive machine learning segmentation by painting labels, need pixel or object classification, or want to combine multiple image features automatically",
-    "do_not_use_when": "Images have very consistent, threshold-able intensity (use Auto Threshold); you need deep learning (use StarDist or DeepImageJ); you need a purely scriptable batch pipeline",
+    "use_when": "You want interactive machine learning segmentation by painting labels, need pixel or object classification (e.g. classify segmented cells into phenotypes), have a trained ilastik project (.ilp) to apply in batch, or objects are defined by texture/context that thresholds and pretrained models miss",
+    "do_not_use_when": "Images have very consistent, threshold-able intensity (use Auto Threshold); a pretrained generalist model (Cellpose, StarDist) already segments the objects well; nobody can paint training labels in the ilastik GUI and no trained .ilp exists (unattended run)",
     "typical_use_cases": [
       "Segmenting cells in complex fluorescence images by painting foreground/background examples",
       "Classifying tissue regions in histology images",
