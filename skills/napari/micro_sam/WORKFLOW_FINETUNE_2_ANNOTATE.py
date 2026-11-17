@@ -8,6 +8,17 @@ reduces the whole job to three buttons: ADD an object (click it), DRAW round an 
 it), DELETE an object. ADD and DRAW are two kinds of prompt and both go through the same S
 and C.
 
+Under DRAW sits one switch, "My drawn shape IS the outline (skip micro_sam)". Off (the
+default), a drawn shape is a prompt and micro_sam segments inside its bounding box. On, S
+rasterises the drawn shapes themselves into `current_object` — no model involved — and C
+commits them exactly as drawn. Use it where micro_sam keeps getting an object wrong.
+
+Every C also appends what was committed — the drawn shapes' vertices, the clicks, whether
+micro_sam or the drawing made the mask, and the label ids it produced — to
+`<TASK_DIR>/prompt_log/<tile>.json`. The saved label tif is still the annotation; the log is
+the record of how each object got there (and the only copy of the traced outlines, which
+micro_sam itself clears on every commit).
+
 RUN THIS VIA python_data_analyst, NEVER via mcp__napari_mcp__execute_code. It opens its own
 napari window and blocks on napari.run() until the human closes it — which is correct here
 (the script's return IS the "human is finished" signal) but would kill an MCP call: that tool
@@ -22,8 +33,8 @@ relays to the user and what decides whether stage 3 can start.
 
 THIS PANEL IS A FIXED UI — EDIT `TASK_DIR` AND NOTHING ELSE. It is the only annotator in the
 project, shared unchanged by the Cellpose fine-tuning route (skills/python/cellpose/FINETUNING.md
-stages 1-2); there is no second one to write. The user learns these three buttons and these keys
-once, so a run where a button is renamed, restyled, added, removed or "improved" reads to them as
+stages 1-2); there is no second one to write. The user learns these three buttons, the one switch
+and these keys once, so a run where a button is renamed, restyled, added, removed or "improved" reads to them as
 the tool breaking — a UI that changes between runs is a bug even when the code is correct. If
 this panel cannot do what a task needs, say so and stop rather than improvising a replacement.
 
@@ -57,6 +68,8 @@ BANNER = r"""
   ADD an object     ->  click "ADD objects", click the object,  S ,  then  C
   DRAW round one    ->  click "DRAW round objects", trace it, double-click to close,
                         then  S  and  C   (press DRAW again for a drag-a-box gesture)
+  DRAW = the outline->  tick "My drawn shape IS the outline", trace the object by
+                        dragging, then  S  and  C   (micro_sam is skipped)
   DELETE an object  ->  click "DELETE objects", click the object
   CLEAR clicks/boxes->  click "CLEAR my clicks/boxes" (outlines are not touched)
   BAD OUTLINE       ->  delete it, then add it again (DRAW often works where a click did not)
@@ -191,6 +204,77 @@ def goto_tile(viewer, nav, target):
     return True
 
 
+def bound_key(keymap, key):
+    """The function bound to `key` in a napari keymap (viewer or layer), or None."""
+    for kb, fn in getattr(keymap, "items", lambda: [])():
+        text = kb.to_text() if hasattr(kb, "to_text") else str(kb)
+        if text.lower() == key:
+            return fn
+    return None
+
+
+def call_bound(fn, arg):
+    """Run a napari key binding; press/release bindings are generators, run the press half."""
+    res = fn(arg)
+    if hasattr(res, "__next__"):
+        next(res, None)
+    return res
+
+
+def shapes_to_labels(shapes_layer, shape):
+    """Rasterise every closed shape (polygon, lasso, ellipse, rectangle) into one label image.
+
+    One label per shape, 1..n in drawing order; where two shapes overlap the earlier one keeps
+    the pixels, so a commit never produces an object hidden under another. Lines and paths
+    enclose nothing and are skipped. Returns (labels, n_objects).
+    """
+    labels = np.zeros(shape, dtype=np.uint32)
+    if len(shapes_layer.data) == 0:
+        return labels, 0
+    masks = np.asarray(shapes_layer.to_masks(mask_shape=shape), dtype=bool)
+    n = 0
+    for kind, m in zip(shapes_layer.shape_type, masks):
+        if kind in ("line", "path") or not m.any():
+            continue
+        n += 1
+        labels[m & (labels == 0)] = n
+    return labels, n
+
+
+def prompts_snapshot(viewer):
+    """What is in the two prompt layers right now, as plain JSON (coordinates are y, x)."""
+    out = {"shapes": [], "points": []}
+    if "prompts" in viewer.layers:
+        shp = viewer.layers["prompts"]
+        for kind, verts in zip(shp.shape_type, shp.data):
+            out["shapes"].append({"type": str(kind),
+                                  "vertices_yx": np.round(np.asarray(verts)[:, -2:], 2).tolist()})
+    if "point_prompts" in viewer.layers:
+        pts = viewer.layers["point_prompts"]
+        labels = list(pts.properties.get("label", [])) if hasattr(pts, "properties") else []
+        for i, p in enumerate(np.asarray(pts.data)):
+            out["points"].append({"yx": np.round(p[-2:], 2).tolist(),
+                                  "label": str(labels[i]) if i < len(labels) else "positive"})
+    return out
+
+
+def append_prompt_log(log_dir, tile_name, entry):
+    """Add one commit to <log_dir>/<tile>.json. Written at once, so a crash loses nothing."""
+    os.makedirs(log_dir, exist_ok=True)
+    path = os.path.join(log_dir, tile_name + ".json")
+    log = {"tile": tile_name, "commits": []}
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                log = json.load(f)
+        except (OSError, ValueError):
+            pass
+    log["commits"].append(entry)
+    with open(path, "w") as f:
+        json.dump(log, f, indent=1)
+    return path
+
+
 def build_helper(viewer, manifest):
     """Dock a three-button panel: ADD (point prompts) / BOX (box prompts) / DELETE (fill 0).
 
@@ -211,6 +295,14 @@ def build_helper(viewer, manifest):
     For touching objects a box is still weak — it contains the neighbours. The honest answer
     there is a negative point (ADD, then T) inside the neighbour, or accepting the clump and
     deleting it.
+
+    The "drawn shape IS the outline" switch is the other answer: it takes micro_sam out of the
+    loop for drawn shapes. It does not feed the polygon to the predictor (the approach that
+    failed above); it only re-binds S so that, while the switch is on, S rasterises the shapes
+    into `current_object` instead of asking SAM. C stays micro_sam's own commit, so object
+    preservation and prompt clearing behave exactly as for a SAM mask. Its default gesture is
+    the freehand lasso, a single press-drag-release like the rectangle, so it is not exposed to
+    the multi-click interruption either.
     """
     from qtpy import QtWidgets, QtCore
 
@@ -236,6 +328,14 @@ def build_helper(viewer, manifest):
         b.setMinimumHeight(44)
         b.setStyleSheet(BTN_BASE)
         lay.addWidget(b)
+    # A switch, not a mode: it changes what S does with drawn shapes, not what a click does.
+    # It sits directly under DRAW because it only ever applies to drawn shapes.
+    chk_direct = QtWidgets.QCheckBox("My drawn shape IS the outline\n(skip micro_sam)")
+    chk_direct.setStyleSheet("font-size:12px; padding-left:8px;")
+    chk_direct.setToolTip("On: S turns your drawn shapes into outlines exactly as drawn, "
+                          "without micro_sam. Off: micro_sam segments inside the box around "
+                          "each shape.")
+    lay.insertWidget(lay.indexOf(btn_draw) + 1, chk_direct)
 
     def highlight(active, colour):
         """Exactly one button is coloured, and it is the mode the canvas is actually in.
@@ -318,7 +418,8 @@ def build_helper(viewer, manifest):
         "<b>T</b> switch click include ↔ exclude<br>"
         "<b>C</b> commit the object<br>"
         "<b>D</b> delete the object under the mouse<br>"
-        "<i>(S and C work the same for a click and for a drawn shape)</i><br><br>"
+        "<i>(S and C work the same for a click and for a drawn shape; with "
+        "“drawn shape IS the outline” ticked, S uses your shape as is)</i><br><br>"
         "<b>B</b> — back to the previous tile<br>"
         "<b>N</b> — save this tile, go to the next<br>"
         "<span style='color:#d33;'><b>Press N on every tile,<br>including the last one.</b></span>"
@@ -361,35 +462,43 @@ def build_helper(viewer, manifest):
             "<b>DELETE the old outline first</b>, then add it again."
         )
 
-    # Which gesture DRAW is currently armed with, and whether it is the active mode. Pressing
-    # DRAW while it is already active swaps the gesture — see set_draw.
-    draw_state = {"gesture": "add_polygon", "armed": False}
+    # Which gesture DRAW is armed with in each setting of the switch, and whether DRAW is the
+    # active mode. Pressing DRAW while it is already active swaps the gesture — see set_draw.
+    GESTURES = {False: ("add_polygon", "add_rectangle"),          # shape = prompt for SAM
+                True: ("add_polygon_lasso", "add_polygon")}       # shape = the outline itself
+    draw_state = {"gesture": {False: GESTURES[False][0], True: GESTURES[True][0]},
+                  "armed": False}
 
-    def set_draw():
-        """Trace round each object; micro_sam segments inside it on S.
+    def direct_on():
+        return chk_direct.isChecked()
 
-        A polygon by default, because tracing round a thing is what people reach for. Be clear
-        about what it buys, though: micro_sam reduces EVERY shape in the `prompts` layer to its
-        BOUNDING BOX before SAM sees it, so a careful trace and a loose rectangle produce the
-        same prompt and the same mask. The polygon is here because it is easier to aim, not
-        because it is more faithful.
+    def set_draw(swap=True):
+        """Trace round each object; on S, micro_sam segments inside it — or, with the switch
+        on, the trace itself becomes the outline.
 
-        Pressing DRAW again swaps polygon <-> rectangle. Multi-click drawing has failed in this
-        viewer before — vertices vanishing as they were placed, micro_sam's viewer-level mouse
-        callbacks interrupting the sequence — while a rectangle is one press-drag-release and
-        has always survived. Since the two prompts are equivalent anyway, the escape hatch
-        belongs one click away rather than behind a code edit.
+        Switch off: a polygon by default, because tracing round a thing is what people reach
+        for. Be clear about what it buys, though: micro_sam reduces EVERY shape in the
+        `prompts` layer to its BOUNDING BOX before SAM sees it, so a careful trace and a loose
+        rectangle produce the same prompt and the same mask. Pressing DRAW again swaps polygon
+        <-> rectangle. Multi-click drawing has failed in this viewer before — vertices
+        vanishing as they were placed, micro_sam's viewer-level mouse callbacks interrupting
+        the sequence — while a rectangle is one press-drag-release and has always survived.
+
+        Switch on: the trace IS the mask, so it has to be faithful and a rectangle is useless.
+        The default is the freehand lasso (press, drag round the object, release), which is a
+        single gesture like the rectangle; pressing DRAW again swaps to click-by-click polygon.
         """
         if "prompts" not in viewer.layers:
             hint.setText("<b>This viewer has no prompts layer</b> — use ADD instead.")
             return
-        if draw_state["armed"]:                  # already in DRAW: this press swaps the gesture
-            draw_state["gesture"] = ("add_rectangle" if draw_state["gesture"] == "add_polygon"
-                                     else "add_polygon")
+        d = direct_on()
+        if draw_state["armed"] and swap:         # already in DRAW: this press swaps the gesture
+            a, b = GESTURES[d]
+            draw_state["gesture"][d] = b if draw_state["gesture"][d] == a else a
         shp = viewer.layers["prompts"]
         viewer.layers.selection.active = shp
         active_mode = None
-        for mode in (draw_state["gesture"], "add_rectangle", "add_polygon"):
+        for mode in (draw_state["gesture"][d],) + GESTURES[d] + ("add_polygon",):
             try:
                 shp.mode = mode
                 active_mode = str(shp.mode)      # what it ACTUALLY took, not what we asked
@@ -398,8 +507,19 @@ def build_helper(viewer, manifest):
                 continue
         draw_state["armed"] = active_mode is not None
         highlight(btn_draw, "#7a4fa3")
-        print(f"[annotate] DRAW -> layer 'prompts', mode {active_mode or 'NONE'}", flush=True)
-        if active_mode and "polygon" in active_mode:
+        print(f"[annotate] DRAW -> layer 'prompts', mode {active_mode or 'NONE'}, "
+              f"{'drawn shape = outline' if d else 'shape = prompt for micro_sam'}", flush=True)
+        if active_mode and d:
+            how = ("<b>Press, drag round the object, release.</b>" if "lasso" in active_mode
+                   else "<b>Click round the object</b>, then <b>double-click</b> to close it.")
+            other = "click-by-click polygon" if "lasso" in active_mode else "freehand dragging"
+            hint.setText(
+                f"{how} Draw as many as you like, then <b>S</b> to see them as outlines, then "
+                f"<b>C</b>.<br><br>"
+                f"<i>micro_sam is skipped: what you draw is exactly what gets saved, so trace "
+                f"the edge carefully.</i><br><br>"
+                f"Press <b>DRAW</b> again for {other}.")
+        elif active_mode and "polygon" in active_mode:
             hint.setText(
                 "<b>Click round the object</b>, then <b>double-click</b> to close it. Draw as "
                 "many as you like, then <b>S</b>, then <b>C</b>.<br><br>"
@@ -465,14 +585,99 @@ def build_helper(viewer, manifest):
                      f"are untouched — <b>DELETE objects</b> removes those.")
         print(f"[annotate] cleared {wiped} prompt(s)", flush=True)
 
-    btn_add.clicked.connect(set_add)
-    btn_draw.clicked.connect(set_draw)
+    def on_direct_toggled(_state=None):
+        """Re-arm DRAW in the gesture that fits the new setting, if DRAW is the active mode."""
+        print(f"[annotate] drawn shape = outline: {'ON' if direct_on() else 'off'}", flush=True)
+        if draw_state["armed"]:
+            set_draw(swap=False)
+        else:
+            hint.setText("Drawn shapes will now be "
+                         + ("<b>used as outlines exactly as drawn</b> (micro_sam skipped)."
+                            if direct_on() else
+                            "<b>prompts for micro_sam</b> (it segments inside the box).")
+                         + " Press <b>DRAW</b> to draw.")
+
+    btn_add.clicked.connect(lambda: set_add())
+    btn_draw.clicked.connect(lambda: set_draw())
     btn_del.clicked.connect(set_delete)
     btn_clear.clicked.connect(clear_prompts)
+    chk_direct.toggled.connect(on_direct_toggled)
 
-    # S and C are left to micro_sam entirely. Both prompt types this panel offers — points in
-    # `point_prompts`, boxes in `prompts` — are ones its own S already reads, so there is
-    # nothing to intercept and no second code path that can disagree with it.
+    # S: micro_sam's own segment, except for drawn shapes while the switch is on. micro_sam
+    # binds S three times — on the viewer and on both prompt layers, because a layer binding
+    # shadows the viewer's (napari#7302) — so all three are wrapped, each calling its own
+    # original. Points are still micro_sam's in either setting.
+    # C: micro_sam's own commit, wrapped only to record what was committed (prompt_log/).
+    seg_state = {"source": "micro_sam"}      # what produced the current_object about to be committed
+    log_dir = os.path.join(manifest["task_dir"], "prompt_log")
+
+    def current_tile_name():
+        if nav is not None:
+            path = nav["images"].cell_contents[nav["next_image_id"].cell_contents]
+            return os.path.splitext(os.path.basename(path))[0]
+        for e in manifest["tiles"]:              # no nav: micro_sam shows the first unsaved tile
+            if not os.path.exists(e["annotation_path"]):
+                return e["name"]
+        return manifest["tiles"][-1]["name"]
+
+    def segment_drawn():
+        """S with the switch on: the drawn shapes become current_object, no model involved."""
+        cur = viewer.layers["current_object"]
+        labels, n = shapes_to_labels(viewer.layers["prompts"], cur.data.shape)
+        cur.data = labels.astype(cur.data.dtype)
+        cur.refresh()
+        seg_state["source"] = "drawn"
+        n_pts = len(viewer.layers["point_prompts"].data) if "point_prompts" in viewer.layers else 0
+        hint.setText(
+            f"<b>{n}</b> drawn outline(s) ready — press <b>C</b> to keep them."
+            + (f"<br><i>{n_pts} click(s) were ignored: with the switch on, S uses only the "
+               f"drawn shapes. CLEAR them, or untick the switch to use them.</i>" if n_pts else "")
+            if n else "Nothing to use — draw a closed shape first (lines are ignored).")
+        print(f"[annotate] S (drawn): {n} outline(s) from {len(viewer.layers['prompts'].data)} "
+              f"shape(s), micro_sam skipped", flush=True)
+
+    def wrap_segment(orig):
+        def _segment(arg):
+            if direct_on() and "prompts" in viewer.layers and len(viewer.layers["prompts"].data):
+                segment_drawn()
+                return None
+            seg_state["source"] = "micro_sam"
+            return call_bound(orig, arg)
+        return _segment
+
+    def wrap_commit(orig):
+        def _commit(arg):
+            lyr = committed()
+            snap = prompts_snapshot(viewer)
+            before = set(np.unique(lyr.data).tolist()) if lyr is not None else set()
+            res = call_bound(orig, arg)
+            after = set(np.unique(lyr.data).tolist()) if lyr is not None else set()
+            new_ids = sorted(int(i) for i in after - before - {0})
+            if new_ids:
+                try:
+                    append_prompt_log(log_dir, current_tile_name(), {
+                        "time": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                        "source": seg_state["source"],     # "drawn" = mask is the shape itself
+                        "label_ids": new_ids, **snap})
+                except Exception as exc:                  # never let logging break a commit
+                    print(f"[annotate] prompt log not written ({exc})", flush=True)
+            seg_state["source"] = "micro_sam"
+            return res
+        return _commit
+
+    keymaps = [(viewer, "viewer")] + [(viewer.layers[n], n) for n in ("prompts", "point_prompts")
+                                      if n in viewer.layers]
+    for owner, name in keymaps:
+        orig = bound_key(owner.keymap, "s")
+        if orig is not None:
+            owner.bind_key("s", wrap_segment(orig), overwrite=True)
+        elif name == "viewer":
+            print("[annotate] micro_sam's S binding not found; the drawn-outline switch is off",
+                  flush=True)
+            chk_direct.setEnabled(False)
+    orig_c = bound_key(viewer.keymap, "c")
+    if orig_c is not None:
+        viewer.bind_key("c", wrap_commit(orig_c), overwrite=True)
 
     # T (include <-> exclude) is broken in stock micro_sam 1.8.2 for the most common case:
     # committing with C deletes the point prompts but napari keeps their indices in
@@ -655,6 +860,7 @@ def report(manifest):
     """Per-tile status after the window closes — the gate for stage 3."""
     prev_dir = os.path.join(manifest["task_dir"], "annotated_previews")
     os.makedirs(prev_dir, exist_ok=True)
+    log_dir = os.path.join(manifest["task_dir"], "prompt_log")
     rows, ok = [], 0
     for e in manifest["tiles"]:
         p = e["annotation_path"]
@@ -668,6 +874,14 @@ def report(manifest):
             pass
         ids = np.unique(lab)
         n = int(len(ids) - (1 if 0 in ids else 0))
+        drawn = 0                                # objects in the saved tile that were drawn by hand
+        try:
+            with open(os.path.join(log_dir, e["name"] + ".json")) as f:
+                hand = {i for c in json.load(f)["commits"] if c.get("source") == "drawn"
+                        for i in c["label_ids"]}
+            drawn = len(hand & set(ids.tolist()))
+        except (OSError, ValueError, KeyError):
+            pass
         exp = (e["height"], e["width"])
         if lab.shape[:2] != exp:
             rows.append((e["name"], f"SHAPE MISMATCH {lab.shape[:2]} != {exp}", n, ""))
@@ -677,7 +891,8 @@ def report(manifest):
             rows.append((e["name"], "TOO FEW (<2 objects)", n, ""))
         else:
             ok += 1
-            rows.append((e["name"], "ok", n, f"was {e['n_preseg_objects']}"))
+            rows.append((e["name"], "ok", n, f"was {e['n_preseg_objects']}"
+                         + (f", {drawn} drawn by hand" if drawn else "")))
 
     print("\n" + "=" * 72)
     print(f"{'tile':<14}{'status':<26}{'objects':>9}  {'first guess':<14}")

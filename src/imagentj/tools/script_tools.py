@@ -380,21 +380,52 @@ def _read_window_text(window) -> str:
 _IGNORE_TITLES = {"ImageJ", "Fiji", "Log", "ROI Manager", "Results", ""}
 
 
-def _is_unattended_mode() -> bool:
+def _operating_mode_for(directory: str) -> str:
+    """``operating_mode`` from the ledger of the project a script belongs to.
+
+    Scripts are saved under ``<project_root>/scripts/{imagej,python}/``, so the
+    ledger sits two levels above `directory`. Returns "" when it cannot be read —
+    an unreadable ledger must not be able to claim a run is unattended.
+    """
+    if not directory:
+        return ""
+    try:
+        root = os.path.dirname(os.path.dirname(os.path.abspath(directory)))
+        with open(os.path.join(root, "state_ledger.json"), encoding="utf-8") as fh:
+            return str(json.load(fh).get("operating_mode") or "").strip().lower()
+    except (OSError, ValueError):
+        return ""
+
+
+def _is_unattended_mode(directory: str = "") -> bool:
     """Whether scripts are running without a human available to answer dialogs.
 
     Benchmark auto-pilot predates ``IMAGENTJ_UNATTENDED`` and does not set it, so
     derive the same fact from the benchmark flags as well.  An explicit true
     unattended flag always wins; an explicit false flag only disables the generic
     unattended mode, not benchmark auto-pilot.
+
+    The ledger's ``operating_mode`` is consulted last, and it is the case that
+    matters in ordinary use: neither env var is set in a normal container, so this
+    returned False for every GUI-launched run — including ``operating_mode="script"``,
+    which is precisely the setting that says no human is driving. Both defences
+    hang off this one flag (the pre-flight scan in execute_script and
+    ``_WindowMonitor``'s fatal-modal detection), so with it False a script-mode run
+    neither rejected a prompting API up front nor stopped when the dialog appeared —
+    it sat on the modal until the hard timeout. `directory` is the script's folder;
+    callers that have it must pass it, or this degrades to the env-var-only answer.
     """
     explicit = os.environ.get("IMAGENTJ_UNATTENDED", "").strip().lower()
     if explicit in {"1", "true", "yes", "on"}:
         return True
-    return (
-        os.environ.get("BENCHMARK_MODE", "").strip().lower() == "true"
-        and os.environ.get("BENCHMARK_INTERACTIVE", "").strip().lower() != "true"
-    )
+    if os.environ.get("BENCHMARK_MODE", "").strip().lower() == "true":
+        # Inside a benchmark, BENCHMARK_INTERACTIVE is the "a human is watching"
+        # signal and outranks the ledger: operating_mode="script" describes how the
+        # analysis should be carried out, not whether anyone is at the keyboard.
+        return os.environ.get("BENCHMARK_INTERACTIVE", "").strip().lower() != "true"
+    if explicit in {"0", "false", "no", "off"}:
+        return False
+    return _operating_mode_for(directory) == "script"
 
 
 def _is_dialog_window(window) -> bool:
@@ -676,6 +707,28 @@ def _reset_imagej_escape() -> None:
     """
     try:
         jimport("ij.IJ").resetEscape()
+    except Exception:
+        pass
+
+
+def _redirect_ij_errors(unattended: Optional[bool]) -> None:
+    """Send ``IJ.error()`` to the Log window instead of a modal dialog.
+
+    Complements the pre-flight source scan, which can only see dialog classes
+    written in the Groovy itself. An ``IJ.run(...)`` into a plugin JAR can call
+    ``IJ.error`` from code the scan never reads; unattended, that modal is a hang.
+    ``IJ.redirectErrorMessages(boolean)`` is the persistent form (the no-arg one
+    resets after a single run) and exists in the bundled ij-1.54p.
+
+    This only changes WHERE an error is shown, never what is decided — unlike
+    Macro.setOptions or auto-dismissing a dialog, which answer the question and
+    can silently produce a wrong scientific result. See the note in _await_groovy.
+    Attended runs keep the dialog: a human is there to read it.
+    """
+    if not unattended:
+        return
+    try:
+        jimport("ij.IJ").redirectErrorMessages(True)
     except Exception:
         pass
 
@@ -963,18 +1016,105 @@ def _unexpected_dialog_report(
     return "\n".join(parts)
 
 
-def run_groovy_script(script: str, ij, purpose: str = "", live_sink=None) -> str:
+def run_groovy_script(script: str, ij, purpose: str = "", live_sink=None,
+                      unattended: Optional[bool] = None) -> str:
     """
     Execute a Groovy script in ImageJ/Fiji, capturing all output channels
     and classifying windows into errors vs. results vs. info.
 
     Thin wrapper over _run_groovy_script so the @ThreadInterrupt prefix's line
     shift is corrected at exactly one place, on every return path.
+
+    `unattended` is threaded from execute_script, which is the only caller that
+    knows the project and can therefore read its `operating_mode`. None means
+    "decide from the environment alone" — see _is_unattended_mode.
     """
-    return _fix_line_numbers(_run_groovy_script(script, ij, purpose, live_sink))
+    return _fix_line_numbers(
+        _run_groovy_script(script, ij, purpose, live_sink, unattended))
 
 
-def _run_groovy_script(script: str, ij, purpose: str = "", live_sink=None) -> str:
+_LOGGING_NOISE_RE = re.compile(
+    r"^(\d\d:\d\d:\d\d,\d+ \|-(INFO|WARN) in ch\.qos\.logback.*"
+    r"|SLF4J\([A-Z]\):.*)$",
+    re.MULTILINE,
+)
+
+
+def _strip_logging_noise(text: str) -> str:
+    """Remove logback/SLF4J initialisation lines; keep everything else verbatim."""
+    if "logback" not in text and "SLF4J" not in text:
+        return text
+    cleaned = _LOGGING_NOISE_RE.sub("", text)
+    return re.sub(r"\n{2,}", "\n", cleaned).strip("\n") + ("\n" if cleaned.strip() else "")
+
+
+def _script_error_collector(ij):
+    """
+    Record the script's own exceptions from SciJava's log, independent of System.err.
+
+    SciJava's ScriptModule does not rethrow a script's exception: it logs it, and
+    the Future completes normally. Detection used to rely on that log line landing
+    in the redirected System.err — but some libraries replace System.err while the
+    script runs (CLIJ's OpenCL device query does), after which the exception went
+    nowhere and a crashed script was reported as SUCCESS. A LogListener sees the
+    message whatever happened to System.err. Only messages that point at the
+    script itself (script.groovy in the text or stack) count, so unrelated
+    background log errors cannot flip a run to ERROR.
+
+    Returns (messages_list, detach_callable).
+    """
+    messages: list[str] = []
+    try:
+        log_service = ij.log()
+        error_level = int(jpype.JClass("org.scijava.log.LogLevel").ERROR)
+    except Exception:
+        return messages, (lambda: None)
+
+    def _describe(msg) -> Optional[str]:
+        text = str(msg.text() or "")
+        thr = msg.throwable()
+        parts = [text] if text and text != "null" else []
+        mentions_script = "script.groovy" in text
+        if thr is not None:
+            parts.append(str(thr.toString()))
+            cause = thr.getCause()
+            if cause is not None:
+                parts.append("Caused by: " + str(cause.toString()))
+            frames = [str(f.toString()) for f in thr.getStackTrace()]
+            script_frames = [f for f in frames if "script.groovy" in f]
+            mentions_script = mentions_script or bool(script_frames) or "script.groovy" in str(thr.toString())
+            parts.extend("\tat " + f for f in (script_frames or frames)[:5])
+        return "\n".join(parts) if mentions_script else None
+
+    @JImplements("org.scijava.log.LogListener")
+    class _Collector:
+        @JOverride
+        def messageLogged(self, msg):
+            try:
+                if int(msg.level()) <= error_level:
+                    described = _describe(msg)
+                    if described:
+                        messages.append(described)
+            except Exception:
+                pass
+
+    collector = _Collector()
+    try:
+        log_service.addLogListener(collector)
+    except Exception:
+        return messages, (lambda: None)
+
+    def _detach():
+        try:
+            log_service.removeLogListener(collector)
+        except Exception:
+            pass
+
+    return messages, _detach
+
+
+def _run_groovy_script(script: str, ij, purpose: str = "", live_sink=None,
+                       unattended: Optional[bool] = None) -> str:
     System                = jpype.JClass("java.lang.System")
     ByteArrayOutputStream = jpype.JClass("java.io.ByteArrayOutputStream")
     PrintStream           = jpype.JClass("java.io.PrintStream")
@@ -990,9 +1130,11 @@ def _run_groovy_script(script: str, ij, purpose: str = "", live_sink=None) -> st
     frames_before  = _get_open_frames()
     windows_before = _snapshot_all_windows()
 
-    monitor = _WindowMonitor(windows_before).start()
+    monitor = _WindowMonitor(windows_before, unattended=unattended).start()
 
     _reset_imagej_escape()
+    _redirect_ij_errors(unattended)
+    script_errors, detach_error_collector = _script_error_collector(ij)
     runner = _GroovyRunner(script=script, ij=ij).start()
 
     # The redirected System.out buffer is readable while the script runs, so the
@@ -1033,8 +1175,16 @@ def _run_groovy_script(script: str, ij, purpose: str = "", live_sink=None) -> st
             return _stopped_report(handle, out_stream, ij_log_before, monitor, detached)
 
         result = runner.result()
-        stdout = str(out_stream.toString())
-        stderr = str(err_stream.toString())
+        # Drop logging-framework start-up chatter (logback status lines, SLF4J
+        # provider warnings) — triggered by e.g. CLIJ, it filled the whole STDOUT
+        # budget and hid the script's own println output.
+        stdout = _strip_logging_noise(str(out_stream.toString()))
+        stderr = _strip_logging_noise(str(err_stream.toString()))
+        # The script's exception, seen by the log listener even when System.err was
+        # swapped out mid-run (then it is missing from `stderr`). Put it first so
+        # the summary line names it.
+        if script_errors and not any(e.splitlines()[0] in stderr for e in script_errors if e):
+            stderr = "[ERROR] " + "\n[ERROR] ".join(script_errors) + ("\n" + stderr if stderr.strip() else "")
 
         ij_log_new = get_new_ij_log_entries(ij_log_before)
 
@@ -1135,6 +1285,7 @@ def _run_groovy_script(script: str, ij, purpose: str = "", live_sink=None) -> st
         return "\n".join(parts)
 
     finally:
+        detach_error_collector()
         System.setOut(original_out)
         System.setErr(original_err)
         handle.mark_finished()
@@ -1262,9 +1413,18 @@ def _should_run_in_subprocess(code: str) -> tuple[bool, str]:
     return False, "no clear batch signal — defaulting to in-process"
 
 
-def _batch_env() -> dict:
+def _batch_env(unattended: Optional[bool] = None) -> dict:
     """Environment for the worker: smaller heap, no nested watchdog, importable src."""
     env = os.environ.copy()
+    # The worker is a separate PROCESS, so it cannot see the ledger decision the
+    # parent made — it re-derives unattended-ness from its own environment. Hand
+    # it the answer, or a batch run in script mode would keep the modal-dialog
+    # detection switched off and sit on the dialog until the hard timeout, which
+    # is the same failure this change exists to remove. A disposable worker never
+    # has a human attached in any case, so False is only ever passed through from
+    # an explicitly attended parent.
+    if unattended is not None:
+        env["IMAGENTJ_UNATTENDED"] = "1" if unattended else "0"
     # The batch JVM's heap must fit ALONGSIDE the app's, inside the container limit:
     # IMAGENTJ_JVM_HEAP (app, 6g default) + this must stay under the container's
     # memory cap (8g by default here), with room for Python, napari and the OS.
@@ -1299,7 +1459,8 @@ def _extract_worker_report(stdout: str) -> Optional[str]:
     return None
 
 
-def _run_groovy_subprocess(code: str, purpose: str = "") -> str:
+def _run_groovy_subprocess(code: str, purpose: str = "",
+                           unattended: Optional[bool] = None) -> str:
     """
     Run a batch Groovy script in its own Fiji process.
 
@@ -1318,7 +1479,7 @@ def _run_groovy_subprocess(code: str, purpose: str = "") -> str:
     try:
         run = run_control.SupervisedProcess(
             [sys.executable, "-m", "imagentj.groovy_worker", script_path, purpose],
-            language="groovy", code=code, purpose=purpose, env=_batch_env(),
+            language="groovy", code=code, purpose=purpose, env=_batch_env(unattended),
         )
     except Exception as exc:
         return f"SUMMARY: ERROR — could not start batch Fiji: {exc}\nSTATUS: ERROR\nLANGUAGE: Groovy"
@@ -1360,7 +1521,8 @@ def _run_groovy_subprocess(code: str, purpose: str = "") -> str:
             pass
 
 
-def run_script_safe(language: str, code: str, max_retries: int = 3, purpose: str = "") -> str:
+def run_script_safe(language: str, code: str, max_retries: int = 3, purpose: str = "",
+                    unattended: Optional[bool] = None) -> str:
     """
     Unified safe execution tool for the supervisor.
 
@@ -1398,12 +1560,12 @@ def run_script_safe(language: str, code: str, max_retries: int = 3, purpose: str
     log.info("Groovy execution routed %s: %s",
              "to a batch subprocess" if use_subprocess else "in-process", why)
     if use_subprocess:
-        return _run_groovy_subprocess(code, purpose)
+        return _run_groovy_subprocess(code, purpose, unattended)
 
     ij = get_ij()
 
     try:
-        last_output = run_groovy_script(code, ij, purpose)
+        last_output = run_groovy_script(code, ij, purpose, unattended=unattended)
     except Exception as e:
         last_output = f"Exception during execution: {e}"
 
@@ -2034,13 +2196,18 @@ def execute_script(directory: str, filename: str) -> str:
     with open(full_path, 'r', encoding='utf-8') as f:
         code_content = f.read()
 
+    # Resolved once, from the project this script belongs to, and reused for both
+    # defences: the source scan below and _WindowMonitor's fatal-modal detection.
+    # execute_script is the only place that knows `directory`, hence the plumbing.
+    unattended = _is_unattended_mode(directory)
+
     if filename.endswith('.groovy'):
         preflight_error = (_check_cellpose_model_name(code_content)
                            or _check_bioformats_dialog_open(code_content)
                            or _check_bigstitcher_direct_loader_z(code_content)
                            or _check_inprocess_heavy(code_content)
                            or (_check_unattended_dialog_usage(code_content)
-                               if _is_unattended_mode() else None))
+                               if unattended else None))
         if preflight_error:
             return preflight_error
 
@@ -2105,7 +2272,8 @@ def execute_script(directory: str, filename: str) -> str:
         output = run_python_code(code_content, directory, purpose=purpose)
     elif filename.endswith('.groovy'):
         # Calls your existing run_script_safe function
-        output = run_script_safe(language="groovy", code=code_content, purpose=purpose)
+        output = run_script_safe(language="groovy", code=code_content, purpose=purpose,
+                                 unattended=unattended)
     else:
         return f"Error: File extension of {filename} is not supported for execution."
 
