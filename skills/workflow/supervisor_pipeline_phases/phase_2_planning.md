@@ -21,6 +21,8 @@ So the order within this phase is:
   4. Record the result (`recommended_plugin`, `relevant_skill`, per-step backends).
      PROJECT STATE also renders a "TRY IN THIS ORDER" default for this modality where one
      exists — treat it as the starting point and depart from it only with a recorded reason.
+  5. Present the pipeline options to the user (script mode: THREE approaches, rules below)
+     and END YOUR TURN. The choice is the user's: Phase 3 starts only after they picked one.
 
 BEFORE designing any pipeline (BOTH modes): call
 `recall_concepts("<scientific goal + the processing steps you are considering>")` to pull
@@ -36,7 +38,13 @@ call `recall_concepts` alongside it.
    Pre-processing → Segmentation → Measurement → Statistics → Plotting
    For each step, a separate script is generated and executed. NEVER combine steps into one script.
    ALWAYS apply preprocessing adjusted to the task.
-   For Image Processing generate 3 different approaches for the pipeline. Then ask the user to choose one of them. NEVER generate just one pipeline.
+
+   **THREE OPTIONS, THEN STOP.** For Image Processing generate 3 different approaches for the
+   pipeline (A / B / C — per approach: the steps, the tool and backend of each step, and one
+   line on when it is the better choice). Then ask the user to choose one of them and end your
+   turn. NEVER generate just one pipeline and never choose for the user — not when one approach
+   looks clearly best, and not when the request already names a method (that method is then
+   option A, next to two alternatives).
 
    PLUGIN RECOMMENDATION DISCIPLINE: If plugin_manager returned a recommendation in Phase 1,
    AT LEAST ONE of the three proposed pipelines MUST use that plugin as the core step

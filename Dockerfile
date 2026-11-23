@@ -332,7 +332,9 @@ RUN for d in /opt/conda/envs/napari-mcp/lib/python3.11/site-packages/[Pp]illow-*
     done; \
     # micro_sam's conda install lays a pure-Python psygnal over pip's compiled wheel (napari) — mixed versions fail to import
     rm -rf /opt/conda/envs/napari-mcp/lib/python3.11/site-packages/psygnal /opt/conda/envs/napari-mcp/lib/python3.11/site-packages/psygnal-*.dist-info \
-    && /opt/conda/envs/napari-mcp/bin/pip install --no-cache-dir --no-deps psygnal && \
+    && /opt/conda/envs/napari-mcp/bin/pip install --no-cache-dir --no-deps psygnal \
+    # same overlap for numpy: conda installs numpy 1.26 under numcodecs/zarr built for numpy 2 (GPU builds get numpy 2 back from the torch reinstall)
+    && /opt/conda/envs/napari-mcp/bin/pip install --no-cache-dir --no-deps --force-reinstall "numpy>=2" && \
     QT_QPA_PLATFORM=offscreen /opt/conda/envs/napari-mcp/bin/python -c \
         "import micro_sam.sam_annotator; from micro_sam.sam_annotator.training_ui import TrainingWidget; print('micro_sam.sam_annotator import OK')"
 
@@ -566,11 +568,17 @@ RUN mkdir -p /home/imagentj/.cellpose/models \
 #     image). Without it micro_sam silently falls back to "amg", which runs the
 #     mask decoder over a dense prompt grid — orders of magnitude slower.
 ENV MICROSAM_CACHEDIR=/home/imagentj/.cache/micro_sam
+# Checkpoints shipped in the build context (bundled_models/micro_sam/README.md) go into
+# the cache first: the pre-fetch below verifies them by hash and downloads only what is
+# missing, so the build does not depend on the model server (EBI S3, down since 2026-11-20).
+COPY bundled_models/micro_sam/models/ /home/imagentj/.cache/micro_sam/models/
 RUN echo "[micro_sam] Pre-fetching SAM checkpoints into $MICROSAM_CACHEDIR ..." \
     && /opt/conda/envs/napari-mcp/bin/python -c \
         "from micro_sam.automatic_segmentation import get_predictor_and_segmenter as g; \
          [g(model_type=m, device='cpu', segmentation_mode='ais') \
           for m in ('vit_t_lm', 'vit_t_em_organelles')]" \
+       || echo "[micro_sam] WARNING: pre-fetch failed (model server unreachable?) — image is built WITHOUT the missing checkpoints; put them in bundled_models/micro_sam/models/ and rebuild" ; \
+    rm -f $MICROSAM_CACHEDIR/models/.gitkeep \
     && echo "[micro_sam] Baked in: $(ls $MICROSAM_CACHEDIR/models | tr '\n' ' ')" \
     && du -sh $MICROSAM_CACHEDIR \
     && chown -R imagentj:imagentj /home/imagentj/.cache

@@ -27,6 +27,26 @@ few strokes, using multi-scale filters (intensity, Gaussian, difference of Gauss
 Laplacian, Hessian; sigma 1–8 px). It does not know objects — turn the marker class into objects
 with `GROOVY_WORKFLOW_MARKER_OBJECTS.groovy` (size/shape filter, measurements).
 
+## Large images: work on the whole image — do not crop, tile or build montages
+
+Labkit is made for big data. Its window shows the image through BigDataViewer (loaded lazily,
+zoom and pan stay fluid), and the commands used by the workflows compute block-wise, so memory
+does not grow with image size.
+
+- **Labeling:** open the FULL image in Labkit and let the user mark examples there, moving to
+  bright, dim and background regions. Do not cut training crops or assemble a montage first —
+  it costs scripts and time, and the classifier then never sees the rest of the image.
+- **Checking:** apply the classifier to the whole image and look at that result at a few
+  locations (zoom in, or overlay the result on the image). A separate crop / hold-out /
+  tile-vs-whole comparison step is not needed before the full run: the full run IS the check,
+  and it is cheap to repeat after adding labels.
+- **Applying:** one command call per image, no tiling code. Measured 2026-11-20: two
+  6510×7423 px (48 MP) 16-bit 2D images classified whole on CPU in 55 s together.
+
+Size limits that do exist: the image must fit in the Java heap once opened, and the two in
+"Verified pitfalls" — GPU memory (≈ 60 bytes/voxel, CPU fallback in the workflows) and calling
+`Segmenter.segment()` directly instead of the commands.
+
 ## The workflow (verified end to end on a 1000×1000×84 confocal tissue stack, 2026-11-16)
 
 **Run the three `GROOVY_WORKFLOW_*.groovy` files as they are** — copy them into the project's
@@ -53,7 +73,8 @@ scales, and filtering the image first only changes what the classifier was train
    all slices of an 84-slice stack took 234 s (features are computed wherever labels are).
 4. **Apply** to the image or a whole folder: `GROOVY_WORKFLOW_BATCH_SEGMENTATION.groovy` →
    `<stem>_labkit_seg.tif` (class index per pixel) and/or `<stem>_labkit_prob.tif` (one channel
-   per class). Check the result on 2–3 slices / a projection before batching.
+   per class). Check the result on 2–3 slices / a projection — at a few places of the whole-image
+   result, not on crops — before batching a folder.
 5. **Objects**: `GROOVY_WORKFLOW_MARKER_OBJECTS.groovy` — connected components of the marker class,
    size filter in µm³ (µm² in 2D) that drops fragments and debris, optional sphericity, CSV with
    size, equivalent diameter, mean intensity, centroid. Pick the size cut-off from the unfiltered
