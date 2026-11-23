@@ -305,7 +305,8 @@ RUN /opt/conda/envs/napari-mcp/bin/python /tmp/patch_qt_helpers.py && rm /tmp/pa
 # build-time check asserts it is a CUDA *build*, not that a GPU is present (the build
 # host may have none). Validated: torch 2.11.0+cu126 + torchvision 0.26.0+cu126 import
 # cleanly and micro_sam still imports afterwards.
-RUN CONDA_SOLVER=libmamba /opt/conda/bin/conda install -n napari-mcp -c conda-forge micro_sam -y \
+# Pinned: micro_sam 2.0 removed annotator_2d/_3d, image_series_annotator and training_ui, which the skills use.
+RUN CONDA_SOLVER=libmamba /opt/conda/bin/conda install -n napari-mcp -c conda-forge "micro_sam=1.8.2" -y \
     && /opt/conda/envs/napari-mcp/bin/pip install --no-cache-dir \
         "git+https://github.com/ChaoningZhang/MobileSAM.git" \
     && if [ "$USE_GPU" = "true" ] && [ "$TARGETARCH" != "arm64" ]; then \
@@ -545,11 +546,15 @@ RUN mkdir -p /app/qdrant_data /home/imagentj/.cellpose /home/imagentj/.cache \
 # so models are available on first container start without any host files.
 RUN mkdir -p /home/imagentj/.cellpose/models \
     && echo "[cellpose] Downloading model bundle..." \
-    && curl -fsSL "https://owncloud.ut.ee/owncloud/s/HyXebMNEPd7niMa/download" -o /tmp/models.zip \
+    # 2.6 GB from owncloud: the server drops long transfers (curl 56), so resume (-C -) until complete
+    && for i in 1 2 3 4 5 6 7 8 9 10; do \
+           curl -fsSL -C - "https://owncloud.ut.ee/owncloud/s/HyXebMNEPd7niMa/download" -o /tmp/models.zip && break; \
+           echo "[cellpose] download interrupted (try $i), resuming..."; sleep 5; \
+       done \
     && echo "[cellpose] Extracting models..." \
-    && unzip -q /tmp/models.zip -d /tmp/models_extracted \
-    && cp -a /tmp/models_extracted/models/. /home/imagentj/.cellpose/models/ \
-    && rm -rf /tmp/models.zip /tmp/models_extracted \
+    # 2.6 GB zip: extract in place (no temp copy) so peak disk is zip + models, not 3x
+    && unzip -q /tmp/models.zip 'models/*' -d /home/imagentj/.cellpose \
+    && rm -f /tmp/models.zip \
     && echo "[cellpose] Baked in $(ls /home/imagentj/.cellpose/models | wc -l) model files" \
     && chown -R imagentj:imagentj /home/imagentj/.cellpose
 
