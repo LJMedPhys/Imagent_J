@@ -38,19 +38,37 @@ models:
 # entry beats the env var, on the same rule as `reasoning_effort` further down.
 #
 # `api` is shared by all local roles, including the VLM. Change it to
-# chat_completions only for a conventional vLLM/SGLang Chat Completions
-# endpoint.
+# chat_completions for a conventional Chat Completions endpoint (vLLM/SGLang
+# without Responses, or Ollama).
+#
+# `reasoning_effort` replaces the top-level block below while the local
+# endpoint is active. Values are server-dependent: Kimi K3 and GLM-5.3-Flash on
+# vLLM accept low/high/max; Ollama accepts only low/medium/high/none, and
+# models without a thinking mode need null (send nothing).
 local_llm:
   api: responses
   model: "GLM-5.3-Flash"
   # models:
   #   vlm: "some-other-served-id"
+  reasoning_effort:
+    supervisor: max
+    worker:     max
+    analyst:    high
+    nano:       high
+    curator:    high
+    vlm:        high
 
 # ── Thinking budget per role ────────────────────────────────────────────────
-# Mirrors `models:` above. Values are endpoint-dependent; both Kimi K3 and
-# GLM-5.3-Flash accept low/high/max as top-level reasoning_effort values. An explicit null sends no
-# reasoning_effort. Per-role values take precedence over the blanket
-# IMAGENTJ_REASONING_EFFORT environment override.
+# Mirrors `models:` above; cloud providers only (a local endpoint reads
+# `local_llm.reasoning_effort` instead).
+#
+#   <effort>  "minimal" | "low" | "medium" | "high"  (endpoint-dependent)
+#   null      send no reasoning_effort at all for that role
+#
+# Precedence: this block  >  IMAGENTJ_REASONING_EFFORT (blanket env override)
+#             >  the shipped default. An explicit per-role value wins over the
+#             env var on purpose — otherwise declaring effort per role could be
+#             silently overridden by a stray environment setting.
 reasoning_effort:
   supervisor: high     # orchestrator / planner
   worker:     medium   # imagej_coder + imagej_debugger

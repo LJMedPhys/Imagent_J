@@ -1,6 +1,6 @@
-"""LangChain adapter for Kimi's OpenAI-compatible Chat Completions API.
+"""ChatOpenAI for a local OpenAI-compatible *Chat Completions* endpoint.
 
-Kimi K3 requires the complete assistant message, including
+Reasoning models such as Kimi K3 require the complete assistant message, including
 ``reasoning_content``, to be sent back on later tool-call turns.  ChatOpenAI
 intentionally drops provider-specific response fields, so a plain ChatOpenAI
 client can complete the first tool call and then fail on the second request.
@@ -16,9 +16,9 @@ from langchain_core.messages import AIMessage
 from langchain_openai import ChatOpenAI
 
 
-_KIMI_ASSISTANT_FIELDS = (
-    # Kimi's reference API calls this ``reasoning_content``; the local
-    # OpenAI-compatible server in this deployment emits ``reasoning`` instead.
+_REASONING_FIELDS = (
+    # Kimi's reference API calls this ``reasoning_content``; vLLM and Ollama
+    # emit ``reasoning`` instead.
     "reasoning_content",
     "reasoning",
     "reasoning_details",
@@ -47,21 +47,21 @@ def _provider_field(message: Any, field: str) -> Any:
     return getattr(message, field, None)
 
 
-class KimiChatOpenAI(ChatOpenAI):
-    """ChatOpenAI with lossless Kimi reasoning-history round trips."""
+class LocalCompletionsChatOpenAI(ChatOpenAI):
+    """ChatOpenAI with lossless reasoning-history round trips."""
 
     def _get_request_payload(self, input_, *, stop=None, **kwargs):
         source_messages = self._convert_input(input_).to_messages()
         payload = super()._get_request_payload(input_, stop=stop, **kwargs)
 
-        # Kimi is served through Chat Completions.  Preserve its assistant-only
+        # Preserve the assistant-only reasoning
         # fields after ChatOpenAI has converted the LangChain messages.
         wire_messages = payload.get("messages")
         if isinstance(wire_messages, list):
             for source, wire in zip(source_messages, wire_messages):
                 if not isinstance(source, AIMessage) or not isinstance(wire, dict):
                     continue
-                for field in _KIMI_ASSISTANT_FIELDS:
+                for field in _REASONING_FIELDS:
                     if field in source.additional_kwargs:
                         wire[field] = source.additional_kwargs[field]
         return payload
@@ -89,7 +89,7 @@ class KimiChatOpenAI(ChatOpenAI):
             if raw_message is None:
                 raw_message = typed_message
 
-            for field in _KIMI_ASSISTANT_FIELDS:
+            for field in _REASONING_FIELDS:
                 value = _provider_field(raw_message, field)
                 if value is None and typed_message is not raw_message:
                     value = _provider_field(typed_message, field)
@@ -109,7 +109,7 @@ class KimiChatOpenAI(ChatOpenAI):
         choices = (chunk.get("choices") or []) if isinstance(chunk, dict) else []
         if choices:
             delta = choices[0].get("delta") or {}
-            for field in _KIMI_ASSISTANT_FIELDS:
+            for field in _REASONING_FIELDS:
                 if delta.get(field) is not None:
                     generation.message.additional_kwargs[field] = delta[field]
         return generation

@@ -235,7 +235,7 @@ def _call_vision_api(image_b64: str, question: str) -> str:
     msg = HumanMessage(content=[
         {"type": "image_url", "image_url": {
             "url": f"data:image/png;base64,{image_b64}",
-            # The local Kimi Responses schema requires this field explicitly.
+            # The local (vLLM) Responses schema requires this field explicitly.
             "detail": "high",
         }},
         {"type": "text", "text": question},

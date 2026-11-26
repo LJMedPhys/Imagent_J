@@ -18,7 +18,7 @@ def _try_init_vector_stores():
     try:
         from ..qdrant_client_singleton import get_qdrant_client
         client = get_qdrant_client(path=QDRANT_DATA_PATH)
-        # Local Kimi runs have no text-embedding-3-large endpoint.  The
+        # Local-LLM runs have no text-embedding-3-large endpoint.  The
         # shipped collection still has a complete sparse BM25 index, and the
         # search path knows how to use it without constructing a hybrid store.
         import os

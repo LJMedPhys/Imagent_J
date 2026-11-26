@@ -36,7 +36,7 @@ def get_expanded_queries(query: str) -> list[str]:
     if _api_key is None:
         return [query]
     if local_llm_base_url:
-        # Reuse the Kimi-aware client so reasoning_content survives any internal
+        # Reuse the reasoning-aware client so reasoning_content survives any internal
         # tool/message round trips and the role's configured effort is respected.
         from ..agents import llm_nano
         llm = llm_nano

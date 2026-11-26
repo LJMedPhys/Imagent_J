@@ -523,7 +523,7 @@ if [ -f "$API_KEYS_FILE" ]; then
 fi
 
 # The benchmark adapter launches a bridge-network container even when a local
-# LLM deployment normally uses docker-compose.local-kimi.yml (host networking).
+# LLM deployment normally uses docker-compose.local-llm.yml (host networking).
 # In that bridge, 127.0.0.1/localhost names the container rather than the Docker
 # host and the first model request fails.  docker-compose.yml already installs
 # the portable host-gateway alias, so translate only loopback local-LLM URLs in

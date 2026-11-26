@@ -32,7 +32,7 @@ OPEN_ROUTER_API_KEY=your-openrouter-api-key-here
 |----------|----------|-------|
 | **OpenAI** | `OPENAI_API_KEY` | Uses OpenAI's GPT models directly. |
 | **OpenRouter** | `OPEN_ROUTER_API_KEY` | One key for models from many companies (OpenAI, Google, Anthropic and others). If both keys are present, OpenRouter is used. |
-| **Local endpoint** | `LOCAL_LLM_BASE_URL` | OpenAI-compatible vLLM/SGLang URL including `/v1`; takes priority over cloud keys and needs no real API key. |
+| **Local endpoint** | `LOCAL_LLM_BASE_URL` | OpenAI-compatible vLLM/SGLang/Ollama URL including `/v1`; takes priority over cloud keys and needs no real API key. |
 
 For a local server running on the Docker host:
 
@@ -45,14 +45,18 @@ LOCAL_LLM_API=responses
 
 `LOCAL_LLM_MODEL` is the global model switch — it repoints every local role
 at once and overrides `local_llm.model` in `imagentj_config.yaml`, which is the
-fallback when the env var is unset. The default
-reasoning budget is `max` for the supervisor and script-producing worker roles
-(ImageJ coder/debugger and Python data analyst), and `high` for every other role.
+fallback when the env var is unset. The reasoning budget for local roles is
+set under `local_llm.reasoning_effort` in the same file.
 When the server listens only on `127.0.0.1`, start Agentic-J with:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.local-kimi.yml up
+docker compose -f docker-compose.yml -f docker-compose.local-llm.yml up
 ```
+
+For **Ollama**, use `LOCAL_LLM_BASE_URL=http://host.docker.internal:11434/v1`,
+`LOCAL_LLM_API=chat_completions` and the model tag from `ollama list`, and start
+Ollama with `OLLAMA_CONTEXT_LENGTH=32768` or more; the README's *Ollama* section
+lists the details.
 
 If neither key is in `.env`, a **setup wizard** opens in the browser before Fiji starts, and you can paste the key there.
 

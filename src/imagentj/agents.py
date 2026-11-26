@@ -76,7 +76,7 @@ from .tools.learned_memory import (
     library_add_pitfall, library_add_recipe, library_remove, library_set_core,
 )
 from imagentj.tracker import UsageMetrics, MetricsSignalBridge, UsageTrackerCallback
-from imagentj.kimi_chat import KimiChatOpenAI
+from imagentj.local_completions_chat import LocalCompletionsChatOpenAI
 from imagentj.local_responses_chat import LocalResponsesChatOpenAI
 from imagentj.artifact_validation import validate_script_artifact
 from imagentj.provider_errors import is_transient_provider_error
@@ -460,12 +460,12 @@ def _seed_kwargs() -> dict:
     return {"seed": _LLM_SEED} if _LLM_SEED is not None else {}
 
 # Local endpoints get a thin ChatOpenAI subclass per wire format:
-#   chat_completions -> KimiChatOpenAI keeps reasoning fields round-tripping;
+#   chat_completions -> LocalCompletionsChatOpenAI keeps reasoning fields round-tripping;
 #   responses        -> LocalResponsesChatOpenAI stamps `detail` onto image
 #                       inputs, which vLLM requires and OpenAI merely defaults.
 # Cloud providers use ChatOpenAI unchanged.
 if use_local and local_llm_api == "chat_completions":
-    _chat_model_class = KimiChatOpenAI
+    _chat_model_class = LocalCompletionsChatOpenAI
 elif use_local:
     _chat_model_class = LocalResponsesChatOpenAI
 else:

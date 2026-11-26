@@ -292,7 +292,7 @@ def hybrid_search_with_rrf(
     )
 
     if dense_emb is None:
-        # A local Kimi endpoint provides chat/vision generation, not the
+        # A local LLM endpoint provides chat/vision generation, not the
         # text-embedding-3-large vectors used to build this collection.  The
         # precomputed BM25 index is fully local and remains scientifically
         # preferable to mixing incompatible dense embedding spaces.

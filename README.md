@@ -42,8 +42,8 @@ If no API key is set in `.env`, a setup wizard appears in the browser before Fij
 
 ### Local LLM endpoint
 
-A local vLLM/SGLang OpenAI-compatible server can replace all text and vision
-roles. For one listening on host loopback port 18000, put this in `.env` (the
+A local OpenAI-compatible server (vLLM, SGLang, or [Ollama](#ollama)) can
+replace all text and vision roles. For one listening on host loopback port 18000, put this in `.env` (the
 URL must include `/v1`):
 
 ```env
@@ -61,9 +61,10 @@ switch and repoints every local agent role at once. It overrides
 var is unset; `local_llm.models.<role>` pins one role and beats both. Only when
 all three are absent does the built-in `config.DEFAULT_LOCAL_LLM_MODEL` apply.
 The served id must match what the endpoint reports at `GET /v1/models`. The shipped
-configuration uses `max` reasoning for the supervisor and script-producing
-worker roles (ImageJ coder/debugger and Python data analyst); the remaining
-specialist/VLM roles use `high`. In local mode, documentation retrieval uses
+`local_llm.reasoning_effort` block uses `max` reasoning for the supervisor and
+script-producing worker roles (ImageJ coder/debugger and Python data analyst)
+and `high` for the remaining specialist/VLM roles; it replaces the cloud
+`reasoning_effort` block while the local endpoint is active. In local mode, documentation retrieval uses
 the prebuilt BM25 sparse index and makes no cloud embedding calls.
 
 `LOCAL_LLM_API` selects one protocol for every local role, including the VLM.
@@ -76,7 +77,7 @@ Because a bridge-network container cannot reach a server bound only to the
 host's `127.0.0.1`, start this setup with the supplied host-network override:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.local-kimi.yml up
+docker compose -f docker-compose.yml -f docker-compose.local-llm.yml up
 ```
 
 The UI remains at <http://localhost:6081/vnc.html>. If the server instead
@@ -91,6 +92,43 @@ server bound to `0.0.0.0` or a deliberately configured host-side relay). An SSH
 forward listening only on host `127.0.0.1` is not gateway-reachable; keep it
 private and relay only onto the Docker bridge interface instead of exposing an
 unauthenticated model port to the wider network.
+
+#### Ollama
+
+[Ollama](https://ollama.com) serves the same OpenAI-compatible API, so it uses
+the settings above. With Ollama running on the Docker host:
+
+```env
+LOCAL_LLM_BASE_URL=http://host.docker.internal:11434/v1
+LOCAL_LLM_API_KEY=ollama
+LOCAL_LLM_MODEL=qwen3:14b
+LOCAL_LLM_API=chat_completions
+```
+
+Then `docker compose up` as usual. `LOCAL_LLM_MODEL` is the tag exactly as
+`ollama list` prints it. Three things must be right, or it fails in confusing ways:
+
+- **Context length.** The agent prompt (system prompt plus tools) is about
+  23K tokens, and Ollama silently cuts whatever does not fit. Start Ollama with
+  `OLLAMA_CONTEXT_LENGTH=32768` (more if you have the memory) and
+  `OLLAMA_NUM_PARALLEL=1`. The symptom of getting this wrong is
+  `truncating input prompt` in the Ollama log and an agent that loops without
+  making progress.
+- **Tools and thinking.** The model must support tool calling. If it has no
+  thinking mode (e.g. `llama3.2`), Ollama rejects every request with
+  `does not support thinking`: set the roles under
+  `local_llm.reasoning_effort` in `imagentj_config.yaml` to `null`. Thinking
+  models (e.g. `qwen3`) work with the shipped values.
+- **Reachability on Linux.** Ollama listens on `127.0.0.1` only, which a
+  bridge-network container cannot reach. Either start it with
+  `OLLAMA_HOST=0.0.0.0`, or keep it private, set
+  `LOCAL_LLM_BASE_URL=http://127.0.0.1:11434/v1` and use the host-network
+  override above (it takes the URL, key, model and API from `.env`). Docker
+  Desktop on Windows/macOS needs neither.
+
+The Vision judge sends images, so it needs a vision model; pin one with
+`local_llm.models.vlm` or leave the judge switched off. Expect a small local
+model to be much weaker than the hosted defaults.
 
 Place images you want to analyse in [`./data/`](data/) — the agent sees them at `/app/data` inside the container.
 
@@ -142,7 +180,7 @@ docker inspect <name> --format '{{index .Config.Labels "com.docker.compose.proje
 
 ### Host networking
 
-`docker-compose.local-kimi.yml` switches to `network_mode: host`, which sidesteps
+`docker-compose.local-llm.yml` switches to `network_mode: host`, which sidesteps
 the subnet and port knobs entirely — but it also takes X display `:1` and VNC
 port 5900 globally. A second host-network session cannot start Xvfb, fluxbox or
 x11vnc and dies on startup. Use it only when nobody else is running one; the

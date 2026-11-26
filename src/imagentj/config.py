@@ -133,8 +133,9 @@ def reasoning_effort_for(role: str, default: Optional[str] = None) -> Optional[s
 
     Mirrors :func:`model_for`. Precedence, highest first:
 
-    1. ``reasoning_effort.<role>`` in imagentj_config.yaml — including an
-       explicit ``null``, which means "send nothing" and is preserved as None;
+    1. ``reasoning_effort.<role>`` in imagentj_config.yaml (on a local endpoint:
+       ``local_llm.reasoning_effort.<role>``) — including an explicit ``null``,
+       which means "send nothing" and is preserved as None;
     2. ``IMAGENTJ_REASONING_EFFORT`` — the pre-existing blanket env override,
        kept as a fallback so current deployments behave identically;
     3. ``default`` — this role's shipped value.
@@ -143,7 +144,13 @@ def reasoning_effort_for(role: str, default: Optional[str] = None) -> Optional[s
     the point of the block is to declare effort per role, and a blanket env var
     silently overriding one would defeat that.
     """
-    block = _CFG.get("reasoning_effort")
+    # On a local endpoint `local_llm.reasoning_effort` replaces the cloud block:
+    # accepted values differ per server (vLLM takes "max", Ollama rejects it).
+    if os.environ.get("LOCAL_LLM_BASE_URL", "").strip():
+        local = _CFG.get("local_llm")
+        block = local.get("reasoning_effort") if isinstance(local, dict) else None
+    else:
+        block = _CFG.get("reasoning_effort")
     if isinstance(block, dict) and role in block:
         val = block[role]
         if val is None:
