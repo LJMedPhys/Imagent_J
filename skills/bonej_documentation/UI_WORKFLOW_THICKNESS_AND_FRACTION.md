@@ -6,7 +6,8 @@ Use this workflow when you already have an 8-bit binary 3D stack and want BoneJ 
 
 - BoneJ is installed and Fiji has been restarted
 - The input image is open
-- The input image is 3D, 8-bit, and binary
+- The input image is 3D, 8-bit, and binary (0/255)
+- `Image > Properties` shows the correct voxel size. If the unit is `µm` and BoneJ reports `Cannot parse unit`, change the unit to `micron`.
 
 ## Workflow
 
@@ -31,12 +32,14 @@ Use this workflow when you already have an 8-bit binary 3D stack and want BoneJ 
 Run this only when the foreground is a single connected particle or after purifying the stack.
 
 1. If needed, run `Plugins > BoneJ > Purify` first.
-2. Run `Plugins > BoneJ > Connectivity > Connectivity (Modern)`.
+2. Run `Plugins > BoneJ > Connectivity`. Select the `_purified` image if you purified.
 3. Read the additional BoneJ table columns:
-   - `Euler char. (χ)`
-   - `Corr. Euler (χ + Δχ)`
+   - `Euler ch.`
+   - `Δ(χ)`
    - `Connectivity`
    - `Conn.D`
+
+   A purified image is named `<name>_purified`, so its connectivity values appear in a **separate row** of the BoneJ table.
 
 ## Save Outputs
 
@@ -46,4 +49,4 @@ Run this only when the foreground is a single connected particle or after purify
 ## Notes
 
 - BoneJ appends new measurement columns to its shared results table. Clearing the table at the beginning keeps this workflow's outputs together.
-- `Connectivity (Modern)` is intended for a single foreground structure. Multiple disconnected objects can produce misleading values.
+- `Connectivity` is intended for a single foreground structure. Multiple disconnected objects can produce misleading values.

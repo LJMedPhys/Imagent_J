@@ -2,7 +2,7 @@ import os
 import numpy as np
 from pathlib import Path
 import warnings
-from typing import Dict, Any, Optional, Tuple, Union
+from typing import Dict, Any, List, Optional, Tuple, Union
 import xml.etree.ElementTree as ET
 import matplotlib.pyplot as plt
 import imagej
@@ -728,6 +728,22 @@ def _estimate_first_frame_bytes(file_path: str, suffix: str) -> int:
     return _file_size_bytes(file_path)
 
 
+_STATS_SAMPLE_PX = 4_000_000
+
+
+def _stats_sample(arr) -> np.ndarray:
+    """At most ~_STATS_SAMPLE_PX pixels of `arr` as flat float64, true min/max kept.
+
+    A full float64 copy is up to 8x the frame, and median/percentile copy it again:
+    a frame just under the 1 GB gate peaked at >10 GB and got the container OOM-killed.
+    """
+    flat = np.asarray(arr).ravel()
+    step = -(-flat.size // _STATS_SAMPLE_PX)  # ceil
+    if step <= 1:
+        return flat.astype(np.float64)
+    return np.concatenate([flat[::step], [flat.min(), flat.max()]]).astype(np.float64)
+
+
 def _compute_standalone_stats(file_path: str, suffix: str) -> Dict[str, Any]:
     """
     Compute pixel statistics from the **first frame only**.
@@ -758,7 +774,7 @@ def _compute_standalone_stats(file_path: str, suffix: str) -> Dict[str, Any]:
             data = tif.pages[0].asarray()
             if n_pages > 1:
                 first_frame_note = f"Statistics computed from frame 1 of {n_pages}."
-        flat = data.astype(np.float64).ravel()
+        flat = _stats_sample(data)
         del data
 
     elif suffix == '.lif':
@@ -767,12 +783,12 @@ def _compute_standalone_stats(file_path: str, suffix: str) -> Dict[str, Any]:
         frames = []
         for c in range(img.channels):
             try:
-                frames.append(np.array(img.get_frame(z=0, t=0, c=c), dtype=np.float64))
+                frames.append(_stats_sample(img.get_frame(z=0, t=0, c=c)))
             except Exception:
                 pass
         if not frames:
             return {}
-        flat = np.concatenate([f.ravel() for f in frames])
+        flat = np.concatenate(frames)
         if img.info.get('dims', [0, 0, 0, 0])[3] > 1 or img.info.get('dims', [0, 0, 0, 0])[2] > 1:
             first_frame_note = "Statistics computed from first z/t frame only."
 
@@ -784,7 +800,7 @@ def _compute_standalone_stats(file_path: str, suffix: str) -> Dict[str, Any]:
         if arr.ndim > 2:
             arr = arr[0]
             first_frame_note = "Statistics computed from frame 1 of multi-frame DICOM."
-        flat = arr.astype(np.float64).ravel()
+        flat = _stats_sample(arr)
 
     else:
         # PIL fallback: handles JPEG, PNG, BMP, GIF, and other PIL-readable formats.
@@ -794,10 +810,9 @@ def _compute_standalone_stats(file_path: str, suffix: str) -> Dict[str, Any]:
             with Image.open(file_path) as img:
                 n_frames = getattr(img, 'n_frames', 1)
                 img.seek(0)
-                arr = np.array(img, dtype=np.float64)
+                flat = _stats_sample(img)
                 if n_frames > 1:
                     first_frame_note = f"Statistics computed from frame 1 of {n_frames}."
-            flat = arr.ravel()
         except Exception:
             return {}
 
@@ -816,6 +831,92 @@ def _compute_standalone_stats(file_path: str, suffix: str) -> Dict[str, Any]:
     if first_frame_note:
         result['note'] = first_frame_note
     return result
+
+
+# Spellings ImageJ writes into the `unit=` field of its ImageDescription.
+_IMAGEJ_UNITS = {
+    'micron': 'µm', 'microns': 'µm', 'um': 'µm', 'µm': 'µm', 'μm': 'µm', '\\u00b5m': 'µm',
+    'nm': 'nm', 'nanometer': 'nm', 'mm': 'mm', 'cm': 'cm', 'm': 'm',
+    'inch': 'inch', 'pixel': 'pixel', 'pixels': 'pixel', '': 'pixel',
+}
+
+
+def _apply_imagej_calibration(tif, scales: Dict[str, Any]) -> None:
+    """Fill units, the Z step and the frame interval from an ImageJ TIFF header.
+
+    ImageJ stores the physical unit, the Z step and the frame interval in its
+    ImageDescription (`unit=um`, `spacing=0.5357`, `finterval=2.0`), NOT in the TIFF
+    resolution tags: ResolutionUnit is 1 (NONE) there. Reading only the tags reported
+    a calibrated 84-slice confocal stack (0.3245 x 0.3245 x 0.5357 µm) as X/Y in
+    "pixel" with no Z at all, so the agent asked the user for a z-step that was in
+    the file (GloBIAS workshop task, 2026-11-09).
+    """
+    md = getattr(tif, 'imagej_metadata', None) or {}
+    if not md:
+        return
+    raw_unit = str(md.get('unit', '') or '').strip()
+    unit = _IMAGEJ_UNITS.get(raw_unit.lower(), raw_unit or 'pixel')
+    if unit != 'pixel':
+        for ax in ('X', 'Y'):
+            if ax in scales:
+                scales[ax]['unit'] = unit
+    spacing = md.get('spacing')
+    try:
+        spacing = float(spacing) if spacing is not None else None
+    except (TypeError, ValueError):
+        spacing = None
+    try:
+        n_slices = int(md.get('slices', 1) or 1)
+    except (TypeError, ValueError):
+        n_slices = 1
+    # ImageJ writes `spacing` for single planes too; a Z step only means something for a stack.
+    if n_slices > 1 and spacing and spacing > 0 and spacing == spacing:      # not NaN
+        scales['Z'] = {'scale': spacing, 'unit': unit, 'source': 'ImageJ spacing'}
+    finterval = md.get('finterval')
+    try:
+        finterval = float(finterval) if finterval is not None else None
+    except (TypeError, ValueError):
+        finterval = None
+    try:
+        n_frames = int(md.get('frames', 1) or 1)
+    except (TypeError, ValueError):
+        n_frames = 1
+    if n_frames > 1 and finterval and finterval > 0 and finterval == finterval:
+        scales['T'] = {'scale': finterval, 'unit': str(md.get('tunit') or 'sec'),
+                       'source': 'ImageJ finterval'}
+
+
+# Resolutions that image/graphics software writes when nothing was calibrated. A TIFF
+# saved without spatial calibration usually still carries "72 dpi, unit inch"; read
+# literally that is 352.78 µm/pixel, and an agent once reported a ~2500 px² cell as
+# 313,370,540 µm² from it (example_1.tif, 2026-09-08). No microscope writes these.
+_DEFAULT_DPI = (72.0, 96.0, 150.0, 300.0, 600.0, 1200.0)
+
+
+def _calibration_from_resolution(x_ppu: float, y_ppu: float, res_unit: int,
+                                 scales: Dict[str, Any], source: str) -> Optional[str]:
+    """Fill X/Y from resolution tags (pixels per unit). Returns a note or None.
+
+    res_unit follows the TIFF ResolutionUnit code: 1 = none, 2 = inch, 3 = cm.
+    inch/cm calibrations are converted to µm; a common screen/print default
+    (72, 96, 150, 300, 600, 1200 dpi) is treated as UNCALIBRATED.
+    """
+    if res_unit not in (2, 3) or x_ppu <= 0 or y_ppu <= 0:
+        scales['X'] = {'scale': 1.0 / x_ppu if x_ppu > 0 else 1.0, 'unit': 'pixel'}
+        scales['Y'] = {'scale': 1.0 / y_ppu if y_ppu > 0 else 1.0, 'unit': 'pixel'}
+        return None
+    per_inch = 1.0 if res_unit == 2 else 2.54
+    x_dpi, y_dpi = x_ppu * per_inch, y_ppu * per_inch
+    if any(abs(x_dpi - d) < 0.5 for d in _DEFAULT_DPI) and abs(x_dpi - y_dpi) < 0.5:
+        scales['X'] = {'scale': 1.0, 'unit': 'pixel'}
+        scales['Y'] = {'scale': 1.0, 'unit': 'pixel'}
+        return (f"{source} say {x_dpi:.0f} dpi — the default written by image/graphics software, "
+                f"not a microscope calibration. Treated as UNCALIBRATED: report sizes in pixels, or "
+                f"ask the user for the pixel size before reporting µm.")
+    um_per_unit = 25400.0 if res_unit == 2 else 10000.0
+    scales['X'] = {'scale': um_per_unit / x_ppu, 'unit': 'µm', 'source': source}
+    scales['Y'] = {'scale': um_per_unit / y_ppu, 'unit': 'µm', 'source': source}
+    return None
 
 
 def extract_file_metadata(file_path: str) -> Dict[str, Any]:
@@ -853,6 +954,7 @@ def extract_file_metadata(file_path: str) -> Dict[str, Any]:
         'dimensions':  {},
     }
     scales = result['calibration']
+    notes: List[str] = []
     dims   = result['dimensions']
 
     # ---- Metadata / calibration (header reads only — no pixel data) ----
@@ -874,11 +976,17 @@ def extract_file_metadata(file_path: str) -> Dict[str, Any]:
                     x_ppu = x_num / x_den if x_den else 0
                     y_ppu = y_num / y_den if y_den else 0
                     rv    = res_unit_tag.value if res_unit_tag else 1
-                    x_scale   = 1.0 / x_ppu if x_ppu > 0 else 1.0
-                    y_scale   = 1.0 / y_ppu if y_ppu > 0 else 1.0
-                    tiff_unit = {2: 'inch', 3: 'cm'}.get(rv, 'pixel')
-                    scales['X'] = {'scale': x_scale, 'unit': tiff_unit}
-                    scales['Y'] = {'scale': y_scale, 'unit': tiff_unit}
+                    ij_unit = str((getattr(tif, 'imagej_metadata', None) or {}).get('unit', '') or '')
+                    if _IMAGEJ_UNITS.get(ij_unit.strip().lower(), ij_unit) not in ('pixel', ''):
+                        # ImageJ convention: the tags are pixels per the header's unit,
+                        # which _apply_imagej_calibration fills in below.
+                        scales['X'] = {'scale': 1.0 / x_ppu if x_ppu > 0 else 1.0, 'unit': 'pixel'}
+                        scales['Y'] = {'scale': 1.0 / y_ppu if y_ppu > 0 else 1.0, 'unit': 'pixel'}
+                    else:
+                        note = _calibration_from_resolution(x_ppu, y_ppu, rv, scales, 'TIFF resolution tags')
+                        if note:
+                            notes.append(note)
+                _apply_imagej_calibration(tif, scales)
                 shape = tif.pages[0].shape
                 dims['height'] = shape[0]
                 dims['width']  = shape[1] if len(shape) > 1 else 1
@@ -1118,13 +1226,31 @@ def extract_file_metadata(file_path: str) -> Dict[str, Any]:
                     # DPI embedded in JPEG/PNG JFIF/Exif headers → physical pixel size
                     dpi = img.info.get('dpi')
                     if dpi and dpi[0] > 0 and not scales:
-                        scales['X'] = {'scale': 25.4 / dpi[0], 'unit': 'mm'}
-                        scales['Y'] = {'scale': 25.4 / dpi[1], 'unit': 'mm'}
+                        note = _calibration_from_resolution(float(dpi[0]), float(dpi[1]), 2, scales,
+                                                            f"{suffix.lstrip('.').upper()} dpi header")
+                        if note:
+                            notes.append(note)
             except Exception:
                 pass
 
     except Exception as e:
         warnings.warn(f"Could not extract metadata from {file_path}: {e}")
+
+    # A z-stack without a stored Z step must say so explicitly; a silently missing
+    # 'Z' key reads as "nothing to report" and invites assuming isotropic voxels.
+    if dims.get('n_slices', 1) > 1:
+        if 'Z' in scales:
+            result['voxel_size'] = (
+                f"{scales.get('X', {}).get('scale', 1.0):.4g} x {scales.get('Y', {}).get('scale', 1.0):.4g} x "
+                f"{scales['Z']['scale']:.4g} {scales['Z']['unit']} (X x Y x Z)")
+        else:
+            notes.append(
+                f"{dims['n_slices']} planes stored as Z slices but NO Z step in the file. If they are "
+                "z-planes, do not assume isotropic voxels — ask the user for the z-step (or report Z in "
+                "slices). Movies saved without frame metadata also look like this: if the planes are "
+                "time points, treat them as frames.")
+    if notes:
+        result['calibration_notes'] = notes
 
     # ---- Pixel statistics (format-aware size gate inside) ----
     stats = _compute_standalone_stats(file_path, suffix)

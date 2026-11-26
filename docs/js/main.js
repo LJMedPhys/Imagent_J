@@ -29,13 +29,13 @@ document.querySelectorAll('.code [data-copy]').forEach((btn) => {
       btn.classList.add('copied');
       setTimeout(() => { btn.textContent = old; btn.classList.remove('copied'); }, 1500);
     } catch {
-      btn.textContent = 'press ⌘C';
+      btn.textContent = 'select & copy';
     }
   });
 });
 
 // 3) Active nav link as you scroll
-const sections = ['features', 'architecture', 'quickstart', 'plugins', 'docs']
+const sections = ['overview', 'install', 'demos', 'reproducibility', 'docs', 'paper']
   .map((id) => document.getElementById(id))
   .filter(Boolean);
 const navLinks = new Map(
@@ -46,9 +46,53 @@ const navLinks = new Map(
 const navIO = new IntersectionObserver((entries) => {
   entries.forEach((e) => {
     if (!e.isIntersecting) return;
-    navLinks.forEach((a) => a.style.color = '');
+    navLinks.forEach((a) => a.classList.remove('active'));
     const link = navLinks.get(e.target.id);
-    if (link) link.style.color = 'var(--text)';
+    if (link) link.classList.add('active');
   });
 }, { rootMargin: '-45% 0px -45% 0px' });
 sections.forEach((s) => navIO.observe(s));
+
+// 4) YouTube slots: set data-youtube="<video id>" on a .video element to embed it
+document.querySelectorAll('.video[data-youtube]').forEach((slot) => {
+  const id = slot.dataset.youtube.trim();
+  if (!id) return;
+  const f = document.createElement('iframe');
+  f.src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?rel=0`;
+  f.title = slot.dataset.title || 'Agentic-J video';
+  f.loading = 'lazy';
+  f.allow = 'accelerometer; encrypted-media; gyroscope; picture-in-picture; fullscreen';
+  f.allowFullscreen = true;
+  f.referrerPolicy = 'strict-origin-when-cross-origin';
+  slot.classList.remove('empty');
+  slot.replaceChildren(f);
+  // Fallback link in case the embed is blocked (extensions, embedding disabled, ...)
+  const a = document.createElement('a');
+  a.className = 'yt-link';
+  a.href = `https://www.youtube.com/watch?v=${encodeURIComponent(id)}`;
+  a.target = '_blank';
+  a.rel = 'noopener';
+  a.textContent = 'Watch on YouTube ↗';
+  slot.closest('.window').after(a);
+});
+
+// 5) Demo tabs
+const tabs = Array.from(document.querySelectorAll('.tabs [role="tab"]'));
+function selectTab(tab) {
+  tabs.forEach((t) => {
+    const on = t === tab;
+    t.setAttribute('aria-selected', String(on));
+    t.tabIndex = on ? 0 : -1;
+    document.getElementById(t.getAttribute('aria-controls')).hidden = !on;
+  });
+}
+tabs.forEach((tab, i) => {
+  tab.addEventListener('click', () => selectTab(tab));
+  tab.addEventListener('keydown', (e) => {
+    const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+    if (!step) return;
+    const next = tabs[(i + step + tabs.length) % tabs.length];
+    selectTab(next);
+    next.focus();
+  });
+});

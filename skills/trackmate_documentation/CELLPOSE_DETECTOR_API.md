@@ -193,6 +193,8 @@ These use style-transfer from the original Cellpose2 training sets. Generally su
 ### Model selection guide
 
 ```
+Cells or nuclei, FIRST TRY               →  cpsam (CellposeSAMDetectorFactory — no diameter;
+                                            template GROOVY_WORKFLOW_CELLPOSE_SAM.groovy)
 Mammalian cells, fluorescence cytoplasm  →  cyto3
 Nuclei / DAPI stain                      →  nucleitorch_0
 Phase-contrast cell lines (e.g. HeLa)   →  livecell_cp3
@@ -300,8 +302,10 @@ weights still work via `PRETRAINED_OR_CUSTOM = 'CUSTOM_MODEL'` +
 
 TrackMate-Cellpose v8+ does not invoke a Python interpreter directly. It builds a
 command of the form
-`/usr/local/opt/micromamba/bin/micromamba run -n <CONDA_ENV> cellpose ...`
-(macOS-style hardcoded path).
+`/usr/local/opt/micromamba/bin/micromamba run -n <CONDA_ENV> cellpose ...`.
+The executable is the one set in `Edit › Options › Configure TrackMate Conda path...`.
+If none is set, TrackMate searches common install locations. These include
+`/usr/local/opt/micromamba/bin/micromamba` and `/opt/miniconda3/bin/conda`.
 
 This image satisfies that command with a **shell shim** at
 `/usr/local/opt/micromamba/bin/micromamba` (see `micromamba_shim.sh` in the repo
@@ -314,8 +318,8 @@ For Groovy callers this means:
 
 - Leave `CONDA_ENV = 'base'`. The shim handles the routing.
 - **Do not** set `CELLPOSE_PYTHON_FILEPATH` (no such key — see settings table).
-- **Do not** add a `/opt/miniconda3` symlink — that path is not consulted in this
-  build of TrackMate-Cellpose.
+- **Do not** add a `/opt/miniconda3` symlink. TrackMate-Cellpose does search that
+  path, so a conda found there could be used instead of the shim.
 
 Verify the shim end-to-end:
 ```bash
@@ -355,6 +359,20 @@ etc.).
 ### Pitfall C2 — Cell diameter is in physical units
 Like all TrackMate detectors, `CELL_DIAMETER` uses calibrated units (µm).
 For an uncalibrated image (1 px = 1 unit), enter the diameter in pixels.
+Convert and check before running — a pixel value typed into this µm field is wrong by
+1/pixelWidth (e.g. 30 px entered as 30 µm at 0.25 µm/px becomes a 120 px diameter, and
+Cellpose then fails or crawls):
+
+```groovy
+def cal = imp.getCalibration()
+double diameterPx = 30.0d                                  // measured on the image (line tool / overlay)
+double diameterCal = diameterPx * cal.pixelWidth           // value for CELL_DIAMETER
+IJ.log("CELL_DIAMETER = " + diameterCal + " " + cal.getUnit() + " = " + (diameterCal / cal.pixelWidth) + " px")
+```
+
+Do not take the diameter from Cellpose's automatic size model without checking an overlay —
+it can be off 2–3× on data unlike its training set. Cellpose-SAM (`cpsam`) avoids the
+diameter entirely.
 
 ### Pitfall C3 — RGB images are rejected
 Cellpose cannot accept single-channel RGB images. Convert first:
@@ -365,10 +383,11 @@ The first run downloads model weights (~100–300 MB) to `/home/imagentj/.cellpo
 This directory is persisted via the `cellpose_models` Docker named volume.
 Subsequent runs are instant (offline).
 
-### Pitfall C5 — Tracker package changed in TrackMate v8+; use a reflection loader
+### Pitfall C5 — Tracker package changed; use a reflection loader
 
-TrackMate v8 moved all tracker classes from `fiji.plugin.trackmate.tracking.sparselap`
-to `fiji.plugin.trackmate.tracking.jaqaman`. Using the old package causes `ClassNotFoundException`.
+TrackMate moved all tracker classes from `fiji.plugin.trackmate.tracking.sparselap`
+to `fiji.plugin.trackmate.tracking.jaqaman`.
+Using the old package causes `ClassNotFoundException`.
 `SimpleSparseLAPTrackerFactory` was **moved, not removed**. Hard-coding either path is
 brittle; future TrackMate versions may rename again.
 
@@ -382,13 +401,13 @@ unable to resolve class ManualTrackerFactory
 ```
 
 ```groovy
-// WRONG — old sparselap package; ClassNotFoundException in v8+:
+// WRONG — old sparselap package; ClassNotFoundException:
 import fiji.plugin.trackmate.tracking.sparselap.SparseLAPTrackerFactory
 
 // WRONG — ManualTrackerFactory does not live at this path; never import it:
 import fiji.plugin.trackmate.tracking.ManualTrackerFactory
 
-// CORRECT (v8+ direct import — works in current builds):
+// CORRECT (direct import — works in current builds):
 import fiji.plugin.trackmate.tracking.jaqaman.SimpleSparseLAPTrackerFactory
 import fiji.plugin.trackmate.tracking.jaqaman.SparseLAPTrackerFactory
 import fiji.plugin.trackmate.tracking.jaqaman.LAPUtils
@@ -516,3 +535,9 @@ so the script degrades to the pixel-iteration fallback when the class is absent.
 ### Pitfall C6 — `initialSpotFilterValue` must be set
 Same requirement as all TrackMate detectors: set `settings.initialSpotFilterValue`
 before calling `process()`, even if `0.0`.
+For Cellpose and Cellpose-SAM spots, QUALITY is the object **area in pixels** (verified:
+hundreds to thousands), so `0.0` keeps every detected object. If the spot collection is
+empty, the detector itself returned no masks — read the backend log (conda env, GPU, model
+name, diameter units); the initial filter is not the cause. TrackMate-Cellpose works with
+the installed Cellpose 3.1 (`cyto3`, `nucleitorch_0`); only `cpsam` needs Cellpose 4, and the
+micromamba shim routes it to the `cellpose4` env automatically.

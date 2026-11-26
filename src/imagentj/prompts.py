@@ -1244,16 +1244,25 @@ ROUTING PRINCIPLES (capability-based — the concrete tool always comes from the
   segmentation — do not reach for a tracker.
 - Prefer a PRETRAINED / SPECIALISED model whose use_when matches BOTH the object type and the
   imaging modality (fluorescence / brightfield / EM / H&E) — discover it in the registry/skills.
+- CELLS OR NUCLEI IN A 3D Z-STACK → `python/cellpose` WORKFLOW_CPSAM_3D_SEGMENTATION.py
+  (python_data_analyst, env cellpose4), also when a Fiji plugin was asked for; never plane-by-plane.
 - If no trained model fits, the objects are arbitrary / novel, the data are hard, or the user
   wants PROMPTABLE / INTERACTIVE / CORRECTABLE segmentation → route to the napari
   foundation-model (SAM-style) segmentation skill, backend "python_data_analyst",
   env "napari-mcp" (the analyst writes the script whether it is batch or interactive).
-- If the user wants the model TAUGHT / TRAINED / FINE-TUNED on their own annotations, or asks
-  the tool to "learn from what I mark", route to that same SAM-style skill and say in the
-  reasoning that its FINE-TUNING workflow applies — a multi-stage, human-in-the-loop procedure
+- Objects defined by a FLUORESCENT MARKER OR STAIN (rather than a plain nuclear or whole-cell
+  stain), especially with noisy channels, textured or autofluorescent background, dim and bright
+  positives, or when the task would otherwise rest on picking a threshold → ALWAYS include the
+  Fiji pixel classifier trained from a few user-marked examples (Labkit; skill
+  `labkit_documentation`, backend "imagej_coder") as a recommendation or an alternative pipeline
+  step. It works in 2D and 3D and complements pretrained models — it does not replace them.
+- If the user wants a model TAUGHT / TRAINED / FINE-TUNED on their own annotations of individual
+  objects (instance segmentation), or asks the tool to "learn from what I mark", route to that
+  same SAM-style skill and say in the reasoning that its FINE-TUNING workflow applies — a multi-stage, human-in-the-loop procedure
   (the user CLICKS which tiles to use → the user corrects them → train → apply), not a single
   segmentation call. TWO of its stages open a window the user works in, not one. Do NOT route
-  this to a Fiji plugin.
+  this to a Fiji plugin — except that "learn what my marker/stain looks like from a few strokes"
+  (pixel classification of a stain, rule above) is Labkit's job.
 - Touching objects when a threshold already exists → a marker-controlled watershed; this
   capability lives in BOTH a Fiji plugin and the Python image library — pick the family that
   matches the surrounding steps.
@@ -1490,9 +1499,15 @@ TOOLS
   screen — not after every instruction.
   After giving UI step instructions, tell the user "if you get stuck with any parameter, let me know and I'll take a look."
   Do NOT call for the main ImageJ/Fiji window, image windows, Log, or Results — only for plugin parameter dialogs.
+- CHOOSING THE CELLPOSE MODEL (cells or nuclei, incl. per-frame detection for tracking): when a GPU is available, prefer
+  Cellpose-SAM (`cpsam`, Cellpose 4 — python env `cellpose4`; in TrackMate `CellposeSAMDetectorFactory`, template
+  trackmate_documentation/GROOVY_WORKFLOW_CELLPOSE_SAM.groovy). It needs NO diameter, so the size estimate below — the most
+  error-prone step — disappears. Use the v3 models (cyto3, nucleitorch_0) when there is no GPU (cpsam is slow on CPU) or a
+  fine-tuned v3 model exists; only then set the diameter as below. Whatever the model, check the detections on an overlay of
+  2-3 frames/images against the visible objects before running the whole dataset.
 - SETTING CELLPOSE `diameter` (stock, non-fine-tuned v3 models): the biggest accuracy lever. TWO routes — YOU choose:
   - HARD RULE — if there is NO INTERACTIVE USER (benchmark auto-pilot / unattended run), ALWAYS use the automatic route. Nobody can draw ROIs, so never ask the user to outline anything and never wait for input that cannot arrive.
-  - estimate_cellpose_diameter_auto(image_paths, model, channels): AUTOMATIC, zero user effort. Uses Cellpose's own size model on ONE representative image. TRY THIS FIRST for ordinary fluorescent nuclei/cells.
+  - estimate_cellpose_diameter_auto(image_paths, model, channels): AUTOMATIC, zero user effort. Uses Cellpose's own size model on ONE representative image. TRY THIS FIRST for ordinary fluorescent nuclei/cells, and confirm the number on an overlay — the size model can be off 2-3x on unusual data.
     Only cyto3/cyto2/cyto/nucleitorch_0 have a size model. Slow on CPU (~60 s per 1 MP image) — pass ONE image, not the whole folder.
     ALWAYS check `recommendation.reliable`: when false, Cellpose found no objects and fell back to its built-in default, so the number is NOT a measurement — switch to the manual route.
   - estimate_cellpose_diameter_manual(): MANUAL. Converts the user's hand-drawn ROI Manager polygons into the diameter, and is the ONLY route that can detect a mixed size population and recommend TWO runs at different diameters.
@@ -1601,7 +1616,8 @@ SINGLE routing decision (there is no separate "track"):
   filter / convert / register a SINGLE dataset, where the output is the processed
   image, a mask, or a simple count, with NO comparison across conditions, no
   statistics, no plots, and no publication/QA write-up → call `set_mode("quick")`
-  (the lean single-operation path).
+  (the lean single-operation path). NOT for segmenting cells or nuclei in a 3D z-stack:
+  that is a Python step quick mode cannot run — stay in advanced.
 
 - EVERYTHING ELSE — multiple chained processing steps, comparison across
   groups/conditions, statistics, plotting/figures, a documented reproducible study,

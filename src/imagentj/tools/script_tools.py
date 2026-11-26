@@ -1033,6 +1033,86 @@ def run_groovy_script(script: str, ij, purpose: str = "", live_sink=None,
         _run_groovy_script(script, ij, purpose, live_sink, unattended))
 
 
+_LOGGING_NOISE_RE = re.compile(
+    r"^(\d\d:\d\d:\d\d,\d+ \|-(INFO|WARN) in ch\.qos\.logback.*"
+    r"|SLF4J\([A-Z]\):.*)$",
+    re.MULTILINE,
+)
+
+
+def _strip_logging_noise(text: str) -> str:
+    """Remove logback/SLF4J initialisation lines; keep everything else verbatim."""
+    if "logback" not in text and "SLF4J" not in text:
+        return text
+    cleaned = _LOGGING_NOISE_RE.sub("", text)
+    return re.sub(r"\n{2,}", "\n", cleaned).strip("\n") + ("\n" if cleaned.strip() else "")
+
+
+def _script_error_collector(ij):
+    """
+    Record the script's own exceptions from SciJava's log, independent of System.err.
+
+    SciJava's ScriptModule does not rethrow a script's exception: it logs it, and
+    the Future completes normally. Detection used to rely on that log line landing
+    in the redirected System.err — but some libraries replace System.err while the
+    script runs (CLIJ's OpenCL device query does), after which the exception went
+    nowhere and a crashed script was reported as SUCCESS. A LogListener sees the
+    message whatever happened to System.err. Only messages that point at the
+    script itself (script.groovy in the text or stack) count, so unrelated
+    background log errors cannot flip a run to ERROR.
+
+    Returns (messages_list, detach_callable).
+    """
+    messages: list[str] = []
+    try:
+        log_service = ij.log()
+        error_level = int(jpype.JClass("org.scijava.log.LogLevel").ERROR)
+    except Exception:
+        return messages, (lambda: None)
+
+    def _describe(msg) -> Optional[str]:
+        text = str(msg.text() or "")
+        thr = msg.throwable()
+        parts = [text] if text and text != "null" else []
+        mentions_script = "script.groovy" in text
+        if thr is not None:
+            parts.append(str(thr.toString()))
+            cause = thr.getCause()
+            if cause is not None:
+                parts.append("Caused by: " + str(cause.toString()))
+            frames = [str(f.toString()) for f in thr.getStackTrace()]
+            script_frames = [f for f in frames if "script.groovy" in f]
+            mentions_script = mentions_script or bool(script_frames) or "script.groovy" in str(thr.toString())
+            parts.extend("\tat " + f for f in (script_frames or frames)[:5])
+        return "\n".join(parts) if mentions_script else None
+
+    @JImplements("org.scijava.log.LogListener")
+    class _Collector:
+        @JOverride
+        def messageLogged(self, msg):
+            try:
+                if int(msg.level()) <= error_level:
+                    described = _describe(msg)
+                    if described:
+                        messages.append(described)
+            except Exception:
+                pass
+
+    collector = _Collector()
+    try:
+        log_service.addLogListener(collector)
+    except Exception:
+        return messages, (lambda: None)
+
+    def _detach():
+        try:
+            log_service.removeLogListener(collector)
+        except Exception:
+            pass
+
+    return messages, _detach
+
+
 def _run_groovy_script(script: str, ij, purpose: str = "", live_sink=None,
                        unattended: Optional[bool] = None) -> str:
     System                = jpype.JClass("java.lang.System")
@@ -1054,6 +1134,7 @@ def _run_groovy_script(script: str, ij, purpose: str = "", live_sink=None,
 
     _reset_imagej_escape()
     _redirect_ij_errors(unattended)
+    script_errors, detach_error_collector = _script_error_collector(ij)
     runner = _GroovyRunner(script=script, ij=ij).start()
 
     # The redirected System.out buffer is readable while the script runs, so the
@@ -1094,8 +1175,16 @@ def _run_groovy_script(script: str, ij, purpose: str = "", live_sink=None,
             return _stopped_report(handle, out_stream, ij_log_before, monitor, detached)
 
         result = runner.result()
-        stdout = str(out_stream.toString())
-        stderr = str(err_stream.toString())
+        # Drop logging-framework start-up chatter (logback status lines, SLF4J
+        # provider warnings) — triggered by e.g. CLIJ, it filled the whole STDOUT
+        # budget and hid the script's own println output.
+        stdout = _strip_logging_noise(str(out_stream.toString()))
+        stderr = _strip_logging_noise(str(err_stream.toString()))
+        # The script's exception, seen by the log listener even when System.err was
+        # swapped out mid-run (then it is missing from `stderr`). Put it first so
+        # the summary line names it.
+        if script_errors and not any(e.splitlines()[0] in stderr for e in script_errors if e):
+            stderr = "[ERROR] " + "\n[ERROR] ".join(script_errors) + ("\n" + stderr if stderr.strip() else "")
 
         ij_log_new = get_new_ij_log_entries(ij_log_before)
 
@@ -1196,6 +1285,7 @@ def _run_groovy_script(script: str, ij, purpose: str = "", live_sink=None,
         return "\n".join(parts)
 
     finally:
+        detach_error_collector()
         System.setOut(original_out)
         System.setErr(original_err)
         handle.mark_finished()
@@ -2125,6 +2215,57 @@ def execute_script(directory: str, filename: str) -> str:
     # watchdog needs it to tell "slow but on track" from "doing the wrong thing".
     purpose = _existing_description(directory, filename) or filename
 
+    # A script that declares `imagentj-detach: <reason>` is started and left to run: the
+    # supervisor gets a receipt now and the output arrives as a new turn later, so the
+    # agent can talk to the user during a long batch instead of being parked in this call.
+    #
+    # The gate is "do we own the process", not the language. Python always runs as a
+    # subprocess; a self-contained Groovy batch gets its own Fiji process and is equally
+    # safe. An IN-PROCESS Groovy run is not: it shares the app's JVM and its live windows,
+    # and cannot be reliably killed either — the same property decides both.
+    # Every run we OWN THE PROCESS FOR goes through the clock: waited on normally, and
+    # handed back only if it is still going after the deadline — at which point the
+    # agent is freed to talk to the user and the output arrives as a later turn. A
+    # quick script finishes inside the window and nothing about it changes.
+    #
+    # An IN-PROCESS Groovy run is excluded at any duration: it shares the app's JVM and
+    # its live windows, so the agent could act on ImageJ state a script is still
+    # mutating — and nothing owns it well enough to kill it either.
+    detach_ignored = None
+    try:
+        from ..detached import (wants_detach, never_detach, interactive_reason,
+                                run_or_detach)
+    except Exception:
+        wants_detach = never_detach = interactive_reason = run_or_detach = None
+    blocked = never_detach(code_content) if never_detach else None
+    if blocked:
+        log.info("not detachable (%s): %s", blocked, filename)
+    # A window session detaches AT ONCE: the user will be in there for minutes, and
+    # the whole point is that they can ask questions while they work.
+    session = interactive_reason(code_content) if interactive_reason else None
+    if run_or_detach is not None and not blocked:
+        header_reason = wants_detach(code_content)      # "detach immediately", if present
+        work = None
+        if filename.endswith('.py'):
+            work = lambda: _post_execution(                       # noqa: E731
+                run_python_code(code_content, directory, purpose=purpose),
+                directory, filename)
+        elif filename.endswith('.groovy') and _should_run_in_subprocess(code_content)[0]:
+            work = lambda: _post_execution(                       # noqa: E731
+                _run_groovy_subprocess(code_content, purpose), directory, filename)
+        elif header_reason:
+            # A header that cannot be honoured must say so in the RESULT, not just the
+            # log: a silently ignored header is how a template ends up claiming to
+            # detach for the rest of its life.
+            detach_ignored = ("this Groovy script needs the app's own Fiji (live "
+                              "windows), so it runs in-process and cannot be detached")
+            log.info("imagentj-detach ignored for %s: %s", filename, detach_ignored)
+        if work is not None:
+            return run_or_detach(label=purpose, work=work,
+                                 wait=0 if (header_reason or session) else None,
+                                 reason=header_reason or "",
+                                 interactive=session or "")
+
     # Route based on extension
     if filename.endswith('.py'):
         # Calls your existing run_python_code function
@@ -2136,6 +2277,22 @@ def execute_script(directory: str, filename: str) -> str:
     else:
         return f"Error: File extension of {filename} is not supported for execution."
 
+    if detach_ignored:
+        # Say it in the RESULT, not only the log: a header that quietly did nothing is
+        # how a template ends up claiming to detach for the rest of its life.
+        output = (f"NOTE: this script asks to run detached, but it ran normally — "
+                  f"{detach_ignored}.\n\n{output}")
+    return _post_execution(output, directory, filename)
+
+
+def _post_execution(output: str, directory: str, filename: str) -> str:
+    """Everything that happens to a result after the script ends.
+
+    Split out so a DETACHED run produces byte-identical output to a waited one — the
+    OOM annotation and the Librarian hand-off must not be privileges of the blocking
+    path, or the same script would teach the system different things depending on how
+    it was launched.
+    """
     # An out-of-memory death is not self-announcing. The JVM throws
     # OutOfMemoryError from its UncaughtExceptionHandler and the script simply
     # stops producing output — no traceback in the usual place, no non-zero exit

@@ -24,6 +24,7 @@ from .middleware import (
     BioRefusalRetryMiddleware,
     ModeMiddleware, ModeSpec, AgentModeState,
     UnparsedToolCallRetryMiddleware,
+    InterjectMiddleware,
 )
 # Rebase note (2026-08-03): the educator branch had commented this block out with
 # "# VLM disabled". Keeping it ACTIVE — the VLM-as-judge work landed on main after
@@ -61,7 +62,7 @@ __all__ = [
     'internet_search', 'inspect_java_class',
     'search_fiji_plugins', 'install_fiji_plugin', 'check_plugin_installed',
     'NapariComputeGuardMiddleware',
-    'SafeToolLoggerMiddleware', 'TodoDisplayMiddleware', 'NarrationReminderMiddleware', 'PhaseGuardMiddleware', 'ToolOutputLimitMiddleware', 'VisionOptionMiddleware',
+    'SafeToolLoggerMiddleware', 'TodoDisplayMiddleware', 'NarrationReminderMiddleware', 'PhaseGuardMiddleware', 'ToolOutputLimitMiddleware', 'VisionOptionMiddleware', 'InterjectMiddleware',
     'ModeMiddleware', 'ModeSpec', 'AgentModeState',
     'BioRefusalRetryMiddleware', 'UnparsedToolCallRetryMiddleware',
     'list_curriculum', 'load_chapter', 'load_track', 'show_figure', 'list_sample_images',
